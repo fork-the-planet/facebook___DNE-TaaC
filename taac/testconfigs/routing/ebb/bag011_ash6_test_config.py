@@ -275,11 +275,21 @@ def _build_test_config(
         setup_tasks=setup_tasks,
         teardown_tasks=teardown_tasks,
         # Canary opt-in for the Tier 1 (chassis-local) IXIA topology cache.
-        # First run cold-warms /tmp/taac_ixia_configs/<key>.ixncfg on the
-        # IxNetwork API server, subsequent runs hit Tier 1 and skip the ~226s+
-        # of per-API setup. Best-effort: any cache failure falls through to the
-        # current cold path. See IxiaConfigCache Thrift docstring + D107586472.
-        ixia_config_cache=IxiaConfigCache(enabled=True),
+        # First run cold-warms <chassis_local_dir>/<key>.ixncfg on the IxNetwork
+        # API server, subsequent runs hit Tier 1 and skip the ~226s+ of per-API
+        # setup. Best-effort: any cache failure falls through to the current
+        # cold path. See IxiaConfigCache Thrift docstring + D107586472.
+        # Explicit `chassis_local_dir` overrides the Thrift default `/tmp/...`
+        # which is wiped between IXIA sessions (bag012 e2e 2026-06-05 proved
+        # the cache file never survives the next session). Ixia's documented
+        # persistent file-storage location (`ixnetwork_restpy/files.py` Files
+        # class docstring) survives session teardown; TAAC pcaps already use
+        # it (`ixia.py:7417`). Thrift default can't be changed in place due
+        # to back-compat lint, so each opt-in TestConfig sets it explicitly.
+        ixia_config_cache=IxiaConfigCache(
+            enabled=True,
+            chassis_local_dir="/root/.local/share/Ixia/sdmStreamManager/common/taac_ixia_configs",
+        ),
         # Deprecated - define at playbook level
         # prechecks=[],
         # postchecks=[],
