@@ -90,9 +90,13 @@ def get_cpu_queue_constants(hostname: str):
         hardware = netwhoami.hw.name if netwhoami.hw else ""
 
         # Check against specific Hardware names from the thrift Hardware enum.
-        if hardware in (
-            "MONTBLANC",  # MONTBLANC = 40 (for minipack3)
-            "MINIPACK3BA",  # MINIPACK3BA = 72
+        if (
+            hardware
+            in (
+                "MONTBLANC",  # MONTBLANC = 40 (for minipack3)
+                "MINIPACK3BA",  # MINIPACK3BA = 72
+                "ICECUBE800BC",  # ICECUBE800BC = 70 (IcePack TH6 — Pavan-confirmed same queues as Minipack3)
+            )
         ):
             return (0, 2, 9)
         elif hardware == "MORGAN800CC":  # MORGAN800CC = 46 (Kodiak3)
