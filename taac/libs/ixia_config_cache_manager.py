@@ -25,7 +25,6 @@ but not yet consumed here.
 
 from __future__ import annotations
 
-import hashlib
 import re
 import time
 from typing import Any
@@ -45,11 +44,25 @@ from taac.test_as_a_config import types as taac_types
 # through it.
 _SAFE_KEY_RE = re.compile(r"[^A-Za-z0-9_-]")
 
-# Cache version: bump when Python setup logic in create_basic_setup or related
-# changes in a way that affects the resulting topology, even if the IxiaConfig
-# Thrift struct content is unchanged. Bumping invalidates ALL existing cached
-# ixncfg files across all testbeds — they'll be re-created on the next cold run.
-_CACHE_VERSION = "v1"
+# Cache version: bump when Python topology-generation logic changes in a way
+# that would affect the saved `.ixncfg` (e.g. new DG/peer/prefix wiring in
+# `create_basic_setup`, change in port-config builder, etc.). Bumping
+# invalidates ALL existing cached ixncfg files across all testbeds — they'll be
+# re-created on the next cold run.
+#
+# v2 (2026-06-05): dropped IxiaConfig content from the hash. The built
+# IxiaConfig embeds runtime chassis-queried state (e.g. logical port numbers
+# resolved via `async_get_ixia_logical_port`) that varies run-to-run even for
+# an identical TestConfig — observed on bag012.ash6 cold→warm where two
+# back-to-back runs of the same TestConfig produced different hashes
+# (7ca5ecc43fa6 vs adc161447418), causing warm cache to never hit. Cache is
+# now keyed purely by (test_config_name, chassis_id, _CACHE_VERSION), which
+# is stable per testbed. The trade-off: cache will NOT auto-invalidate when a
+# TestConfig's declarative content (port map, BGP peers) changes — the
+# engineer must bump _CACHE_VERSION manually. A follow-up should hash a
+# canonical subset of the SOURCE TestConfig (basic_port_configs etc.) to get
+# the best of both: stable per run, auto-invalidating per declarative drift.
+_CACHE_VERSION = "v2"
 
 
 def _sanitize(s: str) -> str:
@@ -60,26 +73,18 @@ def _sanitize(s: str) -> str:
 def compute_cache_key(
     test_config_name: str,
     chassis_id: str,
-    ixia_config: ixia_types.IxiaConfig,
+    ixia_config: ixia_types.IxiaConfig,  # accepted for API back-compat, NOT hashed
 ) -> str:
-    """Stable cache key for a (testbed, chassis, IxiaConfig content) triple.
+    """Stable cache key for a `(test_config_name, chassis_id, _CACHE_VERSION)` triple.
 
-    Hash uses Thrift binary serialization of IxiaConfig if available; falls
-    back to the struct's str() representation. Either way, ANY field change in
-    the IxiaConfig will roll the hash and invalidate the cache.
+    `ixia_config` is accepted for API back-compat with v1 callers but is NOT
+    included in the key — see the docstring on `_CACHE_VERSION` for why.
     """
-    try:
-        # Thrift py3 structs expose serialize() returning bytes
-        config_bytes = ixia_config.serialize()  # type: ignore[attr-defined]
-    except Exception:
-        # Fallback: stringify. Less precise but always works.
-        config_bytes = str(ixia_config).encode("utf-8", errors="replace")
-    # Mix in _CACHE_VERSION so Python setup-logic changes can force invalidation
-    # even when IxiaConfig content is byte-identical.
-    hash_input = _CACHE_VERSION.encode("ascii") + b"\0" + config_bytes
-    config_hash = hashlib.sha256(hash_input).hexdigest()[:12]
+    # Suppress unused-arg warning while keeping the back-compat signature.
+    _ = ixia_config
     return (
-        f"{_sanitize(test_config_name)}__{_sanitize(chassis_id)}__{config_hash}.ixncfg"
+        f"{_sanitize(test_config_name)}__"
+        f"{_sanitize(chassis_id)}__{_CACHE_VERSION}.ixncfg"
     )
 
 
