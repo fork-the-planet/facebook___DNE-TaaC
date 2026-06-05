@@ -2733,6 +2733,40 @@ def create_arista_create_file_from_config_task(
     )
 
 
+def create_validate_bgpcpp_config_on_device_task(
+    hostname: str,
+    config_path: str,
+    policy_path: t.Optional[str] = None,
+    ixia_needed: bool = True,
+) -> Task:
+    """Validate BGP++ config on an Arista device using the production validator.
+
+    Runs ``/usr/sbin/bgp_config_validator`` (installed via the fb-bgpcpp RPM)
+    on the device to verify the config file is valid JSON, deserializes into
+    the Thrift BgpConfig struct, and has no dangling policy references.
+
+    Args:
+        hostname: Arista EOS device hostname.
+        config_path: Absolute path to bgpcpp_config on the device.
+        policy_path: Optional absolute path to bgpcpp_policy on the device.
+        ixia_needed: If True (default), task runs after IXIA setup.
+
+    Returns:
+        A ``Task`` with ``task_name="validate_bgpcpp_config_on_device"``.
+    """
+    params = {
+        "hostname": hostname,
+        "config_path": config_path,
+    }
+    if policy_path is not None:
+        params["policy_path"] = policy_path
+    return Task(
+        task_name="validate_bgpcpp_config_on_device",
+        ixia_needed=ixia_needed,
+        params=Params(json_params=json.dumps(params)),
+    )
+
+
 def create_scp_file_template_task(
     hostname: str,
     remote_path: str,

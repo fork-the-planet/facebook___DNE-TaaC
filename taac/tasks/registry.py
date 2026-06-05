@@ -64,6 +64,7 @@ from taac.tasks.all import (
     RunCommandsOnShell,
     ScpFile,
     SetPortChannelMinLinkPatcherTask,
+    ValidateBgpcppConfigOnDevice,
     WaitForAgentConvergenceTask,
     WaitForBgpConvergenceTask,
 )
@@ -167,6 +168,7 @@ TASK_REGISTRY = [
     BgpVerifyReceivedRoutesTask,
     NexthopGroupPoll,
     AristaCreateFileFromConfig,
+    ValidateBgpcppConfigOnDevice,
     AddBgpWeightPolicyTask,
     RemoveBgpWeightPolicyTask,
     ReplaceBgpPeersTask,

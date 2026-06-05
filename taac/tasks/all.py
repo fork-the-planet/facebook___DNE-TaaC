@@ -1480,6 +1480,7 @@ class AristaCreateFileFromConfig(BaseTask):
     """
 
     NAME = "arista_create_file_from_config"
+    MAX_RETRIES = 3
 
     async def run(self, params: t.Dict[str, t.Any]) -> None:
         """
@@ -1504,24 +1505,155 @@ class AristaCreateFileFromConfig(BaseTask):
             self.logger.info(
                 f"Successfully read {len(file_content)} bytes from configerator"
             )
+
+        expected_size = len(file_content.encode("utf-8"))
         encoded = base64.b64encode(file_content.encode("utf-8")).decode("utf-8")
         chunks = [
             encoded[i : i + chunk_size] for i in range(0, len(encoded), chunk_size)
         ]
         self.logger.info(f"Split file into {len(chunks)} chunks")
-        cmds = []
-        for i, chunk in enumerate(chunks):
-            if i == 0:
-                cmds.append(f"bash sudo sh -c \"echo '{chunk}' > {file_path}.b64\"")
-            else:
-                cmds.append(f"bash sudo sh -c \"echo '{chunk}' >> {file_path}.b64\"")
-        cmds.append(f'bash sudo sh -c "base64 -d {file_path}.b64 > {file_path}"')
-        cmds.append(f"bash sudo rm {file_path}.b64")
+
         driver = await async_get_device_driver(hostname)
-        for cmd in cmds:
-            # pyre-fixme[16]: `AbstractSwitch` has no attribute
-            #  `async_execute_show_or_configure_cmd_on_shell`.
-            await driver.async_execute_show_or_configure_cmd_on_shell(cmd)
+
+        try:
+            for attempt in range(1, self.MAX_RETRIES + 1):
+                cmds = []
+                for i, chunk in enumerate(chunks):
+                    if i == 0:
+                        cmds.append(
+                            f"bash sudo sh -c \"echo '{chunk}' > {file_path}.b64\""
+                        )
+                    else:
+                        cmds.append(
+                            f"bash sudo sh -c \"echo '{chunk}' >> {file_path}.b64\""
+                        )
+                cmds.append(
+                    f'bash sudo sh -c "base64 -d {file_path}.b64 > {file_path}"'
+                )
+
+                for cmd in cmds:
+                    # pyre-fixme[16]: `AbstractSwitch` has no attribute
+                    #  `async_execute_show_or_configure_cmd_on_shell`.
+                    await driver.async_execute_show_or_configure_cmd_on_shell(cmd)
+
+                # Verify written file size matches expected
+                # pyre-fixme[16]: `AbstractSwitch` has no attribute
+                #  `async_execute_show_or_configure_cmd_on_shell`.
+                size_output = await driver.async_execute_show_or_configure_cmd_on_shell(
+                    f"bash wc -c < {file_path}"
+                )
+                try:
+                    actual_size = int(size_output.strip())
+                except (ValueError, AttributeError):
+                    self.logger.warning(
+                        f"Attempt {attempt}/{self.MAX_RETRIES}: "
+                        f"Could not parse file size from wc output: {size_output!r}"
+                    )
+                    if attempt < self.MAX_RETRIES:
+                        continue
+                    raise Exception(
+                        f"Failed to verify file size on {hostname}:{file_path} "
+                        f"after {self.MAX_RETRIES} attempts. "
+                        f"Last wc output: {size_output!r}"
+                    )
+
+                if actual_size == expected_size:
+                    self.logger.info(
+                        f"File size verified: {actual_size} bytes on "
+                        f"{hostname}:{file_path} (attempt {attempt})"
+                    )
+                    break
+                else:
+                    self.logger.warning(
+                        f"Attempt {attempt}/{self.MAX_RETRIES}: "
+                        f"File size mismatch on {hostname}:{file_path}: "
+                        f"expected {expected_size} bytes, got {actual_size} bytes. "
+                        f"Base64-chunked transfer likely dropped chunks."
+                    )
+                    if attempt >= self.MAX_RETRIES:
+                        raise Exception(
+                            f"File size mismatch on {hostname}:{file_path} after "
+                            f"{self.MAX_RETRIES} attempts: expected {expected_size} "
+                            f"bytes, got {actual_size} bytes. "
+                            f"The base64-chunked transfer is unreliable on this device."
+                        )
+        finally:
+            # Always clean up staging file, even if upload/verify failed.
+            try:
+                # pyre-fixme[16]: `AbstractSwitch` has no attribute
+                #  `async_execute_show_or_configure_cmd_on_shell`.
+                await driver.async_execute_show_or_configure_cmd_on_shell(
+                    f"bash sudo rm -f {file_path}.b64"
+                )
+            except Exception as cleanup_exc:
+                self.logger.warning(
+                    f"Failed to remove staging file {file_path}.b64 on "
+                    f"{hostname}: {cleanup_exc}"
+                )
+
+
+class ValidateBgpcppConfigOnDevice(BaseTask):
+    """
+    Validate BGP++ config on an Arista device using the production
+    bgp_config_validator binary installed via the fb-bgpcpp RPM.
+    """
+
+    NAME = "validate_bgpcpp_config_on_device"
+    VALIDATOR_PATH = "/usr/sbin/bgp_config_validator"
+
+    async def run(self, params: t.Dict[str, t.Any]) -> None:
+        """
+        Run bgp_config_validator on the device to validate config integrity.
+
+        Args:
+            params: Dictionary containing:
+                - hostname: Device hostname (required)
+                - config_path: Path to bgpcpp_config on device (required)
+                - policy_path: Path to bgpcpp_policy on device (optional)
+        """
+        hostname = params["hostname"]
+        config_path = params["config_path"]
+        policy_path = params.get("policy_path")
+
+        driver = await async_get_device_driver(hostname)
+
+        # Check if validator binary exists on device
+        # pyre-fixme[16]: `AbstractSwitch` has no attribute
+        #  `async_execute_show_or_configure_cmd_on_shell`.
+        check_output = await driver.async_execute_show_or_configure_cmd_on_shell(
+            f"bash test -x {self.VALIDATOR_PATH} && echo EXISTS || echo MISSING"
+        )
+        if "MISSING" in (check_output or ""):
+            self.logger.warning(
+                f"bgp_config_validator not found at {self.VALIDATOR_PATH} "
+                f"on {hostname}. Skipping validation."
+            )
+            return
+
+        cmd = f"bash {self.VALIDATOR_PATH} --config {config_path}"
+        if policy_path:
+            cmd += f" --policy {policy_path}"
+
+        self.logger.info(f"Validating BGP++ config on {hostname}: {cmd}")
+
+        # pyre-fixme[16]: `AbstractSwitch` has no attribute
+        #  `async_execute_show_or_configure_cmd_on_shell`.
+        output = await driver.async_execute_show_or_configure_cmd_on_shell(cmd)
+        output_str = output or ""
+
+        if "[PASS]" in output_str:
+            self.logger.info(
+                f"BGP++ config validation passed on {hostname}: {output_str.strip()}"
+            )
+        elif "[FAIL]" in output_str or "[ERROR]" in output_str:
+            raise Exception(
+                f"BGP++ config validation failed on {hostname}: {output_str.strip()}"
+            )
+        else:
+            self.logger.warning(
+                f"BGP++ config validator returned unexpected output on "
+                f"{hostname}: {output_str.strip()}"
+            )
 
 
 class DeployEosImageTask(BaseTask):
