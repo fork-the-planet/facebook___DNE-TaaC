@@ -114,6 +114,7 @@ from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import (
     DirectIxiaConnection,
     Endpoint,
+    IxiaConfigCache,
     Playbook,
     TestConfig,
 )
@@ -273,6 +274,12 @@ def _build_test_config(
         startup_checks=[],
         setup_tasks=setup_tasks,
         teardown_tasks=teardown_tasks,
+        # Canary opt-in for the Tier 1 (chassis-local) IXIA topology cache.
+        # First run cold-warms /tmp/taac_ixia_configs/<key>.ixncfg on the
+        # IxNetwork API server, subsequent runs hit Tier 1 and skip the ~226s+
+        # of per-API setup. Best-effort: any cache failure falls through to the
+        # current cold path. See IxiaConfigCache Thrift docstring + D107586472.
+        ixia_config_cache=IxiaConfigCache(enabled=True),
         # Deprecated - define at playbook level
         # prechecks=[],
         # postchecks=[],
