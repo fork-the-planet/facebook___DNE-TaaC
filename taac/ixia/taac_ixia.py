@@ -56,6 +56,91 @@ class TaacIxia(Ixia, Thread):
         self.traffic_item_view_assistant = None
         self.ptp_drill_down_view_assistant = None
 
+        # Per-view StatViewAssistant cache. Created lazily by
+        # get_or_create_stat_view(); reused across HC invocations so we pay the
+        # ~10-15s subscription/ready-wait cost ONCE per view per test run instead
+        # of on every call. Rows reads off the cached assistant always fetch
+        # fresh data on access.
+        self._stat_view_cache: t.Dict[str, StatViewAssistant] = {}
+        # _stat_view_index_lock protects the cache dict + the per-view lock
+        # registry below. It is held ONLY for the brief dict get/set — never
+        # across StatViewAssistant construction.
+        self._stat_view_index_lock = threading.Lock()
+        # Per-view-name locks. A first-time access to view A only blocks other
+        # first-time accesses to view A; concurrent first-time accesses to
+        # different views proceed in parallel.
+        self._stat_view_construction_locks: t.Dict[str, threading.Lock] = {}
+
+    def _get_stat_view_construction_lock(self, view_name: str) -> threading.Lock:
+        """Get (or create) the per-view construction lock under index lock."""
+        with self._stat_view_index_lock:
+            lock = self._stat_view_construction_locks.get(view_name)
+            if lock is None:
+                lock = threading.Lock()
+                self._stat_view_construction_locks[view_name] = lock
+            return lock
+
+    def get_or_create_stat_view(
+        self,
+        view_name: str,
+        timeout: int = 30,
+    ) -> StatViewAssistant:
+        """Cached factory for `StatViewAssistant` instances, keyed by view_name.
+
+        First call constructs the assistant (subscribes to the view + waits
+        for ReadyState). Subsequent calls with the same view_name return the
+        cached assistant — `.Rows` always returns fresh data on access, so
+        no manual refresh is needed.
+
+        Caveats:
+        - `timeout` is honored ONLY on the first call for a given view_name.
+          Subsequent callers receive the cached assistant constructed with the
+          original timeout. If you need a different timeout, invalidate first.
+        - Concurrent first-time accesses to DIFFERENT views proceed in parallel
+          (each view has its own construction lock); only same-view first-time
+          accesses serialize.
+
+        Use this instead of `StatViewAssistant(self.ixnetwork, view_name)` from
+        any code path that runs more than once per test (HCs, periodic tasks,
+        traffic/protocol verifications).
+        """
+        # Fast path: dict read under brief index lock.
+        with self._stat_view_index_lock:
+            cached = self._stat_view_cache.get(view_name)
+            if cached is not None:
+                return cached
+        # Slow path: serialize first-time construction PER view_name, so a
+        # construction of view A does NOT block a construction of view B.
+        construction_lock = self._get_stat_view_construction_lock(view_name)
+        with construction_lock:
+            # Re-check under the per-view lock to avoid two threads racing past
+            # the index-lock fast path and both constructing the same view.
+            with self._stat_view_index_lock:
+                cached = self._stat_view_cache.get(view_name)
+                if cached is not None:
+                    return cached
+            stat_view_cls = (
+                UhdStatViewAssistant if self.is_uhd_chassis else IxnStatViewAssistant
+            )
+            assistant = stat_view_cls(self.ixnetwork, view_name, Timeout=timeout)
+            with self._stat_view_index_lock:
+                self._stat_view_cache[view_name] = assistant
+            return assistant
+
+    def invalidate_stat_view_cache(self, view_name: t.Optional[str] = None) -> None:
+        """Drop cached StatViewAssistant(s).
+
+        Call when the IXIA session is recreated or topology is destroyed. With
+        `view_name=None`, clears all entries; otherwise drops just that view.
+        Per-view construction locks are NOT dropped — they're cheap to keep and
+        the next call will re-use them safely.
+        """
+        with self._stat_view_index_lock:
+            if view_name is None:
+                self._stat_view_cache.clear()
+            else:
+                self._stat_view_cache.pop(view_name, None)
+
     @retryable(sleep_time=2, num_tries=100, print_ex=True)
     def start_capturing(self, sample_time: int):
         """

@@ -1,11 +1,16 @@
 # pyre-unsafe
 import typing as t
 
-from ixnetwork_restpy.assistants.statistics.statviewassistant import StatViewAssistant
 from taac.health_checks.abstract_health_check import (
     AbstractIxiaHealthCheck,
 )
-from neteng.test_infra.dne.taac.ixia.taac_ixia import TaacIxia as Ixia
+
+# `StatViewAssistant` is re-exported as a Union[Ixn, Uhd] from taac_ixia — match
+# the type that `get_or_create_stat_view` returns so type-check passes.
+from taac.ixia.taac_ixia import (
+    StatViewAssistant,
+    TaacIxia as Ixia,
+)
 from neteng.test_infra.dne.taac.utils.common import async_everpaste_str, async_get_fburl
 from taac.utils.oss_taac_lib_utils import retryable
 from taac.health_check.health_check import types as hc_types
@@ -22,7 +27,10 @@ class IxiaPortStatsHealthCheck(AbstractIxiaHealthCheck[hc_types.BaseHealthCheckI
         check_params: t.Dict[str, t.Any],
     ) -> hc_types.HealthCheckResult:
         self.enable_fault_statistics(obj)
-        port_statistics_view = StatViewAssistant(obj.ixnetwork, "Port Statistics")
+        # Use cached StatViewAssistant — subscription/ready-wait happens once
+        # per test run, not on every HC invocation. ~10-15s saved per call after
+        # the first.
+        port_statistics_view = obj.get_or_create_stat_view("Port Statistics")
         latest_stats = self.get_port_statistics(port_statistics_view)
         exceeded_thresholds = self.verify_port_stats_threshold(latest_stats)
 
