@@ -2476,32 +2476,79 @@ class Ixia:
         uptime_in_sec: t.Optional[int] = None,
         downtime_in_sec: t.Optional[int] = None,
     ) -> None:
-        """API to configure Bgp peer flap settings
+        """API to configure Bgp peer flap settings.
 
         Note: When enabling flap with new uptime/downtime values, the timing
         values must be set BEFORE enabling the flap for them to take effect
-        immediately. This method sets uptime/downtime first, then enables flap.
+        immediately. The per-peer worker below sets uptime/downtime first,
+        then enables flap.
+
+        Per-peer property PATCHes are issued concurrently via
+        ThreadPoolExecutor (mirroring `_apply_as_positions_concurrently`).
+        Failed peers are retried sequentially. At BAG013/plane-aware scale
+        (N peer containers, 3 properties each) this turns an O(N) serial wall
+        clock into ~O(N/max_workers).
         """
+        from concurrent.futures import as_completed, ThreadPoolExecutor
+
         bgp_peers = self.find_bgp_peers(regex)
-        for bgp_peer in bgp_peers:
-            # Set uptime/downtime BEFORE enabling flap to ensure new values
-            # take effect immediately when flapping starts
+        if not bgp_peers:
+            self.logger.info(
+                f"configure_bgp_peers_flap: no BGP peer containers matched regex "
+                f"{regex!r}; nothing to do"
+            )
+            return
+
+        def _set_peer_flap_props(bgp_peer: t.Any) -> None:
+            # Set uptime/downtime BEFORE enabling flap so new values take
+            # effect immediately when flapping starts.
             if uptime_in_sec is not None:
                 bgp_peer.UptimeInSec.Single(value=uptime_in_sec)
-                self.logger.info(
-                    f"Updated Flap uptime to {uptime_in_sec} seconds for {bgp_peer.Name}"
-                )
-
             if downtime_in_sec is not None:
                 bgp_peer.DowntimeInSec.Single(value=downtime_in_sec)
-                self.logger.info(
-                    f"Updated Flap downtime to {downtime_in_sec} seconds for {bgp_peer.Name}"
-                )
-
             if enable is not None:
                 bgp_peer.Flap.Single(value=enable)
-                self.logger.info(
-                    f"Updated Flap setting to {'enabled' if enable else 'disabled'} for {bgp_peer.Name}"
+
+        max_workers = 10
+        self.logger.info(
+            f"configure_bgp_peers_flap: applying to {len(bgp_peers)} peer "
+            f"containers concurrently (max_workers={max_workers}, "
+            f"uptime={uptime_in_sec}, downtime={downtime_in_sec}, enable={enable})"
+        )
+
+        # Errors carry the peer OBJECT (not just its Name) — IxNetwork allows
+        # two distinct BgpIpv4/v6Peer containers under different DGs to share
+        # a Name, so a name-keyed retry could collapse them.
+        errors: t.List[t.Tuple[t.Any, str]] = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_set_peer_flap_props, peer): peer for peer in bgp_peers
+            }
+            for future in as_completed(futures):
+                peer = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    errors.append((peer, str(e)))
+
+        if errors:
+            self.logger.warning(
+                f"configure_bgp_peers_flap: {len(errors)} peer(s) failed during "
+                f"concurrent application, retrying sequentially..."
+            )
+            for peer, err in errors[:5]:
+                self.logger.warning(f"  {peer.Name}: {err}")
+            retry_failures: t.List[t.Tuple[str, str]] = []
+            for peer, _ in errors:
+                try:
+                    _set_peer_flap_props(peer)
+                except Exception as e:
+                    retry_failures.append((peer.Name, str(e)))
+                    self.logger.warning(f"  {peer.Name} still failed after retry: {e}")
+            if retry_failures:
+                raise RuntimeError(
+                    f"configure_bgp_peers_flap: {len(retry_failures)} peer(s) "
+                    f"failed even after sequential retry: {retry_failures[:5]}"
                 )
 
         self.apply_changes()
