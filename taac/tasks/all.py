@@ -1481,6 +1481,13 @@ class AristaCreateFileFromConfig(BaseTask):
 
     NAME = "arista_create_file_from_config"
     MAX_RETRIES = 3
+    # Each base64 chunk is pushed as a single `echo '<chunk>'` argument inside a
+    # `sh -c "..."` argument. The Linux per-argument cap (MAX_ARG_STRLEN) is
+    # 131072 bytes, so 120000 leaves ~11K headroom while cutting the number of
+    # serial FCR round-trips ~4x vs the previous 30000 (e.g. a ~1.16MB config
+    # goes from 52 chunks to ~13). The size-verify + retry below catch any
+    # device that rejects this size.
+    DEFAULT_CHUNK_SIZE = 120000
 
     async def run(self, params: t.Dict[str, t.Any]) -> None:
         """
@@ -1491,12 +1498,12 @@ class AristaCreateFileFromConfig(BaseTask):
                 - hostname: Device hostname (required)
                 - configerator_path: Path to a file in configerator (required)
                 - file_path: Path to the file on the device (required)
-                - chunk_size: Size of each chunk (default: 30000)
+                - chunk_size: Size of each chunk (default: DEFAULT_CHUNK_SIZE)
         """
         hostname = params["hostname"]
         configerator_path = params["configerator_path"]
         file_path = params["file_path"]
-        chunk_size = params.get("chunk_size", 30000)
+        chunk_size = params.get("chunk_size", self.DEFAULT_CHUNK_SIZE)
 
         file_content = ""
         self.logger.info(f"Reading file from configerator path: {configerator_path}")
