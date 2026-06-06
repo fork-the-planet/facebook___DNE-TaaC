@@ -1482,12 +1482,23 @@ class AristaCreateFileFromConfig(BaseTask):
     NAME = "arista_create_file_from_config"
     MAX_RETRIES = 3
     # Each base64 chunk is pushed as a single `echo '<chunk>'` argument inside a
-    # `sh -c "..."` argument. The Linux per-argument cap (MAX_ARG_STRLEN) is
-    # 131072 bytes, so 120000 leaves ~11K headroom while cutting the number of
-    # serial FCR round-trips ~4x vs the previous 30000 (e.g. a ~1.16MB config
-    # goes from 52 chunks to ~13). The size-verify + retry below catch any
-    # device that rejects this size.
-    DEFAULT_CHUNK_SIZE = 120000
+    # `bash sudo sh -c "echo '<chunk>' > <path>.b64"` command. The hard ceiling
+    # is NOT the Linux per-argument cap (MAX_ARG_STRLEN = 131072) — it is the
+    # Arista EOS shell parser's command-token limit, which is much smaller and
+    # rejects oversized tokens at parse time with `% Invalid input (command
+    # token is too long)`. The size-verify + retry below does NOT save us from
+    # parse-time rejection because the shell never executes the echo and no
+    # bytes ever land on the device.
+    #
+    # Empirical headroom: 30000-byte chunks deploy reliably on the EBB Arista
+    # devices used by the dne_routing conveyor (bag010 / bag011 / bag012, all
+    # `nettools.ebb.eos.orinoco_dne_routing_test` images). 120000 was tried in
+    # D107698353 to cut wall-clock; every image-deploy node hit the EOS token
+    # limit on the very first chunk (R110.x, 2026-06-06). Keep this value at or
+    # below 30000 unless and until the transport is switched off in-shell echo
+    # (e.g. scp/sftp — see internal/tasks/bgp_weight_policy_task.py for the
+    # scp pattern).
+    DEFAULT_CHUNK_SIZE = 30000
 
     async def run(self, params: t.Dict[str, t.Any]) -> None:
         """
