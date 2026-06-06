@@ -107,4 +107,18 @@ NPI_DVT_ICEPACK_GTSW__CPU_QUEUE_TEST_CONFIG = create_dctypef_npi_cpu_queue_test_
     bgpd_restart_no_of_interations=5,
     wedge_agent_restart_no_of_interations=5,
     basset_pool="dne.test",
+    # Drop `openr` from the postcheck ServiceRestartHealthCheck monitored list.
+    # IcePack GTSW is a backend platform and does not run Open/R — the service
+    # is not loaded on this DUT. The precheck SystemctlActiveStateHealthCheck
+    # already skips not-loaded services gracefully; this override aligns the
+    # postcheck behavior so the playbook isn't failed on a non-applicable
+    # service.
+    service_restart_services=[
+        "bgpd",
+        "fboss_hw_agent@0",
+        "fboss_sw_agent",
+        "fsdb",
+        "qsfp_service",
+        "wedge_agent",
+    ],
 )

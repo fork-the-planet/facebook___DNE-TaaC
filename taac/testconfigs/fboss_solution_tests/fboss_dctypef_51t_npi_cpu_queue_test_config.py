@@ -168,6 +168,7 @@ def create_dctypef_npi_cpu_queue_test_config(
     direct_ixia_connections=None,
     basset_pool=None,
     ixia_packet_loss_threshold: str = "0.1",
+    service_restart_services=None,
 ):
     """Build the DC-TypeF 51T NPI CPU queue TestConfig.
 
@@ -1546,5 +1547,6 @@ def create_dctypef_npi_cpu_queue_test_config(
             ),
             unique_prefix_limit=unique_prefix_limit,
             ixia_packet_loss_threshold=ixia_packet_loss_threshold,
+            service_restart_services=service_restart_services,
         ),
     )
