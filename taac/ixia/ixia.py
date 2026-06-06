@@ -375,6 +375,63 @@ def split_list_into_chunks(list_to_split: list, chunk_size: int) -> t.List[list]
     ]
 
 
+def _ixia_value_equals(current: t.Any, desired: t.Any) -> bool:
+    """Type-coerce-safe comparison of an IxNetwork Multivalue read vs a desired write.
+
+    IxNetwork returns Multivalue `.Values[i]` as strings regardless of the
+    semantic Python type — `True` round-trips as `"true"`, `60` as `"60"`,
+    etc. A naive `==` between the string read and the bool/int desired
+    value always returns False, which would silently disable any skip-if-
+    converged optimization. This helper normalizes both sides before comparing.
+
+    Returns True if `current` is semantically equal to `desired` after type
+    coercion; False otherwise (including on coercion errors — when in doubt,
+    return False so the caller falls through to a write).
+    """
+    if isinstance(desired, bool):
+        return str(current).strip().lower() == str(desired).lower()
+    if isinstance(desired, int):
+        try:
+            return int(current) == desired
+        except (TypeError, ValueError):
+            return False
+    if isinstance(desired, float):
+        try:
+            return float(current) == desired
+        except (TypeError, ValueError):
+            return False
+    return str(current) == str(desired)
+
+
+def _set_multivalue_if_changed(multivalue: t.Any, desired: t.Any) -> bool:
+    """Set an IxNetwork Multivalue to `desired` only if its current value differs.
+
+    Reads `multivalue.Values[0]` first, compares against `desired` via
+    `_ixia_value_equals`. If unchanged, skip the write and return False.
+    Otherwise issue `multivalue.Single(value=desired)` and return True.
+
+    On ANY exception during the Values read (multivalue in a non-Single
+    pattern, network blip, missing attribute), falls through to the write
+    — the safe default is "write" because correctness > optimization.
+
+    Used by Pain #1 Lever E paths in `configure_bgp_peers_flap` and
+    elsewhere. Backward-compatible: any caller that currently does
+    `mv.Single(value=X)` can swap in `_set_multivalue_if_changed(mv, X)`
+    without changing observable behavior except for skipping no-op writes.
+    """
+    try:
+        current_values = multivalue.Values
+        if current_values and _ixia_value_equals(current_values[0], desired):
+            return False  # already converged, no PATCH issued
+    except Exception:
+        # Conservative fallback — when the read path is unreliable, prefer
+        # the write. This guarantees `_set_multivalue_if_changed(X, Y)` is
+        # never a worse choice than the unconditional `Single(value=Y)`.
+        pass
+    multivalue.Single(value=desired)
+    return True
+
+
 class Ixia:
     def __init__(
         self,
@@ -2490,6 +2547,15 @@ class Ixia:
         Failed peers are retried sequentially. At BAG013/plane-aware scale
         (N peer containers, 3 properties each) this turns an O(N) serial wall
         clock into ~O(N/max_workers).
+
+        Pain #1 Lever E — skip-if-already-converged: each per-property
+        PATCH is gated on a `.Values[0]` read first; if the chassis already
+        holds the desired value (with type-coerce-safe comparison), the
+        PATCH is skipped. Saves wall-clock on repeated stage invocations
+        where the same flap settings are re-applied (common on plane-aware
+        oscillation stages). A per-call summary line at end-of-call reports
+        `skipped/total` so the optimization is observable in worker logs
+        without needing Scuba instrumentation.
         """
         from concurrent.futures import as_completed, ThreadPoolExecutor
 
@@ -2501,15 +2567,46 @@ class Ixia:
             )
             return
 
+        # Thread-safe write/skip counters — accessed from worker threads.
+        skipped_writes = 0
+        total_writes = 0
+        counter_lock = threading.Lock()
+
         def _set_peer_flap_props(bgp_peer: t.Any) -> None:
-            # Set uptime/downtime BEFORE enabling flap so new values take
-            # effect immediately when flapping starts.
-            if uptime_in_sec is not None:
-                bgp_peer.UptimeInSec.Single(value=uptime_in_sec)
-            if downtime_in_sec is not None:
-                bgp_peer.DowntimeInSec.Single(value=downtime_in_sec)
-            if enable is not None:
-                bgp_peer.Flap.Single(value=enable)
+            nonlocal skipped_writes, total_writes
+            local_skipped = 0
+            local_total = 0
+            try:
+                # Set uptime/downtime BEFORE enabling flap so new values take
+                # effect immediately when flapping starts.
+                if uptime_in_sec is not None:
+                    local_total += 1
+                    if not _set_multivalue_if_changed(
+                        bgp_peer.UptimeInSec, uptime_in_sec
+                    ):
+                        local_skipped += 1
+                if downtime_in_sec is not None:
+                    local_total += 1
+                    if not _set_multivalue_if_changed(
+                        bgp_peer.DowntimeInSec, downtime_in_sec
+                    ):
+                        local_skipped += 1
+                if enable is not None:
+                    local_total += 1
+                    if not _set_multivalue_if_changed(bgp_peer.Flap, enable):
+                        local_skipped += 1
+            finally:
+                # Merge counters in `finally` so partial-progress writes are
+                # accounted even when a worker raises mid-property. Without
+                # this, a worker that wrote 2 of 3 properties then raised
+                # would lose those writes from the counter; the sequential
+                # retry would then see them already-converged and erroneously
+                # count them as "skipped — already converged", inflating the
+                # skip metric in the summary log.
+                if local_total:
+                    with counter_lock:
+                        total_writes += local_total
+                        skipped_writes += local_skipped
 
         max_workers = 10
         self.logger.info(
@@ -2554,7 +2651,10 @@ class Ixia:
                 )
 
         self.apply_changes()
-        self.logger.info("BGP peer flap configuration changes applied successfully")
+        self.logger.info(
+            "BGP peer flap configuration changes applied successfully "
+            f"({skipped_writes}/{total_writes} writes skipped — already converged)"
+        )
 
     @external_api
     def activate_deactivate_bgp_prefix(
