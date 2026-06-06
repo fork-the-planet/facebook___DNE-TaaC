@@ -20,6 +20,8 @@ from taac.packet_headers import (
     DHCP_V4_DISCOVER_TO_SERVER_TRAFFIC_PACKET_HEADERS,
     DHCP_V4_DISCOVER_TRAFFIC_PACKET_HEADERS,
     DHCP_V6_TRAFFIC_PACKET_HEADERS,
+    DSCP_48_TO_SWITCH_GLOBAL_IPV6_TRAFFIC_PACKET_HEADERS,
+    DSCP_48_TO_SWITCH_LINK_LOCAL_IPV6_TRAFFIC_PACKET_HEADERS,
     HOP_LIMIT_0_IPV6_TRAFFIC_PACKET_HEADERS,
     HOP_LIMIT_1_IPV6_TRAFFIC_PACKET_HEADERS,
     ICMP_V4_DEST_UNREACHABLE_TRAFFIC_PACKET_HEADERS,
@@ -39,6 +41,8 @@ from taac.packet_headers import (
     ICMP_V6_TIME_EXCEEDED_LINK_LOCAL_TRAFFIC_PACKET_HEADERS,
     LACP_SLOW_TIMER_TRAFFIC_PACKET_HEADERS,
     LLDP_TRAFFIC_PACKET_HEADERS,
+    MARTIAN_SIP_IPV4_TRAFFIC_PACKET_HEADERS,
+    MTU_EXCEED_IPV6_TRAFFIC_PACKET_HEADERS,
     NDP_NA_MULTICAST_TRAFFIC_PACKET_HEADERS,
     NDP_NA_UNICAST_TRAFFIC_PACKET_HEADERS,
     NDP_NS_MULTICAST_TRAFFIC_PACKET_HEADERS,
@@ -1063,6 +1067,100 @@ def create_dctypef_npi_cpu_queue_test_config(
                 traffic_type=ixia_types.TrafficType.RAW,
                 bidirectional=False,
                 packet_headers=TTL_0_IPV4_TRAFFIC_PACKET_HEADERS,
+            ),
+            # CPU_039: MTU exceed — routed IPv6 packet larger than DUT MTU
+            # (1500). DUT must punt to LOW queue for ICMPv6 "Packet Too Big"
+            # generation. NOTE: frame size > MTU must be configured on this
+            # traffic item by IXIA (default frame size ~64B will not trigger
+            # MTU exceed); follow-up tuning may be required if the framework's
+            # default frame-size policy doesn't already produce oversize
+            # frames for RAW traffic items.
+            taac_types.BasicTrafficItemConfig(
+                src_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_uplink_interface}",
+                        device_group_index=0,
+                    ),
+                ],
+                dest_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_downlink_interface}",
+                        device_group_index=0,
+                    ),
+                ],
+                name="TEST_MTU_EXCEED_IPV6_TRAFFIC",
+                line_rate_type=ixia_types.RateType.FRAMES_PER_SECOND,
+                line_rate=2000,
+                traffic_type=ixia_types.TrafficType.RAW,
+                bidirectional=False,
+                packet_headers=MTU_EXCEED_IPV6_TRAFFIC_PACKET_HEADERS,
+            ),
+            # CPU_046: martian SIP=switch's default gateway IPv4 address —
+            # MUST NOT punt (negative test). Hardware silicon should drop the
+            # packet without CPU involvement.
+            taac_types.BasicTrafficItemConfig(
+                src_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_uplink_interface}",
+                        device_group_index=1,
+                    ),
+                ],
+                dest_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_downlink_interface}",
+                        device_group_index=1,
+                    ),
+                ],
+                name="TEST_MARTIAN_SIP_IPV4_TRAFFIC",
+                line_rate_type=ixia_types.RateType.FRAMES_PER_SECOND,
+                line_rate=2000,
+                traffic_type=ixia_types.TrafficType.RAW,
+                bidirectional=False,
+                packet_headers=MARTIAN_SIP_IPV4_TRAFFIC_PACKET_HEADERS,
+            ),
+            # CPU_047: DSCP=48 to-switch global IPv6 — host-bound, DSCP=48
+            # → MID queue. No L4/ICMP layer; pure IPv6 to switch's own global IP.
+            taac_types.BasicTrafficItemConfig(
+                src_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_uplink_interface}",
+                        device_group_index=0,
+                    ),
+                ],
+                dest_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_downlink_interface}",
+                        device_group_index=0,
+                    ),
+                ],
+                name="TEST_DSCP_48_TO_SWITCH_GLOBAL_IPV6_TRAFFIC",
+                line_rate_type=ixia_types.RateType.FRAMES_PER_SECOND,
+                line_rate=2000,
+                traffic_type=ixia_types.TrafficType.RAW,
+                bidirectional=False,
+                packet_headers=DSCP_48_TO_SWITCH_GLOBAL_IPV6_TRAFFIC_PACKET_HEADERS,
+            ),
+            # CPU_048: DSCP=48 to-switch link-local IPv6 — host-bound,
+            # SIP=Ixia LL, DIP=switch LL, DSCP=48 → MID queue.
+            taac_types.BasicTrafficItemConfig(
+                src_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_uplink_interface}",
+                        device_group_index=0,
+                    ),
+                ],
+                dest_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_downlink_interface}",
+                        device_group_index=0,
+                    ),
+                ],
+                name="TEST_DSCP_48_TO_SWITCH_LINK_LOCAL_IPV6_TRAFFIC",
+                line_rate_type=ixia_types.RateType.FRAMES_PER_SECOND,
+                line_rate=2000,
+                traffic_type=ixia_types.TrafficType.RAW,
+                bidirectional=False,
+                packet_headers=DSCP_48_TO_SWITCH_LINK_LOCAL_IPV6_TRAFFIC_PACKET_HEADERS,
             ),
             taac_types.BasicTrafficItemConfig(
                 src_endpoints=[

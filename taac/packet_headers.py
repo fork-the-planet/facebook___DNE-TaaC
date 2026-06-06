@@ -3948,3 +3948,395 @@ UNH_REMOTE_SUBNET_IPV6_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeader] =
 UNH_REMOTE_SUBNET_128_IPV6_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeader] = (
     _create_unh_ipv6_packet_headers("9000:1::")
 )
+
+
+############################################################
+#         CPU_039: MTU exceed — punt to LOW queue          #
+############################################################
+# Plain IPv6 routed packet with normal Hop Limit (64); DUT egress MTU is
+# expected to be 1500. The MTU-exceed condition is created by sending oversize
+# frames at the traffic-item level (frame size > MTU) — when the router
+# attempts to forward, it punts to CPU low queue for ICMPv6 "Packet Too Big"
+# generation. Mirrors HOP_LIMIT_1_IPV6_TRAFFIC_PACKET_HEADERS structurally.
+# NOTE: callers must configure frame size > DUT egress MTU on the
+# BasicTrafficItemConfig (e.g. via fixed_packet_size on the traffic item).
+MTU_EXCEED_IPV6_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeader] = [
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_MAC_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StartValue": DEFAULT_SRC_MAC_ADDRESS,
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ipv6$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "::1",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.SRC_IPV6_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "valueList",
+                    }
+                ),
+                references={
+                    "ValueList": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_IPV6_ADDRESS,
+                        data_type=taac_types.DataType.LIST,
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Hop Limit"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": "64",
+                    }
+                ),
+            ),
+        ],
+    ),
+]
+
+
+############################################################
+#  CPU_046: martian SIP=def-gw — MUST NOT punt (negative)  #
+############################################################
+# IPv4 routed packet with SIP set to the switch's own default-gateway address
+# (martian — a source address that should not legitimately originate from the
+# IXIA side). Hardware silicon should drop this without CPU punt. Mirrors
+# TTL_0_IPV4_TRAFFIC_PACKET_HEADERS structurally; the only meaningful
+# difference is SIP sourcing.
+# NOTE: the IXIA reference type DST_GATEWAY_IPV4_ADDRESS resolves to the
+# switch's IPv4 address from the IXIA's perspective — using it as the packet's
+# Source Address synthesizes a martian (SIP == on-link gateway).
+MARTIAN_SIP_IPV4_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeader] = [
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_MAC_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StartValue": DEFAULT_SRC_MAC_ADDRESS,
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ipv4$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            # SIP: switch's own default-gateway IPv4 address — synthesizes the
+            # martian source condition this testcase is designed to probe.
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "valueList",
+                    }
+                ),
+                references={
+                    "ValueList": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_GATEWAY_IPV4_ADDRESS,
+                        device_group_index=1,
+                        data_type=taac_types.DataType.LIST,
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "valueList",
+                    }
+                ),
+                references={
+                    "ValueList": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_IPV4_ADDRESS,
+                        device_group_index=1,
+                        data_type=taac_types.DataType.LIST,
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="TTL \\(Time to live\\)"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": "64",
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Type of Service"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": "0",
+                    }
+                ),
+            ),
+        ],
+    ),
+]
+
+
+############################################################
+#  CPU_047: DSCP=48 to-switch (global IPv6) → MID queue    #
+############################################################
+# Plain IPv6 packet (no L4/ICMP), DIP = switch's own global IPv6 address,
+# DSCP=48 (Traffic Class set to NDP_DSCP_48_TRAFFIC_CLASS). Per writedown §7
+# CPU_047 the host-bound DSCP=48 to-switch traffic is classified to mid queue
+# regardless of L4. Mirrors ICMP_V6_ECHO_REQUEST_GLOBAL_DSCP48 minus the ICMP
+# layer.
+DSCP_48_TO_SWITCH_GLOBAL_IPV6_TRAFFIC_PACKET_HEADERS: t.List[
+    taac_types.PacketHeader
+] = [
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_MAC_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "singleValue",
+                        "SingleValue": DEFAULT_SRC_MAC_ADDRESS,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ipv6$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "::1",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.SRC_IPV6_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "valueList",
+                    }
+                ),
+                references={
+                    "ValueList": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_GATEWAY_IPV6_ADDRESS,
+                        data_type=taac_types.DataType.LIST,
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Traffic Class"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": NDP_DSCP_48_TRAFFIC_CLASS,
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Hop Limit"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": "64",
+                    }
+                ),
+            ),
+        ],
+    ),
+]
+
+
+############################################################
+#  CPU_048: DSCP=48 to-switch (LL IPv6) → MID queue        #
+############################################################
+# Link-local variant of CPU_047. SIP=Ixia LL, DIP=switch LL, DSCP=48,
+# Hop Limit=255 (LL packets are not forwarded; HL=255 conventional). Mirrors
+# NDP_NS_UNICAST_TRAFFIC_PACKET_HEADERS minus the ICMP layer.
+DSCP_48_TO_SWITCH_LINK_LOCAL_IPV6_TRAFFIC_PACKET_HEADERS: t.List[
+    taac_types.PacketHeader
+] = [
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_MAC_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "singleValue",
+                        "SingleValue": DEFAULT_SRC_MAC_ADDRESS,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ipv6$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "singleValue",
+                        "SingleValue": NDP_IXIA_LINK_LOCAL_IPV6,
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "valueList",
+                    }
+                ),
+                references={
+                    "ValueList": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_LINK_LOCAL_IPV6_ADDRESS,
+                        data_type=taac_types.DataType.LIST,
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Traffic Class"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": NDP_DSCP_48_TRAFFIC_CLASS,
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Hop Limit"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": "255",
+                    }
+                ),
+            ),
+        ],
+    ),
+]
