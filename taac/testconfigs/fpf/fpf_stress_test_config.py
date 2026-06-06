@@ -16,6 +16,7 @@ collectors and validating health checks are 1:1.
   hrt  (bulk)            ->  create_fpf_hrt_bulk_convergence_check
   hrt_remote_failure     ->  create_fpf_hrt_remote_failure_convergence_check
   prod_hrt_prefix        ->  create_fpf_prod_hrt_prefix_stability_check
+  (ODS) HRT sys memory   ->  create_fpf_hrt_system_memory_check
 
 Scale is intentionally tiny (1,000 injected prefixes) for a fast minimal run.
 Generic SSH/device-shell prechecks/postchecks (systemctl, unclean-exit, core
@@ -60,6 +61,10 @@ PROD_PREFIXES = ["2401:db00:292a:a27c::/64"]
 PROD_PREFIX_HOST = GPU_HOSTS[0]
 PROD_PREFIX_DEVICE_ID = 0
 
+# RTP test hosts whose HRT service memory is asserted (<= 8 GiB max) by
+# FpfHrtSystemMemoryHealthCheck. Distinct from GPU_HOSTS.
+HRT_MEMORY_HOSTS = ["rtptest1555.mwg2", "rtptest1575.mwg2"]
+
 
 def create_fpf_stress_test_config() -> TestConfig:
     playbook = create_fpf_hardening_playbook_v2(
@@ -73,6 +78,7 @@ def create_fpf_stress_test_config() -> TestConfig:
         playbook_name="fpf_stable_state",
         prod_prefixes=PROD_PREFIXES,
         skip_ssh_dependent_checks=True,
+        hrt_memory_hosts=HRT_MEMORY_HOSTS,
     )
 
     return TestConfig(

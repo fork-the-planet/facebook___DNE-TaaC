@@ -2201,6 +2201,52 @@ def create_fpf_prod_hrt_prefix_stability_check(
     )
 
 
+def create_fpf_hrt_system_memory_check(
+    hosts: t.Optional[t.List[str]] = None,
+    entity_desc: t.Optional[str] = None,
+    key_desc: t.Optional[str] = None,
+    threshold_gib: float = 8.0,
+    threshold_bytes: t.Optional[int] = None,
+    transform_desc: t.Optional[str] = None,
+    lookback_sec: int = 900,
+    window_start: t.Optional[float] = None,
+    window_end: t.Optional[float] = None,
+    check_id: t.Optional[str] = None,
+) -> PointInTimeHealthCheck:
+    """FPF_HRT_SYSTEM_MEMORY_CHECK — HRT service system memory on RTP hosts.
+
+    Postcheck: queries ODS for
+    cgroup.slice.system.metalos.wds.hostreachtracker.memory.current
+    (transform max()) across ``hosts`` for the test window and FAILs if any
+    host's max exceeds ``threshold_gib`` (default 8 GiB). Each host is judged
+    independently. Only explicitly provided params are emitted; the rest fall
+    back to the health check's own defaults.
+    """
+    params: t.Dict[str, t.Any] = {
+        "threshold_gib": threshold_gib,
+        "lookback_sec": lookback_sec,
+    }
+    if hosts is not None:
+        params["hosts"] = hosts
+    if entity_desc is not None:
+        params["entity_desc"] = entity_desc
+    if key_desc is not None:
+        params["key_desc"] = key_desc
+    if threshold_bytes is not None:
+        params["threshold_bytes"] = threshold_bytes
+    if transform_desc is not None:
+        params["transform_desc"] = transform_desc
+    if window_start is not None:
+        params["window_start"] = window_start
+    if window_end is not None:
+        params["window_end"] = window_end
+    return PointInTimeHealthCheck(
+        name=hc_types.CheckName.FPF_HRT_SYSTEM_MEMORY_CHECK,
+        check_params=Params(json_params=json.dumps(params)),
+        check_id=check_id,
+    )
+
+
 def create_fpf_ods_counter_check(
     entity_desc: str,
     key_desc: str,
