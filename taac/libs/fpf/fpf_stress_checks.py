@@ -38,6 +38,11 @@ from taac.libs.fpf.fpf_hrt_bulk_tracker import (
     NUM_LANES,
 )
 from taac.libs.fpf.fpf_hrt_polling import get_hrt_client
+from taac.libs.fpf.fpf_prod_hrt_prefix import (
+    build_prefix_map,
+    normalize_prefix,
+    PrefixReachability,
+)
 
 
 logger = get_root_logger()
@@ -211,6 +216,28 @@ class BgpRibRow:
     matched: int
     total: int
     notes: str = ""
+
+
+@dataclass
+class ProdHrtPrefixRow:
+    """One poll of production-prefix reachability on a host (per-prefix snapshot)."""
+
+    timestamp: str
+    host: str
+    # prefix -> PrefixReachability (reachable/drained/unreachable/up/down planes).
+    prefixes: Dict[str, PrefixReachability] = field(default_factory=dict)
+
+
+@dataclass
+class ProdPrefixStabilityResult:
+    """Per-prefix reachability-stability verdict over an evaluation window."""
+
+    prefix: str
+    host: str
+    passed: bool
+    baseline_reachable: List[int]
+    samples: int
+    detail: str = ""
 
 
 @dataclass
@@ -1231,3 +1258,187 @@ class HrtRemoteFailureCollector(BaseCollector):
             )
         finally:
             self.rows = saved_rows
+
+
+# ---------------------------------------------------------------------------
+# Production HRT Prefix Collector (per-prefix reachability stability)
+# ---------------------------------------------------------------------------
+
+
+class ProdHrtPrefixCollector(BaseCollector):
+    """Polls per-prefix reachability for a set of production prefixes on a GPU host.
+
+    Each poll queries HRT getPrefixTable / getRemoteFailures / getPlaneStatus
+    and records, per monitored prefix, the reachable / drained / unreachable
+    planes plus plane_up / plane_down (see ``fpf_prod_hrt_prefix``). Unlike the
+    convergence collectors (which track a count reaching a threshold), this
+    collector supports a *reachability-stability* postcheck: over the
+    evaluation window each prefix must retain its baseline reachable planes
+    with no plane regressing to down/unreachable/drained.
+
+    A single GPU ``device_id`` is required — the collector never assumes all
+    GPUs (matching the standalone binary's contract).
+    """
+
+    def __init__(
+        self,
+        host: str,
+        device_id: int,
+        prefixes: List[str],
+        tmp_path: str = "/tmp/fpf_prod_hrt_prefix.log",
+        interval_sec: float = 3.0,
+    ) -> None:
+        super().__init__(tmp_path, interval_sec)
+        self.host = host
+        self.device_id = device_id
+        self.target_prefixes = (
+            {normalize_prefix(p) for p in prefixes} if prefixes else None
+        )
+        self.rows: List[ProdHrtPrefixRow] = []
+
+    def _write_header(self, f) -> None:
+        f.write(
+            f"{'timestamp':<30}  {'host':<22}  {'prefix':<40}  "
+            f"{'reachable':<16}  {'drained':<12}  {'unreachable':<14}  "
+            f"{'plane_up':<16}  plane_down\n"
+        )
+
+    async def _poll_once(self) -> None:
+        try:
+            client_ctx = await get_hrt_client(self.host)
+            async with client_ctx as client:
+                prefixes = await client.getPrefixTable()
+                neg_routes = await client.getRemoteFailures()
+                plane_status_entries = await client.getPlaneStatus()
+            prefix_map = build_prefix_map(
+                prefixes,
+                neg_routes,
+                plane_status_entries,
+                self.target_prefixes,
+                {self.device_id},
+            )
+        except Exception as e:
+            logger.error(
+                f"[ProdHrtPrefixCollector] {self.host} dev{self.device_id}: {e}"
+            )
+            prefix_map = {}
+
+        ts = _now_str()
+        self.rows.append(
+            ProdHrtPrefixRow(timestamp=ts, host=self.host, prefixes=prefix_map)
+        )
+
+        def _fmt(planes: List[int]) -> str:
+            return ",".join(str(p) for p in planes) if planes else "-"
+
+        for pfx in sorted(prefix_map):
+            rb = prefix_map[pfx]
+            self._file.write(
+                f"{ts:<30}  {self.host:<22}  {pfx:<40}  "
+                f"{_fmt(rb.reachable_planes):<16}  {_fmt(rb.drained_planes):<12}  "
+                f"{_fmt(rb.unreachable_planes):<14}  {_fmt(rb.plane_up):<16}  "
+                f"{_fmt(rb.plane_down)}\n"
+            )
+            self._write_json_row(
+                {
+                    "collector": "prod_hrt_prefix",
+                    "timestamp": ts,
+                    "host": self.host,
+                    "device_id": self.device_id,
+                    "prefix": pfx,
+                    "reachable_planes": rb.reachable_planes,
+                    "drained_planes": rb.drained_planes,
+                    "unreachable_planes": rb.unreachable_planes,
+                    "plane_up": rb.plane_up,
+                    "plane_down": rb.plane_down,
+                    "device_ids": rb.device_ids,
+                }
+            )
+        self._file.flush()
+
+    def evaluate_prefix_stability_window(
+        self,
+        window_start: float,
+        window_end: float,
+    ) -> List[ProdPrefixStabilityResult]:
+        """Reachability-stability verdict per prefix over [window_start, window_end].
+
+        For each monitored prefix the baseline is the reachable plane set from
+        the first in-window sample. The prefix PASSES iff every later sample's
+        reachable set is a superset of that baseline (no plane regressed to
+        down / unreachable / drained). The first regressing sample is reported.
+        """
+        windowed = [
+            row
+            for row in self.rows
+            if self._row_in_window(row, window_start, window_end)
+        ]
+        # Collect the set of prefixes seen across the window.
+        all_prefixes: set[str] = set()
+        for row in windowed:
+            all_prefixes.update(row.prefixes.keys())
+
+        results: List[ProdPrefixStabilityResult] = []
+        for pfx in sorted(all_prefixes):
+            samples = [
+                (self._row_ts(row), row.prefixes[pfx])
+                for row in windowed
+                if pfx in row.prefixes
+            ]
+            samples = [(ts, rb) for ts, rb in samples if ts is not None]
+            samples.sort(key=lambda x: x[0])
+            if not samples:
+                continue
+            baseline = set(samples[0][1].reachable_planes)
+            regression = None
+            for ts, rb in samples:
+                missing = baseline - set(rb.reachable_planes)
+                if missing:
+                    regression = (ts, sorted(missing), rb)
+                    break
+            if regression is None:
+                results.append(
+                    ProdPrefixStabilityResult(
+                        prefix=pfx,
+                        host=self.host,
+                        passed=True,
+                        baseline_reachable=sorted(baseline),
+                        samples=len(samples),
+                        detail=(
+                            f"stable: reachable held at {sorted(baseline)} "
+                            f"across {len(samples)} samples"
+                        ),
+                    )
+                )
+            else:
+                reg_ts, missing_planes, rb = regression
+                from datetime import datetime as _dt
+
+                when = _dt.fromtimestamp(reg_ts).strftime("%H:%M:%S")
+                results.append(
+                    ProdPrefixStabilityResult(
+                        prefix=pfx,
+                        host=self.host,
+                        passed=False,
+                        baseline_reachable=sorted(baseline),
+                        samples=len(samples),
+                        detail=(
+                            f"FAIL — plane(s) {missing_planes} left reachable at "
+                            f"{when} (now reachable={rb.reachable_planes}, "
+                            f"drained={rb.drained_planes}, "
+                            f"unreachable={rb.unreachable_planes})"
+                        ),
+                    )
+                )
+        return results
+
+    def _row_in_window(self, row, window_start: float, window_end: float) -> bool:
+        ts = self._row_ts(row)
+        return ts is not None and window_start <= ts <= window_end
+
+    @staticmethod
+    def _row_ts(row) -> Optional[float]:
+        try:
+            return _parse_ts(row.timestamp).timestamp()
+        except (ValueError, AttributeError):
+            return None

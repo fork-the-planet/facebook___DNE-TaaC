@@ -35,6 +35,7 @@ from taac.libs.fpf.fpf_stress_checks import (
     FsdbRibmapCollector,
     HrtBulkCollector,
     HrtRemoteFailureCollector,
+    ProdHrtPrefixCollector,
 )
 from taac.libs.fpf.inject_bgp_prefixes import (
     build_tip_prefix,
@@ -103,6 +104,28 @@ class FpfStartCollectorsTask(BaseTask):
         register_collector("hrt", hrt_collector)
         register_collector("bgp", bgp_collector)
         register_collector("hrt_remote_failure", hrt_remote_failure_collector)
+
+        # Optional: production-prefix reachability collector. Only started when
+        # the caller supplies prod_prefixes (list) + the host + GPU device_id —
+        # the collector never assumes all GPUs. Monitors steady-state per-prefix
+        # reachability for the reachability-stability postcheck.
+        prod_prefixes: t.List[str] = params.get("prod_prefixes", [])
+        if prod_prefixes:
+            prod_host: str = params.get("prod_prefix_host", hosts[0] if hosts else "")
+            prod_device_id: int = params.get("prod_prefix_device_id", 0)
+            prod_collector = ProdHrtPrefixCollector(
+                host=prod_host,
+                device_id=prod_device_id,
+                prefixes=prod_prefixes,
+                interval_sec=poll_interval_sec,
+            )
+            prod_collector.set_append_mode(True)
+            prod_collector.start()
+            register_collector("prod_hrt_prefix", prod_collector)
+            logger.info(
+                f"[FpfStartCollectors] Production-prefix collector started on "
+                f"{prod_host} dev{prod_device_id} for {len(prod_prefixes)} prefix(es)"
+            )
 
         logger.info(
             f"[FpfStartCollectors] Collectors started. Waiting "
