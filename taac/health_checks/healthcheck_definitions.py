@@ -1368,6 +1368,8 @@ def create_cpu_queue_snapshot_check(
     active_queues: t.Optional[t.List[int]] = None,
     no_discard_queues: t.Optional[t.List[int]] = None,
     active_min_out_pps_per_queue: t.Optional[t.Dict[int, int]] = None,
+    inactive_queues: t.Optional[t.List[int]] = None,
+    inactive_max_pps_per_queue: t.Optional[t.Dict[int, int]] = None,
     pre_snapshot_checkpoint_id: t.Optional[str] = None,
     post_snapshot_checkpoint_id: t.Optional[str] = None,
 ) -> SnapshotHealthCheck:
@@ -1384,6 +1386,17 @@ def create_cpu_queue_snapshot_check(
             priority BGP_CP queue).
         active_min_out_pps_per_queue: Per-queue minimum out-pps requirements
             (e.g. ``{low_queue: 10}``).
+        inactive_queues: Queue IDs that MUST stay below a noise threshold (A2
+            leakage check — catches misclassification where traffic ends up on
+            the wrong queue). Background control traffic (BGP keepalives, LLDP,
+            NDP) ticks queues constantly, so each inactive queue is given a
+            per-queue noise tolerance via `inactive_max_pps_per_queue` (merged
+            into `active_min_out_pps_per_queue` under the hood — the underlying
+            HC compares `out_pps > threshold` for inactive queues).
+        inactive_max_pps_per_queue: Per-queue noise tolerance for inactive
+            queues (e.g. ``{high_queue: 100}``). Queues in `inactive_queues`
+            not listed here fall back to the per-queue value from
+            `active_min_out_pps_per_queue` if present, else 0.
         pre_snapshot_checkpoint_id: Optional named checkpoint marker for the
             pre-snapshot capture.
         post_snapshot_checkpoint_id: Optional named checkpoint marker for the
@@ -1393,9 +1406,17 @@ def create_cpu_queue_snapshot_check(
         A `SnapshotHealthCheck` with `name=CPU_QUEUE_CHECK` carrying a
         `CpuQueueHealthCheckIn` input_json payload.
     """
+    if inactive_queues and inactive_max_pps_per_queue:
+        merged_pps = dict(active_min_out_pps_per_queue or {})
+        for queue, max_pps in inactive_max_pps_per_queue.items():
+            merged_pps[queue] = max_pps
+        active_min_out_pps_per_queue = merged_pps
+
     kwargs: t.Dict[str, t.Any] = {}
     if active_queues is not None:
         kwargs["active_queues"] = active_queues
+    if inactive_queues is not None:
+        kwargs["inactive_queues"] = inactive_queues
     if no_discard_queues is not None:
         kwargs["no_discard_queues"] = no_discard_queues
     if active_min_out_pps_per_queue is not None:
