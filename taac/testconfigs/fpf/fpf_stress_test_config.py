@@ -32,6 +32,7 @@ Usage:
     --debug --continue-on-precheck-failure --skip-fboss-rsyslog
 """
 
+from taac.libs.fpf.fpf_prod_prefix_map import get_prefix
 from taac.playbooks.playbook_definitions import (
     create_fpf_hardening_playbook_v2,
 )
@@ -56,10 +57,12 @@ STABILIZATION_DELAY_SEC = 300
 
 # Production VF prefix monitored by the fifth (prod_hrt_prefix) collector and
 # validated by FpfProdHrtPrefixStabilityHealthCheck. Steady-state production
-# reachability exists independent of the injected stress prefixes.
-PROD_PREFIXES = ["2401:db00:292a:a27c::/64"]
+# reachability exists independent of the injected stress prefixes. The prefix is
+# resolved from the single source-of-truth host->device->prefix map
+# (libs/fpf/fpf_prod_prefix_map.py) — never hardcode the prefix string here.
 PROD_PREFIX_HOST = GPU_HOSTS[0]
 PROD_PREFIX_DEVICE_ID = 0
+PROD_PREFIXES = [get_prefix(PROD_PREFIX_HOST, PROD_PREFIX_DEVICE_ID)]
 
 # RTP test hosts whose HRT service memory is asserted (<= 8 GiB max) by
 # FpfHrtSystemMemoryHealthCheck. Distinct from GPU_HOSTS.
