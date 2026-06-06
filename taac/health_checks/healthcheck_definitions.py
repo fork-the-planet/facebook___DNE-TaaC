@@ -2156,6 +2156,51 @@ def create_fpf_hrt_remote_failure_convergence_check(
     )
 
 
+def create_fpf_prod_hrt_prefix_stability_check(
+    expected_reachable: t.Optional[t.List[int]] = None,
+    expected_drained: t.Optional[t.List[int]] = None,
+    expected_unreachable: t.Optional[t.List[int]] = None,
+    expected_plane_up: t.Optional[t.List[int]] = None,
+    prefixes: t.Optional[t.List[str]] = None,
+    lookback_sec: int = 900,
+    window_start: t.Optional[float] = None,
+    window_end: t.Optional[float] = None,
+    check_id: t.Optional[str] = None,
+) -> PointInTimeHealthCheck:
+    """FPF_PROD_HRT_PREFIX_STABILITY_CHECK — production HRT prefix reachability.
+
+    Postcheck over the prod_hrt_prefix collector. For every data point between
+    the test-case start and end time, asserts each monitored prefix is strictly
+    compliant (Signal 1) and that no data point is null/timed-out (Signal 2).
+
+    Expected plane sets default to the validated MWG2 FPF lab steady state
+    (reachable [0,1,2,3], drained [], unreachable [4,5,6,7], plane_up [0..7])
+    and are overridable for a different topology. Only the params that are
+    explicitly provided are emitted; the rest fall back to the health check's
+    own defaults.
+    """
+    params: t.Dict[str, t.Any] = {"lookback_sec": lookback_sec}
+    if expected_reachable is not None:
+        params["expected_reachable"] = expected_reachable
+    if expected_drained is not None:
+        params["expected_drained"] = expected_drained
+    if expected_unreachable is not None:
+        params["expected_unreachable"] = expected_unreachable
+    if expected_plane_up is not None:
+        params["expected_plane_up"] = expected_plane_up
+    if prefixes is not None:
+        params["prefixes"] = prefixes
+    if window_start is not None:
+        params["window_start"] = window_start
+    if window_end is not None:
+        params["window_end"] = window_end
+    return PointInTimeHealthCheck(
+        name=hc_types.CheckName.FPF_PROD_HRT_PREFIX_STABILITY_CHECK,
+        check_params=Params(json_params=json.dumps(params)),
+        check_id=check_id,
+    )
+
+
 def create_fpf_ods_counter_check(
     entity_desc: str,
     key_desc: str,

@@ -3076,26 +3076,37 @@ def create_fpf_start_collectors_task(
     subnet_prefix: str = "5000:dd::/32",
     poll_interval_sec: float = 5.0,
     baseline_collection_sec: int = 120,
+    prod_prefixes: t.Optional[t.List[str]] = None,
+    prod_prefix_host: t.Optional[str] = None,
+    prod_prefix_device_id: int = 0,
 ) -> Task:
     """Create a setup task that starts long-lived FPF collectors.
 
-    Starts 3 collectors (FSDB ribMap, HRT bulk, BGP RIB) and waits for
-    baseline data collection. Prefix injection is NOT done here — it is
-    a stage step in the playbook so test_case_start_time aligns with injection.
+    Starts the injected-prefix collectors (FSDB ribMap, HRT bulk, BGP RIB,
+    HRT remote-failure) and waits for baseline data collection. Prefix
+    injection is NOT done here — it is a stage step in the playbook so
+    test_case_start_time aligns with injection.
+
+    When ``prod_prefixes`` is supplied, a fifth collector
+    (ProdHrtPrefixCollector) is also started to monitor steady-state
+    per-prefix plane reachability of those production VF prefixes on
+    ``prod_prefix_host`` (defaults to hosts[0]) GPU ``prod_prefix_device_id``.
+    This is the collector validated by FpfProdHrtPrefixStabilityHealthCheck.
     """
+    params: t.Dict[str, t.Any] = {
+        "gtsws": gtsws,
+        "hosts": hosts,
+        "subnet_prefix": subnet_prefix,
+        "poll_interval_sec": poll_interval_sec,
+        "baseline_collection_sec": baseline_collection_sec,
+    }
+    if prod_prefixes:
+        params["prod_prefixes"] = prod_prefixes
+        params["prod_prefix_host"] = prod_prefix_host or (hosts[0] if hosts else "")
+        params["prod_prefix_device_id"] = prod_prefix_device_id
     return Task(
         task_name="fpf_start_collectors",
-        params=Params(
-            json_params=json.dumps(
-                {
-                    "gtsws": gtsws,
-                    "hosts": hosts,
-                    "subnet_prefix": subnet_prefix,
-                    "poll_interval_sec": poll_interval_sec,
-                    "baseline_collection_sec": baseline_collection_sec,
-                }
-            )
-        ),
+        params=Params(json_params=json.dumps(params)),
     )
 
 

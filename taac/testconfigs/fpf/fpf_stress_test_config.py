@@ -3,11 +3,26 @@
 
 # pyre-unsafe
 
-"""FPF BGP Prefix Stress Test — TC1: Stable State Validation.
+"""FPF BGP Prefix Stress Test — TC1: Stable State Validation (minimal run).
 
-Collectors start in setup_tasks and run continuously. Prefix injection
-happens as the first stage step in the playbook, so test_case_start_time
-aligns with injection. Convergence is measured from injection time.
+Minimal collector-validation configuration: five long-lived collectors run
+continuously and are each validated by exactly one postcheck health check, so
+collectors and validating health checks are 1:1.
+
+  Collector              ->  Validating health check
+  ---------------------      --------------------------------------------
+  fsdb (ribMap)          ->  create_fpf_fsdb_ribmap_convergence_check
+  bgp  (RIB)             ->  create_fpf_bgp_rib_convergence_check
+  hrt  (bulk)            ->  create_fpf_hrt_bulk_convergence_check
+  hrt_remote_failure     ->  create_fpf_hrt_remote_failure_convergence_check
+  prod_hrt_prefix        ->  create_fpf_prod_hrt_prefix_stability_check
+
+Scale is intentionally tiny (1,000 injected prefixes) for a fast minimal run.
+Generic SSH/device-shell prechecks/postchecks (systemctl, unclean-exit, core
+dumps, port/bgp state, mem/cpu) and ODS counters are skipped
+(skip_ssh_dependent_checks=True) so the test runs end-to-end without device
+SSH access. Prefix injection and the collectors use BGP++/HRT/FSDB thrift, not
+SSH. The stabilization (bake) window is kept at 5 min — do not shrink further.
 
 Usage:
   buck2 run neteng/netcastle:netcastle_taac -- \\
@@ -33,8 +48,17 @@ from taac.testconfigs.fpf.fpf_hardening_common import (
 )
 from taac.test_as_a_config.types import TestConfig
 
-PREFIX_COUNT = 10000
+# Tiny scale for a fast minimal run.
+PREFIX_COUNT = 1000
+# Bake/stability window — keep at 5 min (do not reduce below).
 STABILIZATION_DELAY_SEC = 300
+
+# Production VF prefix monitored by the fifth (prod_hrt_prefix) collector and
+# validated by FpfProdHrtPrefixStabilityHealthCheck. Steady-state production
+# reachability exists independent of the injected stress prefixes.
+PROD_PREFIXES = ["2401:db00:292a:a27c::/64"]
+PROD_PREFIX_HOST = GPU_HOSTS[0]
+PROD_PREFIX_DEVICE_ID = 0
 
 
 def create_fpf_stress_test_config() -> TestConfig:
@@ -47,6 +71,8 @@ def create_fpf_stress_test_config() -> TestConfig:
         prefix_count=PREFIX_COUNT,
         community_list=DEFAULT_COMMUNITY_LIST,
         playbook_name="fpf_stable_state",
+        prod_prefixes=PROD_PREFIXES,
+        skip_ssh_dependent_checks=True,
     )
 
     return TestConfig(
@@ -57,6 +83,9 @@ def create_fpf_stress_test_config() -> TestConfig:
                 gtsws=OBSERVER_GTSWS,
                 hosts=GPU_HOSTS,
                 subnet_prefix=DEFAULT_SUBNET_PREFIX,
+                prod_prefixes=PROD_PREFIXES,
+                prod_prefix_host=PROD_PREFIX_HOST,
+                prod_prefix_device_id=PROD_PREFIX_DEVICE_ID,
             ),
         ],
         teardown_tasks=[
