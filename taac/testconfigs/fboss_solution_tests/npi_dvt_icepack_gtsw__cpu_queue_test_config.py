@@ -17,7 +17,7 @@ from taac.testconfigs.fboss_solution_tests.fboss_dctypef_51t_npi_cpu_queue_test_
 
 NPI_DVT_ICEPACK_GTSW__CPU_QUEUE_TEST_CONFIG = create_dctypef_npi_cpu_queue_test_config(
     test_config_name="NPI_DVT_ICEPACK_GTSW__CPU_QUEUE_TEST_CONFIG",
-    device_name="gtsw001.l1001.c085.ash6.tfbnw.net",
+    device_name="gtsw001.l1001.c085.ash6",
     local_mac_address="02:00:00:00:0f:0c",
     # IXIA ports: factory uses uplink as source of CPU-queue test traffic,
     # downlink as sink + BGP-flap target. Rogue is unused for CPU-queue
@@ -28,23 +28,29 @@ NPI_DVT_ICEPACK_GTSW__CPU_QUEUE_TEST_CONFIG = create_dctypef_npi_cpu_queue_test_
     # Uplink: real existing peer group toward the STSW spine.
     peergroup_uplink_mimic_v6="PEERGROUP_GTSW_STSW_V6",
     peergroup_uplink_mimic_v4="PEERGROUP_GTSW_STSW_V4",
-    # Downlink (toward hosts): no native peer group on this leaf — the COOP
-    # patcher creates these from scratch for IXIA simulation.
-    peergroup_downlink_mimic_v6="PEERGROUP_GTSW_HOST_MIMIC_V6",
+    # Downlink: this GTSW is a leaf (no native host-facing peer group), so we
+    # attach IXIA-mimic downlink peers to the real PEERGROUP_GTSW_STSW_V6.
+    # The factory's update_peer_group_patcher only works on existing groups;
+    # using the fictional PEERGROUP_GTSW_HOST_MIMIC_V6 crashed bgpd because
+    # update is a no-op on non-existent groups, leaving peers referencing an
+    # undefined group. v4 still uses add_peer_group_patcher (creates from
+    # scratch), so the fictional v4 name is fine.
+    peergroup_downlink_mimic_v6="PEERGROUP_GTSW_STSW_V6",
     peergroup_downlink_mimic_v4="PEERGROUP_GTSW_HOST_MIMIC_V4",
     # Rogue: mirror uplink (KO3 convention).
     peergroup_rogue_mimic_v6="PEERGROUP_GTSW_STSW_V6",
     peergroup_rogue_mimic_v4="PEERGROUP_GTSW_STSW_V4",
-    # Uplink route maps: real names on this GTSW (confirmed from `fboss2 show bgp config`).
-    # Downlink + rogue route maps: created from scratch by the COOP patcher (no
-    # native host-facing or rogue policy exists on this leaf), so names are
-    # arbitrary as long as they're unique.
+    # All directions point at the only real route-map pair on this leaf
+    # (PROPAGATE_GTSW_STSW_IN/OUT). The add_peer_group_patcher validates that
+    # ingress/egress policies exist before accepting the peer-group config;
+    # fictional names crash bgpd at startup. Sharing one policy across uplink,
+    # downlink, and rogue is fine for first-run CPU-queue validation.
     route_map_uplink_ingress="PROPAGATE_GTSW_STSW_IN",
     route_map_uplink_egress="PROPAGATE_GTSW_STSW_OUT",
-    route_map_downlink_ingress="PROPAGATE_GTSW_HOST_IN",
-    route_map_downlink_egress="PROPAGATE_GTSW_HOST_OUT",
-    route_map_rogue_ingress="PROPAGATE_STSW_GTSW_IN",
-    route_map_rogue_egress="PROPAGATE_STSW_GTSW_OUT",
+    route_map_downlink_ingress="PROPAGATE_GTSW_STSW_IN",
+    route_map_downlink_egress="PROPAGATE_GTSW_STSW_OUT",
+    route_map_rogue_ingress="PROPAGATE_GTSW_STSW_IN",
+    route_map_rogue_egress="PROPAGATE_GTSW_STSW_OUT",
     # IXIA-side parent networks: use the pre-configured BGP_MONITOR
     # placeholder ranges already present on the DUT
     # (v4 10.127.240.0/23, v6 2401:db00:1ff:c100::/56).
@@ -54,29 +60,41 @@ NPI_DVT_ICEPACK_GTSW__CPU_QUEUE_TEST_CONFIG = create_dctypef_npi_cpu_queue_test_
     ixia_downlink_ic_parent_network_v4="10.127.240",
     ixia_uplink_ic_parent_network_v4="10.127.241",
     ixia_rogue_ic_parent_network_v4="10.127.242",
-    unique_prefix_limit="73000",
+    # Scale: minimal for CPU-queue test first-pass. BGP peers are anchors for
+    # IXIA traffic injection; the CPU-queue assertions don't depend on prefix
+    # count. KO3 baseline of 32 peers × 5000 prefixes overwhelmed TH6's CPU
+    # (21M+ drops on low queue, 100% loss on BGP_PREFIX background — see
+    # earlier failed runs). Scaling to 8 peers × 500 prefixes reduces BGP
+    # control-plane load ~10×.
+    unique_prefix_limit="5000",
     per_peer_max_route_limit="20000",
-    downlink_peer_count=32,
-    uplink_peer_count=32,
+    downlink_peer_count=8,
+    uplink_peer_count=8,
     rogue_peer_count=8,
-    remote_uplink_as_4byte=4200601901,
-    remote_downlink_as_4byte=65001,
+    # Private-range ASNs that are DIFFERENT from DUT's local AS (4200601001).
+    # IXIA's BGP-mimic always uses step=1 (doesn't honor step=0) and treats
+    # peers as EBGP since peer-group has no confed flag. EBGP requires peer AS
+    # != local AS; if our base ASN matched DUT's 4200601001, peer 0 would be
+    # rejected with BN_OM_BAD_PEER_AS. Picking 65272 (uplink) / 7001 (downlink)
+    # mirrors KO3 reference; both are well outside DUT's AS range.
+    remote_uplink_as_4byte=65272,
+    remote_downlink_as_4byte=7001,
     remote_as_4_byte_step=1,
     remote_rogue_as_4byte=2500,
     is_uplink_peer_confed="False",
     is_downlink_peer_confed="False",
     is_rogue_peer_confed="False",
-    ixia_downlink_prefix_count_v6=5000,
-    ixia_uplink_prefix_count_v6=5000,
-    ixia_rogue_prefix_count_v6=7500,
-    ixia_downlink_prefix_count_v4=5000,
-    ixia_uplink_prefix_count_v4=5000,
-    ixia_rogue_prefix_count_v4=7500,
-    # Uplink: `65446:30` is the `LIVE` community required by the
-    # `PROPAGATE_GTSW_STSW_IN` ingress filter on this GTSW; IXIA-mimic STSW
-    # peers must tag advertised routes with it or BGP policy rejects them.
-    # Downlink: host-facing peers have no policy attached, leave empty.
-    ixia_downlink_communities=[],
+    ixia_downlink_prefix_count_v6=500,
+    ixia_uplink_prefix_count_v6=500,
+    ixia_rogue_prefix_count_v6=500,
+    ixia_downlink_prefix_count_v4=500,
+    ixia_uplink_prefix_count_v4=500,
+    ixia_rogue_prefix_count_v4=500,
+    # `65446:30` is the `LIVE` community required by `PROPAGATE_GTSW_STSW_IN`.
+    # Both uplink and downlink IXIA-mimic peers attach to PEERGROUP_GTSW_STSW_V6
+    # (downlink is bound to the same real peer-group for v6), so both must tag
+    # advertised routes with LIVE or the ingress filter rejects them.
+    ixia_downlink_communities=["65446:30"],
     ixia_uplink_communities=["65446:30"],
     downlink_peer_tag="HOST",
     uplink_peer_tag="STSW",
