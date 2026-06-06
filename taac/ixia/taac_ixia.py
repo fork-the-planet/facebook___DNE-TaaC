@@ -12,6 +12,7 @@ from ixia.ixia import types as ixia_types
 from ixnetwork_restpy.assistants.statistics.statviewassistant import (
     StatViewAssistant as IxnStatViewAssistant,
 )
+from ixnetwork_restpy.files import Files
 from taac.ixia.ixia import Ixia
 from neteng.test_infra.dne.taac.utils.oss_taac_lib_utils import none_throws, retryable
 from uhd_restpy.assistants.statistics.statviewassistant import (
@@ -440,7 +441,13 @@ class TaacIxia(Ixia, Thread):
         """
         try:
             self.logger.info(f"Saving IXIA config to chassis: {config_path}")
-            self.session.Ixnetwork.SaveConfig(config_path)
+            # `SaveConfig(Arg1)` expects a `Files` handle, not a raw string.
+            # Passing a bare string causes IxNetwork to fall back to its default
+            # storage location with just the basename — the directory part of
+            # our absolute path is silently dropped. Wrap with
+            # `Files(path, local_file=False)` so the server treats the value
+            # as an absolute server-side write target.
+            self.session.Ixnetwork.SaveConfig(Files(config_path, local_file=False))
             self.logger.info(f"Successfully saved IXIA config: {config_path}")
             return True
         except Exception as e:
@@ -465,7 +472,11 @@ class TaacIxia(Ixia, Thread):
             self.logger.info(
                 f"Attempting to load IXIA config from chassis: {config_path}"
             )
-            self.session.Ixnetwork.LoadConfig(config_path)
+            # `LoadConfig(Arg1)` expects a `Files` handle — see SaveConfig
+            # comment above. `local_file=False` tells the server to read from
+            # the exact absolute path provided (not upload from client + load
+            # from server default).
+            self.session.Ixnetwork.LoadConfig(Files(config_path, local_file=False))
             self.logger.info(f"Successfully loaded IXIA config: {config_path}")
 
             # After loading, start protocols and verify
