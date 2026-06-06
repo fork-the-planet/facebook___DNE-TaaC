@@ -8,10 +8,12 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 import typing as t
 import warnings
 from collections import defaultdict, namedtuple
+from concurrent.futures import as_completed, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from ipaddress import ip_address, IPv6Address
 
@@ -4200,9 +4202,24 @@ class Ixia:
                 device_group_port_identifier += (
                     f"_{device_group_config.tag_name.upper()}"
                 )
-                self.tag_name_to_device_group_name_list[
-                    device_group_config.tag_name
-                ].append(device_group_port_identifier)
+                # Pain #1 Lever A: this defaultdict is mutated from per-port
+                # worker threads inside _build_topologies_and_device_groups_\
+                # concurrently. `__getitem__` (defaultdict autoviv) + `.append`
+                # is not atomic if two workers share the same `tag_name` —
+                # both appends succeed but ordering and intermediate states
+                # may interleave. Lock around the read-modify-write. Lazy
+                # `getattr` keeps callers from the legacy single-threaded
+                # path unaffected (no lock to acquire → no contention).
+                _lock = getattr(self, "_tag_to_dg_lock", None)
+                if _lock is not None:
+                    with _lock:
+                        self.tag_name_to_device_group_name_list[
+                            device_group_config.tag_name
+                        ].append(device_group_port_identifier)
+                else:
+                    self.tag_name_to_device_group_name_list[
+                        device_group_config.tag_name
+                    ].append(device_group_port_identifier)
 
             # Detect chained device group pattern: tag_name contains
             # "CHAINED_N" where N is the parent DG index.
@@ -4333,11 +4350,11 @@ class Ixia:
                         device_group,
                         ip_addr_res.ipv4,
                         device_group_index,
-                        custom_network_group_configs=list(
-                            bgp_v4_config.custom_network_group_configs
-                        )
-                        if bgp_v4_config.custom_network_group_configs
-                        else None,
+                        custom_network_group_configs=(
+                            list(bgp_v4_config.custom_network_group_configs)
+                            if bgp_v4_config.custom_network_group_configs
+                            else None
+                        ),
                     )
                 if bgp_v6_config := device_group_config.bgp_config.bgp_v6_config:
                     bgp_v6_as = getattr(bgp_v6_config.bgp_peer_config, "local_as", "?")
@@ -4350,16 +4367,36 @@ class Ixia:
                         device_group,
                         ip_addr_res.ipv6,
                         device_group_index,
-                        custom_network_group_configs=list(
-                            bgp_v6_config.custom_network_group_configs
-                        )
-                        if bgp_v6_config.custom_network_group_configs
-                        else None,
+                        custom_network_group_configs=(
+                            list(bgp_v6_config.custom_network_group_configs)
+                            if bgp_v6_config.custom_network_group_configs
+                            else None
+                        ),
                     )
             device_groups.append(device_group)
+        # Snapshot the tag→DG mapping under the lock — without this,
+        # `dict(...)` racing against a concurrent `defaultdict.__getitem__` +
+        # `list.append` in another worker (from
+        # `_build_topologies_and_device_groups_concurrently`) can raise
+        # `RuntimeError: dictionary changed size during iteration`. Inner
+        # lists are also deep-copied via `list(v)` so the f-string `repr()`
+        # below — which runs AFTER lock release — iterates frozen snapshots
+        # rather than shared lists that another worker may still append to.
+        # `getattr` keeps callers from the legacy single-threaded path
+        # unaffected (lock absent → fall through to a plain dict comp).
+        _lock = getattr(self, "_tag_to_dg_lock", None)
+        if _lock is not None:
+            with _lock:
+                tag_to_dg_snapshot = {
+                    k: list(v)
+                    for k, v in self.tag_name_to_device_group_name_list.items()
+                }
+        else:
+            tag_to_dg_snapshot = {
+                k: list(v) for k, v in self.tag_name_to_device_group_name_list.items()
+            }
         self.logger.info(
-            f"{_DIM}[IXIA] Tag -> DG mapping: "
-            f"{dict(self.tag_name_to_device_group_name_list)}{_RESET}"
+            f"{_DIM}[IXIA] Tag -> DG mapping: {tag_to_dg_snapshot}{_RESET}"
         )
         return device_groups
 
@@ -4439,31 +4476,8 @@ class Ixia:
                 f"({len(port_configs)} port(s))...{_RESET}"
             )
             _step_start = time.time()
-            # pyrefly: ignore [not-iterable]
-            for port in port_configs:
-                port_identifier: str = Ixia.get_port_identifier(port.port_name)
-                _log(f"{_MAGENTA}[IXIA]{_RESET} Port {_BOLD}{port_identifier}{_RESET}")
-                desired_vport_name: str = DESIRED_VPORT_NAME.format(
-                    port_identifier=port_identifier
-                )
-                vport: "Vport" = self.ixnetwork.Vport.find(Name=desired_vport_name)
-                topology: "Topology" = self.create_topology(port_identifier, vport)
-                self.vport_indices[port_identifier].topology_name = topology.Name
-                dg_configs = none_throws(port.device_group_configs)
-                _log(
-                    f"{_CYAN}[IXIA]{_RESET}   "
-                    f"Creating {_YELLOW}{len(dg_configs)}{_RESET} device group(s)..."
-                )
-                _dg_start = time.time()
-                self.create_device_groups(port_identifier, dg_configs, topology)
-                _log(
-                    f"{_GREEN}[IXIA]{_RESET}   "
-                    f"Device groups for {port_identifier} created in "
-                    f"{time.time() - _dg_start:.0f}s"
-                )
-                if port.l1_config:
-                    _log(f"{_CYAN}[IXIA]{_RESET}   Configuring L1 settings")
-                    self.configure_l1_settings(vport, port.l1_config)
+            # pyrefly: ignore [not-iterable, bad-argument-type]
+            self._build_topologies_and_device_groups_concurrently(port_configs, _log)
             _log(
                 f"{_GREEN}[IXIA]{_RESET} Topologies & device groups created in "
                 f"{time.time() - _step_start:.0f}s"
@@ -4542,6 +4556,115 @@ class Ixia:
         _log(
             f"\n{_GREEN}{_BOLD}[IXIA] Setup complete in {total_elapsed:.0f}s{_RESET}\n"
         )
+
+    def _build_topologies_and_device_groups_concurrently(
+        self,
+        port_configs: t.Sequence[ixia_types.PortConfig],
+        _log: t.Callable[[str], None],
+    ) -> None:
+        """Build Step 3 (topologies + device groups + optional L1) in parallel
+        across ports.
+
+        Each port is independent — vports are distinct SDM nodes, topologies
+        are scoped per-vport, and `self.vport_indices[port_identifier]` only
+        writes to a per-port-keyed entry (different keys → no dict contention).
+        Single-attempt parallel: a port failure raises `IxiaSetupError`
+        (from `_create_basic_setup`'s wrapper at `create_basic_setup`,
+        line 4729), which the wrapper handles by tearing down the whole
+        session when `cleanup_failed_setup=True`. We DELIBERATELY do not
+        retry per-port like `_apply_as_positions_concurrently` does:
+        `create_device_groups` is non-idempotent (multi-step DG creation +
+        appends to `tag_name_to_device_group_name_list`), so a retry after
+        a mid-step failure would produce duplicate DGs and duplicate dict
+        entries. Fail fast → let the session-level cleanup recover.
+
+        Thread safety:
+          * `self.vport_indices[port_identifier].topology_name = ...`
+            writes a per-port-keyed attribute; ports never collide on the
+            same key. `_vport_indices_lock` guards the write for paranoia.
+          * `self.tag_name_to_device_group_name_list[tag].append(...)`
+            inside `create_device_groups` is guarded by `_tag_to_dg_lock`
+            (acquired in `create_device_groups` itself, not here). Lock
+            init is lazy so callers from the legacy non-parallel path get
+            no lock-acquisition overhead.
+
+        Determinism note: insertion order of values in
+        `tag_name_to_device_group_name_list[tag]` is non-deterministic
+        across runs (worker thread completion order varies). Verified
+        2026-06-05 via grep that no consumer iterates these lists in an
+        order-sensitive way — only `__contains__` checks at `ixia.py:2400`
+        and dict-level pop+rewrite at `2401-2404`. If you add a new
+        consumer that needs deterministic order, sort by port name at
+        read time.
+        """
+        # Lazy lock init keeps the refactor self-contained — no constructor
+        # change, no risk of breaking subclasses that override __init__.
+        if not hasattr(self, "_vport_indices_lock"):
+            self._vport_indices_lock = threading.Lock()
+        if not hasattr(self, "_tag_to_dg_lock"):
+            self._tag_to_dg_lock = threading.Lock()
+
+        def _build_one_port(port: ixia_types.PortConfig) -> None:
+            port_identifier: str = Ixia.get_port_identifier(port.port_name)
+            _log(f"{_MAGENTA}[IXIA]{_RESET} Port {_BOLD}{port_identifier}{_RESET}")
+            desired_vport_name: str = DESIRED_VPORT_NAME.format(
+                port_identifier=port_identifier
+            )
+            vport = self.ixnetwork.Vport.find(Name=desired_vport_name)
+            topology = self.create_topology(port_identifier, vport)
+            with self._vport_indices_lock:
+                self.vport_indices[port_identifier].topology_name = topology.Name
+            dg_configs = none_throws(port.device_group_configs)
+            _log(
+                f"{_CYAN}[IXIA]{_RESET}   "
+                f"Creating {_YELLOW}{len(dg_configs)}{_RESET} device group(s) "
+                f"for {port_identifier}..."
+            )
+            _dg_start = time.time()
+            self.create_device_groups(port_identifier, dg_configs, topology)
+            _log(
+                f"{_GREEN}[IXIA]{_RESET}   "
+                f"Device groups for {port_identifier} created in "
+                f"{time.time() - _dg_start:.0f}s"
+            )
+            if port.l1_config:
+                _log(
+                    f"{_CYAN}[IXIA]{_RESET}   Configuring L1 settings "
+                    f"for {port_identifier}"
+                )
+                self.configure_l1_settings(vport, port.l1_config)
+
+        max_workers = 10
+        port_count = len(port_configs)
+        _log(
+            f"{_DIM}[IXIA] Building {port_count} port(s) concurrently "
+            f"(max_workers={max_workers}){_RESET}"
+        )
+
+        errors: t.List[t.Tuple[ixia_types.PortConfig, str]] = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_build_one_port, p): p for p in port_configs}
+            for future in as_completed(futures):
+                port = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    errors.append((port, repr(e)))
+
+        if errors:
+            # Single-attempt — no retry. `create_device_groups` is non-
+            # idempotent (multi-step + tag-list appends), so retrying a
+            # partially-failed port would create duplicate DGs / duplicate
+            # tag entries. Let the outer wrapper tear down the whole
+            # session and let the test framework retry at a higher level.
+            for port, err in errors[:5]:
+                self.logger.warning(
+                    f"  {Ixia.get_port_identifier(port.port_name)}: {err}"
+                )
+            raise RuntimeError(
+                f"Parallel topology setup failed for {len(errors)} port(s); "
+                f"first failures: {[(Ixia.get_port_identifier(p.port_name), e) for p, e in errors[:5]]}"
+            )
 
     def create_basic_setup(self) -> None:
         """Creates the basic IXIA setup"""
