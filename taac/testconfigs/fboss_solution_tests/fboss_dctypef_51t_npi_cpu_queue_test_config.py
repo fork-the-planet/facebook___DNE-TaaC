@@ -1544,6 +1544,13 @@ def create_dctypef_npi_cpu_queue_test_config(
                 mid_queue=mid_queue,
                 high_queue=high_queue,
                 ixia_downlink_interface=ixia_downlink_interface,
+                # Total IXIA-mimic BGP peers across all three directions; used
+                # by create_cpu_queue_playbooks to scale the A2-leakage noise
+                # tolerance per queue (BGP control traffic on the high queue
+                # scales linearly with established session count).
+                bgp_peer_count=downlink_peer_count
+                + uplink_peer_count
+                + rogue_peer_count,
             ),
             unique_prefix_limit=unique_prefix_limit,
             ixia_packet_loss_threshold=ixia_packet_loss_threshold,
