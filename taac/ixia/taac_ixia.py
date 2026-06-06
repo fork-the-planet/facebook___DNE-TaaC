@@ -479,7 +479,15 @@ class TaacIxia(Ixia, Thread):
             self.session.Ixnetwork.LoadConfig(Files(config_path, local_file=False))
             self.logger.info(f"Successfully loaded IXIA config: {config_path}")
 
-            # After loading, start protocols and verify
+            # LoadConfig restores vport definitions and their `location`
+            # attributes but does NOT re-bind them to physical chassis ports —
+            # start_protocols then fails with `No ports assigned to the Port
+            # Group`. `AssignPorts(True)` reads the saved `location` on each
+            # vport and re-acquires the underlying hardware port (True = clear
+            # ownership first to handle stale grabs). Discovered via bag012
+            # e2e 2026-06-05 when Tier 2 LoadConfig succeeded but protocol
+            # start failed.
+            self.session.Ixnetwork.AssignPorts(True)
             self.start_and_verify_protocols()
             return True
         except Exception as e:

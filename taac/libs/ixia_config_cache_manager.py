@@ -232,6 +232,13 @@ class IxiaConfigCacheManager:
             # LoadConfig against the just-uploaded basename. IxNetwork resolves
             # the basename in its default storage location server-side.
             self._ixia.session.Ixnetwork.LoadConfig(Files(key, local_file=False))
+            # Re-bind vports to physical chassis ports — LoadConfig restores
+            # vport `location` attrs but doesn't re-acquire the hardware
+            # ports. Without this, `start_and_verify_protocols` raises
+            # `BadRequestError: No ports assigned to the Port Group`. True =
+            # clear ownership first to handle any stale grabs from prior
+            # sessions. Same fix as `taac_ixia.load_config_from_chassis`.
+            self._ixia.session.Ixnetwork.AssignPorts(True)
             self._ixia.start_and_verify_protocols()
             elapsed = time.monotonic() - t0
             self._logger.info(
