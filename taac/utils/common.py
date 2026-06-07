@@ -106,16 +106,22 @@ async def async_everpaste_if_needed(content: str, thres: int = 5000, **kwargs) -
 
 def create_everpaste_fburl(data: str) -> t.Optional[str]:
     """
-    Used to create an Everpaste URL wrapped inside the short FBURL for
-    verbose data
+    Upload verbose ``data`` to Everpaste and return the (clickable) Everpaste URL.
+
+    Despite the legacy name, this does NOT create an fburl: an Everpaste URL is
+    already a short, clickable internalfb.com link, so routing it through the
+    globally throttled ``fburl`` tier is unnecessary. The previous implementation
+    passed ``use_fburl=``/``permanent=`` keyword arguments that the netcastle
+    ``everpaste_str`` does not accept, which raised ``TypeError`` at runtime
+    (the ``pyre-fixme[28]`` masked it). This mirrors the sibling helper in
+    ``neteng/test_infra/dne/utils/common.py``.
     """
     if TAAC_OSS:
         return None
 
     from neteng.netcastle.utils.everpaste_utils import everpaste_str
 
-    # pyre-fixme[28]: Unexpected keyword argument `use_fburl`.
-    return everpaste_str(data, use_fburl=True, permanent=True)
+    return everpaste_str(data)
 
 
 async def async_everpaste_file(
