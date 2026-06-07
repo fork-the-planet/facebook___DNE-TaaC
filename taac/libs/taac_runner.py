@@ -55,7 +55,6 @@ from taac.tasks.utils import run_task
 from taac.test_configs import get_test_config
 from taac.utils.common import (
     async_everpaste_str,
-    async_get_fburl,
     async_write_test_result,
     tabulate_test_results,
 )
@@ -1665,9 +1664,11 @@ class TaacRunner:
                         f"{original_size} to {max_everpaste_size} chars "
                         f"(keeping tail)"
                     )
+                # The Everpaste URL is already a clickable internalfb.com link;
+                # don't additionally shorten it through the throttled fburl tier
+                # (this collects per host x service at test-case teardown).
                 everpaste_url = await async_everpaste_str(output)
-                url = await async_get_fburl(everpaste_url)
-                results.append((hostname, service_name, url))
+                results.append((hostname, service_name, everpaste_url))
             except asyncio.TimeoutError:
                 self.logger.error(
                     f"Timeout ({log_timeout}s) while collecting logs for {hostname} {service_name}"
@@ -2147,10 +2148,11 @@ class TaacRunner:
                     test_status=periodic_check_result.status,
                     start_time=test_case_start_time,
                     check_name=periodic_check_result.name,
-                    message=(
-                        await async_get_fburl(await async_everpaste_str(message))
-                        if len(message) > 100
-                        else message
-                    ),
+                    # async_write_test_result already everpaste-shortens long
+                    # messages (no fburl); pass it through directly instead of
+                    # everpasting + fburl-ing here. This removes a duplicate
+                    # upload and a per-worker fburl-tier call at every test-case
+                    # teardown, and resolves the >100 vs >1000 gate conflict.
+                    message=message,
                 )
                 test_case_results.append(result)

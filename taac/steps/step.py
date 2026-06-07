@@ -112,8 +112,12 @@ class Step(t.Generic[StepInput], ABC):
             )
             try:
                 self.logger.debug(
+                    # thres=5000: a step's input+params repr is almost always a
+                    # few hundred chars, so a thres of 100 everpasted nearly
+                    # every step (the dominant everpaste volume in a run). Only
+                    # genuinely large inputs are worth an Everpaste handle.
                     await async_everpaste_if_needed(
-                        f"Step input: {input} | params: {params}", 100
+                        f"Step input: {input} | params: {params}", 5000
                     )
                 )
             except Exception as e:

@@ -151,3 +151,22 @@ class StepEverpasteFallbackTest(unittest.IsolatedAsyncioTestCase):
         )
         actual_message = mock_write_test_result.call_args.kwargs["message"]
         self.assertEqual(actual_message, expected_message)
+
+    @patch(f"{MODULE}.log_step_info")
+    @patch(f"{MODULE}.async_everpaste_if_needed", new_callable=AsyncMock)
+    async def test_step_input_everpaste_uses_high_threshold(
+        self, mock_everpaste, mock_log_step
+    ):
+        # The step-input debug everpaste must use a high threshold so routine
+        # small step inputs (a few hundred chars) are not uploaded to Everpaste
+        # on every step — that per-step everpasting was the dominant upload
+        # volume in a run.
+        mock_everpaste.return_value = "input logged"
+        self.step.setUp = AsyncMock()
+        self.step.run = AsyncMock()
+
+        await self.step._run(taac_types.BaseInput(), {"key": "value"})
+
+        mock_everpaste.assert_awaited_once()
+        # The threshold is the second positional arg to async_everpaste_if_needed.
+        self.assertEqual(mock_everpaste.await_args.args[1], 5000)
