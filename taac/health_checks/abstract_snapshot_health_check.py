@@ -4,7 +4,11 @@
 import typing as t
 from abc import ABC
 
-from neteng.test_infra.dne.taac.constants import TestDevice, TestTopology
+from taac.constants import (
+    FAILED_HC_STATUSES,
+    TestDevice,
+    TestTopology,
+)
 from taac.health_checks.common_utils import (
     async_get_everpaste_fburl_if_needed,
 )
@@ -127,7 +131,10 @@ class AbstractSnapshotHealthCheck(t.Generic[HealthCheckIn, Object], ABC):
                 obj, input, check_params, pre_snapshot, post_snapshot
             )
             check_result = check_result(
-                message=await self._safe_shorten(check_result.message),
+                message=await self._safe_shorten(
+                    check_result.message,
+                    shorten_fburl=check_result.status in FAILED_HC_STATUSES,
+                ),
                 name=self.__class__.CHECK_NAME,
             )
             return check_result
@@ -137,7 +144,9 @@ class AbstractSnapshotHealthCheck(t.Generic[HealthCheckIn, Object], ABC):
             )
             raise e
 
-    async def _safe_shorten(self, msg: t.Optional[str]) -> t.Optional[str]:
+    async def _safe_shorten(
+        self, msg: t.Optional[str], shorten_fburl: bool = False
+    ) -> t.Optional[str]:
         """Shorten ``msg`` via everpaste/fburl, falling back to the raw message.
 
         If everpaste/fburl shortening fails (network error, service
@@ -147,11 +156,18 @@ class AbstractSnapshotHealthCheck(t.Generic[HealthCheckIn, Object], ABC):
         shortening failure from propagating out of ``_compare_snapshots`` where
         the ``@async_retryable(retries=3)`` decorator would amplify a single
         ``fburl`` throttle into multiple hits against the already-throttled tier.
+
+        ``shorten_fburl`` is forwarded to async_get_everpaste_fburl_if_needed:
+        ``False`` (default, used for PASS/SKIP) only uploads to Everpaste (a
+        clickable link) without touching the throttled ``fburl`` tier; ``True``
+        (used for FAIL/ERROR) additionally fburl-shortens for triage.
         """
         if not msg:
             return msg
         try:
-            return await async_get_everpaste_fburl_if_needed(msg)
+            return await async_get_everpaste_fburl_if_needed(
+                msg, shorten_fburl=shorten_fburl
+            )
         except Exception as e:
             self.logger.warning(
                 f"[{self.__class__.__name__}] everpaste shortening failed; "

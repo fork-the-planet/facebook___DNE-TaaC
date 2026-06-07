@@ -6,7 +6,11 @@ import traceback
 import typing as t
 from abc import ABC, abstractmethod
 
-from neteng.test_infra.dne.taac.constants import TestDevice, TestTopology
+from taac.constants import (
+    FAILED_HC_STATUSES,
+    TestDevice,
+    TestTopology,
+)
 from taac.health_checks.common_utils import (
     async_get_everpaste_fburl_if_needed,
 )
@@ -146,7 +150,10 @@ class AbstractPointInTimeHealthCheck(t.Generic[HealthCheckIn, Object], ABC):
                 check_result = check_result(message=annotated_msg)
 
             check_result = check_result(
-                message=await self._safe_shorten(check_result.message)
+                message=await self._safe_shorten(
+                    check_result.message,
+                    shorten_fburl=check_result.status in FAILED_HC_STATUSES,
+                )
             )
             log_health_check_info(
                 self.__class__.__name__,
@@ -162,10 +169,12 @@ class AbstractPointInTimeHealthCheck(t.Generic[HealthCheckIn, Object], ABC):
             return hc_types.HealthCheckResult(
                 name=self.__class__.CHECK_NAME,
                 status=hc_types.HealthCheckStatus.ERROR,
-                message=await self._safe_shorten(err_msg),
+                message=await self._safe_shorten(err_msg, shorten_fburl=True),
             )
 
-    async def _safe_shorten(self, msg: t.Optional[str]) -> t.Optional[str]:
+    async def _safe_shorten(
+        self, msg: t.Optional[str], shorten_fburl: bool = False
+    ) -> t.Optional[str]:
         """Wrap async_get_everpaste_fburl_if_needed with a fallback.
 
         If everpaste / fburl shortening fails (network error, service
@@ -173,11 +182,18 @@ class AbstractPointInTimeHealthCheck(t.Generic[HealthCheckIn, Object], ABC):
         A cosmetic URL-shortening failure must never convert a successful
         health check into an ERROR, and must never cascade into additional
         network calls in the error path.
+
+        ``shorten_fburl`` is forwarded to async_get_everpaste_fburl_if_needed:
+        ``False`` (default, used for PASS/SKIP) only uploads to Everpaste (a
+        clickable link) without touching the throttled ``fburl`` tier; ``True``
+        (used for FAIL/ERROR) additionally fburl-shortens for triage.
         """
         if not msg:
             return msg
         try:
-            return await async_get_everpaste_fburl_if_needed(msg)
+            return await async_get_everpaste_fburl_if_needed(
+                msg, shorten_fburl=shorten_fburl
+            )
         except Exception as e:
             self.logger.warning(
                 f"[{self.__class__.__name__}] everpaste shortening failed; "
