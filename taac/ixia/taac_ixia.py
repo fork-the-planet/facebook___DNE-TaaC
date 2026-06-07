@@ -21,7 +21,31 @@ from uhd_restpy.assistants.statistics.statviewassistant import (
 
 StatViewAssistant = t.Union[IxnStatViewAssistant, UhdStatViewAssistant]
 
-DEFAULT_SAMPLE_RATE = 2  # seconds
+# Background periodic stat sampler interval (Scuba logging support).
+# Each sample takes a `DefaultSnapshotSettings` snapshot on the IXIA chassis,
+# which is a global per-chassis resource. On shared chassis (e.g. ixia19+ixia20)
+# a too-aggressive interval contends with both our own foreground HCs and other
+# tenants' snapshot calls, producing the chassis-side
+# `Snapshot DefaultSnapshotSettings already in progress` error and stalling
+# both threads. Empirically a 2s interval was observed to hang IcePack
+# cpu_queue runs at the very first postcheck's IxiaPacketLossHealthCheck on
+# a busy chassis.
+#
+# Default remains 2s for back-compat with existing TestConfigs that rely on
+# per-stage Scuba telemetry freshness. Override via env
+# `TAAC_IXIA_SAMPLE_INTERVAL_S` to raise the cadence on a per-run basis;
+# set to `0` to disable the periodic sampler entirely (foreground HC stat
+# reads still work via the direct-snapshot fallback in `get_latest_stats`).
+_DEFAULT_SAMPLE_INTERVAL_FALLBACK_S = 2
+try:
+    DEFAULT_SAMPLE_RATE = int(
+        os.environ.get(
+            "TAAC_IXIA_SAMPLE_INTERVAL_S",
+            str(_DEFAULT_SAMPLE_INTERVAL_FALLBACK_S),
+        )
+    )
+except (TypeError, ValueError):
+    DEFAULT_SAMPLE_RATE = _DEFAULT_SAMPLE_INTERVAL_FALLBACK_S
 
 VIEW_TO_IDENTIFIER: t.Dict[str, str] = {
     "Traffic Item Statistics": "Traffic Item",
@@ -348,6 +372,11 @@ class TaacIxia(Ixia, Thread):
         timeout_time = time.time() + max_timeout_sec
         packet_loss_stats = self.captured_stats[self.test_case_uuid]
         try:
+            # Short-circuit when the background sampler is disabled
+            # (sample_time=0 → self.capturing never gets set). The cached
+            # stats will never refresh, so don't waste max_timeout_sec waiting.
+            if not self.capturing:
+                raise Exception("Periodic sampler disabled; using direct snapshot")
             while not (
                 packet_loss_stats and next(reversed(packet_loss_stats)) > since_time
             ):
@@ -392,6 +421,19 @@ class TaacIxia(Ixia, Thread):
         return self.captured_stats_traffic[self.test_case_uuid]["latest"]
 
     def run(self):
+        # sample_time=0 disables the background periodic sampler entirely.
+        # Foreground HC stat reads (get_latest_stats) still work via the
+        # fallback direct-snapshot path; only the continuous Scuba-logging
+        # loop is skipped. Use for TestConfigs that don't need per-stage
+        # Scuba telemetry and run on heavily-shared IXIA chassis where the
+        # default polling cadence triggers DefaultSnapshotSettings lockdown.
+        if self.sample_time <= 0:
+            self.logger.info(
+                "TaacIxia periodic stat sampler DISABLED "
+                "(sample_time=0; override via TAAC_IXIA_SAMPLE_INTERVAL_S env)"
+            )
+            self.capturing = False
+            return
         self.capturing = True
         self.start_capturing(self.sample_time)
 
