@@ -55,7 +55,7 @@ from taac.testconfigs.routing.ebb.test_config_update_packing import (
     test_config_bgp_update_packing_validation,
 )
 from taac.test_as_a_config import types as taac_types
-from taac.test_as_a_config.types import DirectIxiaConnection, IxiaConfigCache
+from taac.test_as_a_config.types import DirectIxiaConnection
 
 
 # =============================================================================
@@ -161,26 +161,6 @@ def create_bag012_ash6_conveyor_test_config(
             ),
         ],
         log_collection_timeout=600,
-        # Canary: Tier 1 IXIA topology cache. Mirrors the bag011 canary
-        # (D107609585). First run pays the cold create_basic_setup cost and
-        # warms the chassis-local ixncfg; subsequent runs LoadConfig in ~10-20s
-        # instead of 226s+. See IxiaConfigCache Thrift docstring + D107586472.
-        # Explicit `chassis_local_dir` overrides the Thrift default `/tmp/...`
-        # which is wiped between IXIA sessions (bag012 e2e 2026-06-05 proved
-        # the cache file never survives the next session). Ixia's documented
-        # persistent file-storage location (`ixnetwork_restpy/files.py` Files
-        # class docstring) survives session teardown; TAAC pcaps already use
-        # it (`ixia.py:7417`). Thrift default can't be changed in place due
-        # to back-compat lint, so each opt-in TestConfig sets it explicitly.
-        ixia_config_cache=IxiaConfigCache(
-            enabled=True,
-            chassis_local_dir="/root/.local/share/Ixia/sdmStreamManager/common/taac_ixia_configs",
-            # Tier 2 Manifold bucket — durable cross-testbed cache. Provisioned
-            # via AMP D107702717 (read) + D107702995 (write) with ACL for
-            # oncall_dne_pit, oncall_routing_protocol, and sandcastle tag
-            # `dne_regression_netcastle`.
-            manifold_bucket="taac_ixia_topology_cache",
-        ),
     )
 
 

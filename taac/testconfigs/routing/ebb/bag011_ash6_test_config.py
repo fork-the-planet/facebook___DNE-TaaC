@@ -114,7 +114,6 @@ from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import (
     DirectIxiaConnection,
     Endpoint,
-    IxiaConfigCache,
     Playbook,
     TestConfig,
 )
@@ -274,27 +273,6 @@ def _build_test_config(
         startup_checks=[],
         setup_tasks=setup_tasks,
         teardown_tasks=teardown_tasks,
-        # Canary opt-in for the Tier 1 (chassis-local) IXIA topology cache.
-        # First run cold-warms <chassis_local_dir>/<key>.ixncfg on the IxNetwork
-        # API server, subsequent runs hit Tier 1 and skip the ~226s+ of per-API
-        # setup. Best-effort: any cache failure falls through to the current
-        # cold path. See IxiaConfigCache Thrift docstring + D107586472.
-        # Explicit `chassis_local_dir` overrides the Thrift default `/tmp/...`
-        # which is wiped between IXIA sessions (bag012 e2e 2026-06-05 proved
-        # the cache file never survives the next session). Ixia's documented
-        # persistent file-storage location (`ixnetwork_restpy/files.py` Files
-        # class docstring) survives session teardown; TAAC pcaps already use
-        # it (`ixia.py:7417`). Thrift default can't be changed in place due
-        # to back-compat lint, so each opt-in TestConfig sets it explicitly.
-        ixia_config_cache=IxiaConfigCache(
-            enabled=True,
-            chassis_local_dir="/root/.local/share/Ixia/sdmStreamManager/common/taac_ixia_configs",
-            # Tier 2 Manifold bucket — durable cross-testbed cache. Provisioned
-            # via AMP D107702717 (read) + D107702995 (write) with ACL for
-            # oncall_dne_pit, oncall_routing_protocol, and sandcastle tag
-            # `dne_regression_netcastle`.
-            manifold_bucket="taac_ixia_topology_cache",
-        ),
         # Deprecated - define at playbook level
         # prechecks=[],
         # postchecks=[],
