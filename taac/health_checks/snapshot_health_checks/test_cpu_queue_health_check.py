@@ -135,7 +135,7 @@ class TestCpuQueueHealthCheckCompareSnapshots(unittest.IsolatedAsyncioTestCase):
         # Stub the everpaste calls so failure paths don't try to reach interngraph
         # under `network_access = none()`. Patched at the cpu_queue_health_check
         # module (where the functions are looked up), per python_tests rules.
-        for fn in ("async_everpaste_str", "async_get_fburl"):
+        for fn in ("async_everpaste_str",):
             p = patch(f"{_HC_MODULE}.{fn}", new=AsyncMock(return_value="stub_url"))
             p.start()
             self.addCleanup(p.stop)
