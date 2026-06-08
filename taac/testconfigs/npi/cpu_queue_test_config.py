@@ -13,6 +13,7 @@ import json
 from ixia.ixia import types as ixia_types
 from taac.packet_headers import (
     ARP_REQUEST_TRAFFIC_PACKET_HEADERS,
+    ARP_RESPONSE_BCAST_TRAFFIC_PACKET_HEADERS,
     ARP_RESPONSE_TRAFFIC_PACKET_HEADERS,
     BGP_CP_TRAFFIC_PACKET_HEADERS,
     BGP_CP_V4_DSCP0_TRAFFIC_PACKET_HEADERS,
@@ -1006,6 +1007,29 @@ def create_npi_cpu_queue_test_config(
                 traffic_type=ixia_types.TrafficType.RAW,
                 bidirectional=False,
                 packet_headers=ARP_RESPONSE_TRAFFIC_PACKET_HEADERS,
+            ),
+            # CPU_019: ARP-response with broadcast DMAC. Same payload as
+            # TEST_RAW_ARP_RESPONSE_TRAFFIC (CPU_018) but with the Ethernet
+            # destination MAC set to ff:ff:ff:ff:ff:ff. Cat 4 spec.
+            taac_types.BasicTrafficItemConfig(
+                src_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_uplink_interface}",
+                        device_group_index=0,
+                    ),
+                ],
+                dest_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_downlink_interface}",
+                        device_group_index=0,
+                    ),
+                ],
+                name="TEST_RAW_ARP_RESPONSE_BCAST_TRAFFIC",
+                line_rate_type=ixia_types.RateType.FRAMES_PER_SECOND,
+                line_rate=2000,
+                traffic_type=ixia_types.TrafficType.RAW,
+                bidirectional=False,
+                packet_headers=ARP_RESPONSE_BCAST_TRAFFIC_PACKET_HEADERS,
             ),
             taac_types.BasicTrafficItemConfig(
                 src_endpoints=[

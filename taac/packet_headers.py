@@ -5165,3 +5165,41 @@ NDP_NS_GLOBAL_DSCP48_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeader] = [
         ],
     ),
 ]
+
+# ARP Response with Broadcast destination (Cat 4 CPU_019).
+# Mirrors ARP_RESPONSE_TRAFFIC_PACKET_HEADERS but uses ff:ff:ff:ff:ff:ff as
+# the destination MAC instead of the switch MAC. CPU_019 spec is the same
+# ARP-response payload as CPU_018, only the L2 framing differs.
+ARP_RESPONSE_BCAST_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeader] = [
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Ethernet-Type"),
+                attrs_json=json.dumps({"Auto": False, "SingleValue": "0806"}),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "singleValue",
+                        "SingleValue": "ff:ff:ff:ff:ff:ff",  # Broadcast MAC
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StartValue": DEFAULT_SRC_MAC_ADDRESS,  # IXIA MAC
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+            ),
+        ],
+    ),
+]
