@@ -22,6 +22,9 @@ from taac.packet_headers import (
     BGP_CP_V6_LINK_LOCAL_DSCP48_TRAFFIC_PACKET_HEADERS,
     DHCP_V4_DISCOVER_TO_SERVER_TRAFFIC_PACKET_HEADERS,
     DHCP_V4_DISCOVER_TRAFFIC_PACKET_HEADERS,
+    DHCP_V6_GLOBAL_DSCP0_TRAFFIC_PACKET_HEADERS,
+    DHCP_V6_GLOBAL_DSCP48_TRAFFIC_PACKET_HEADERS,
+    DHCP_V6_LL_DSCP48_TRAFFIC_PACKET_HEADERS,
     DHCP_V6_TRAFFIC_PACKET_HEADERS,
     DSCP_48_TO_SWITCH_GLOBAL_IPV6_TRAFFIC_PACKET_HEADERS,
     DSCP_48_TO_SWITCH_LINK_LOCAL_IPV6_TRAFFIC_PACKET_HEADERS,
@@ -860,6 +863,7 @@ def create_npi_cpu_queue_test_config(
                     type=ixia_types.FrameSizeType.CUSTOM_IMIX
                 ),
             ),
+            # CPU_007: DHCPv6 global + DSCP=48 → MID queue
             taac_types.BasicTrafficItemConfig(
                 src_endpoints=[
                     taac_types.TrafficEndpoint(
@@ -873,12 +877,54 @@ def create_npi_cpu_queue_test_config(
                         device_group_index=0,
                     ),
                 ],
-                name="TEST_RAW_DHCP_V6_TRAFFIC",
+                name="TEST_RAW_DHCP_V6_GLOBAL_DSCP48_TRAFFIC",
                 line_rate_type=ixia_types.RateType.FRAMES_PER_SECOND,
                 line_rate=2000,
                 traffic_type=ixia_types.TrafficType.RAW,
                 bidirectional=False,
-                packet_headers=DHCP_V6_TRAFFIC_PACKET_HEADERS,
+                packet_headers=DHCP_V6_GLOBAL_DSCP48_TRAFFIC_PACKET_HEADERS,
+            ),
+            # CPU_008: DHCPv6 global + DSCP=0 → MID queue
+            taac_types.BasicTrafficItemConfig(
+                src_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_uplink_interface}",
+                        device_group_index=0,
+                    ),
+                ],
+                dest_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_downlink_interface}",
+                        device_group_index=0,
+                    ),
+                ],
+                name="TEST_RAW_DHCP_V6_GLOBAL_DSCP0_TRAFFIC",
+                line_rate_type=ixia_types.RateType.FRAMES_PER_SECOND,
+                line_rate=2000,
+                traffic_type=ixia_types.TrafficType.RAW,
+                bidirectional=False,
+                packet_headers=DHCP_V6_GLOBAL_DSCP0_TRAFFIC_PACKET_HEADERS,
+            ),
+            # CPU_009: DHCPv6 link-local + DSCP=48 → MID queue
+            taac_types.BasicTrafficItemConfig(
+                src_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_uplink_interface}",
+                        device_group_index=1,
+                    ),
+                ],
+                dest_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_downlink_interface}",
+                        device_group_index=1,
+                    ),
+                ],
+                name="TEST_RAW_DHCP_V6_LL_DSCP48_TRAFFIC",
+                line_rate_type=ixia_types.RateType.FRAMES_PER_SECOND,
+                line_rate=2000,
+                traffic_type=ixia_types.TrafficType.RAW,
+                bidirectional=False,
+                packet_headers=DHCP_V6_LL_DSCP48_TRAFFIC_PACKET_HEADERS,
             ),
             taac_types.BasicTrafficItemConfig(
                 src_endpoints=[

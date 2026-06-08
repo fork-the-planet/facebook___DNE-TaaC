@@ -4699,3 +4699,351 @@ BGP_CP_V6_LINK_LOCAL_DSCP0_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeade
         ],
     ),
 ]
+############################################################
+#  CPU_007: DHCPv6 global + DSCP=48 -> MID queue          #
+############################################################
+# Strict variant matching Cat 4 spec for CPU_007:
+#   - SIP: IXIA global IPv6 (SRC_IPV6_ADDRESS reference)
+#   - DIP: switch global IPv6 (SRC_GATEWAY_IPV6_ADDRESS reference)
+#   - DSCP=48 (Traffic Class = NDP_DSCP_48_TRAFFIC_CLASS)
+#   - UDP src=DHCPV6_RELAY_PORT (546), dst=DHCPV6_SERVER_PORT (547)
+DHCP_V6_GLOBAL_DSCP48_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeader] = [
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_MAC_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StartValue": DEFAULT_SRC_MAC_ADDRESS,
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ipv6$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "::1",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.SRC_IPV6_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "valueList",
+                    }
+                ),
+                references={
+                    "ValueList": taac_types.Reference(
+                        type=taac_types.ReferenceType.SRC_GATEWAY_IPV6_ADDRESS,
+                        data_type=taac_types.DataType.LIST,
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Traffic Class"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": NDP_DSCP_48_TRAFFIC_CLASS,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^udp$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="ipv6", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="UDP-Source-Port"),
+                attrs_json=json.dumps(
+                    {
+                        "Auto": False,
+                        "ValueType": "valueList",
+                        "ValueList": [DHCPV6_RELAY_PORT],
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="UDP-Dest-Port"),
+                attrs_json=json.dumps(
+                    {
+                        "Auto": False,
+                        "SingleValue": DHCPV6_SERVER_PORT,
+                    }
+                ),
+            ),
+        ],
+    ),
+]
+
+
+############################################################
+#  CPU_008: DHCPv6 global + DSCP=0 -> MID queue           #
+############################################################
+# Strict variant matching Cat 4 spec for CPU_008:
+#   - SIP: IXIA global IPv6 (SRC_IPV6_ADDRESS reference)
+#   - DIP: switch global IPv6 (SRC_GATEWAY_IPV6_ADDRESS reference)
+#   - DSCP=0 (Traffic Class field omitted -> default 0)
+#   - UDP src=DHCPV6_RELAY_PORT (546), dst=DHCPV6_SERVER_PORT (547)
+# Mirrors CPU_007 minus the Traffic Class field.
+DHCP_V6_GLOBAL_DSCP0_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeader] = [
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_MAC_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StartValue": DEFAULT_SRC_MAC_ADDRESS,
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ipv6$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "::1",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.SRC_IPV6_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "valueList",
+                    }
+                ),
+                references={
+                    "ValueList": taac_types.Reference(
+                        type=taac_types.ReferenceType.SRC_GATEWAY_IPV6_ADDRESS,
+                        data_type=taac_types.DataType.LIST,
+                    ),
+                },
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^udp$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="ipv6", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="UDP-Source-Port"),
+                attrs_json=json.dumps(
+                    {
+                        "Auto": False,
+                        "ValueType": "valueList",
+                        "ValueList": [DHCPV6_RELAY_PORT],
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="UDP-Dest-Port"),
+                attrs_json=json.dumps(
+                    {
+                        "Auto": False,
+                        "SingleValue": DHCPV6_SERVER_PORT,
+                    }
+                ),
+            ),
+        ],
+    ),
+]
+
+
+############################################################
+#  CPU_009: DHCPv6 link-local + DSCP=48 -> MID queue      #
+############################################################
+# Strict variant matching Cat 4 spec for CPU_009:
+#   - SIP: DHCPV6_MULTICAST_ADDR (fe80:: link-local) - real DHCPv6 client SIP
+#   - DIP: DHCPV6_SERVER_MULTICAST_ADDR (ff02::1:2) - real DHCPv6 LL multicast
+#   - DSCP=48 (Traffic Class = NDP_DSCP_48_TRAFFIC_CLASS)
+#   - UDP src=DHCPV6_RELAY_PORT (546), dst=DHCPV6_SERVER_PORT (547)
+# Matches the existing `DHCP_V6_TRAFFIC_PACKET_HEADERS` LL multicast pattern
+# (real DHCPv6 client->server discovery flow) plus the DSCP=48 marking that
+# CPU_009 specifies.
+DHCP_V6_LL_DSCP48_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeader] = [
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_MAC_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StartValue": DEFAULT_SRC_MAC_ADDRESS,
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ipv6$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StartValue": DHCPV6_MULTICAST_ADDR,
+                        "StepValue": "::1",
+                        "CountValue": 1,
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "valueList",
+                        "ValueList": [DHCPV6_SERVER_MULTICAST_ADDR],
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Traffic Class"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": NDP_DSCP_48_TRAFFIC_CLASS,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^udp$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="ipv6", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="UDP-Source-Port"),
+                attrs_json=json.dumps(
+                    {
+                        "Auto": False,
+                        "ValueType": "valueList",
+                        "ValueList": [DHCPV6_RELAY_PORT],
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="UDP-Dest-Port"),
+                attrs_json=json.dumps(
+                    {
+                        "Auto": False,
+                        "SingleValue": DHCPV6_SERVER_PORT,
+                    }
+                ),
+            ),
+        ],
+    ),
+]
