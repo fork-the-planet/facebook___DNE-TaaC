@@ -51,6 +51,7 @@ from taac.packet_headers import (
     MTU_EXCEED_IPV6_TRAFFIC_PACKET_HEADERS,
     NDP_NA_MULTICAST_TRAFFIC_PACKET_HEADERS,
     NDP_NA_UNICAST_TRAFFIC_PACKET_HEADERS,
+    NDP_NS_GLOBAL_DSCP48_TRAFFIC_PACKET_HEADERS,
     NDP_NS_MULTICAST_TRAFFIC_PACKET_HEADERS,
     NDP_NS_UNICAST_TRAFFIC_PACKET_HEADERS,
     NDP_RA_MULTICAST_TRAFFIC_PACKET_HEADERS,
@@ -1399,6 +1400,27 @@ def create_npi_cpu_queue_test_config(
                 traffic_type=ixia_types.TrafficType.RAW,
                 bidirectional=False,
                 packet_headers=NDP_NS_UNICAST_TRAFFIC_PACKET_HEADERS,
+            ),
+            # CPU_020: NDP NS global + DSCP=48 → HIGH queue
+            taac_types.BasicTrafficItemConfig(
+                src_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_uplink_interface}",
+                        device_group_index=0,
+                    ),
+                ],
+                dest_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_downlink_interface}",
+                        device_group_index=0,
+                    ),
+                ],
+                name="TEST_RAW_NDP_NS_GLOBAL_DSCP48_TRAFFIC",
+                line_rate_type=ixia_types.RateType.FRAMES_PER_SECOND,
+                line_rate=2000,
+                traffic_type=ixia_types.TrafficType.RAW,
+                bidirectional=False,
+                packet_headers=NDP_NS_GLOBAL_DSCP48_TRAFFIC_PACKET_HEADERS,
             ),
             taac_types.BasicTrafficItemConfig(
                 src_endpoints=[
