@@ -3,6 +3,8 @@
 # under test; pyre cannot resolve attribute types through these mocks and
 # strict mode would require per-line ignores on nearly every assertion.
 # (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
+
+# pyre-unsafe
 """Unit tests for `_build_topologies_and_device_groups_concurrently`."""
 
 import threading
