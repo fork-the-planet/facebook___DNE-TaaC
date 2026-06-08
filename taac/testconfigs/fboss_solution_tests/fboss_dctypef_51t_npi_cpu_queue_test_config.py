@@ -17,6 +17,9 @@ from taac.packet_headers import (
     BGP_CP_TRAFFIC_PACKET_HEADERS,
     BGP_CP_V4_DSCP0_TRAFFIC_PACKET_HEADERS,
     BGP_CP_V4_TRAFFIC_PACKET_HEADERS,
+    BGP_CP_V6_GLOBAL_DSCP48_TRAFFIC_PACKET_HEADERS,
+    BGP_CP_V6_LINK_LOCAL_DSCP0_TRAFFIC_PACKET_HEADERS,
+    BGP_CP_V6_LINK_LOCAL_DSCP48_TRAFFIC_PACKET_HEADERS,
     DHCP_V4_DISCOVER_TO_SERVER_TRAFFIC_PACKET_HEADERS,
     DHCP_V4_DISCOVER_TRAFFIC_PACKET_HEADERS,
     DHCP_V6_TRAFFIC_PACKET_HEADERS,
@@ -689,6 +692,75 @@ def create_dctypef_npi_cpu_queue_test_config(
                 traffic_type=ixia_types.TrafficType.RAW,
                 bidirectional=False,
                 packet_headers=BGP_CP_V4_DSCP0_TRAFFIC_PACKET_HEADERS,
+            ),
+            # CPU_002: BGPv6 global + DSCP=48 → HIGH queue
+            taac_types.BasicTrafficItemConfig(
+                src_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_uplink_interface}",
+                        network_group_index=0,
+                        device_group_index=0,
+                    )
+                ],
+                dest_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_downlink_interface}",
+                        network_group_index=0,
+                        device_group_index=0,
+                    )
+                ],
+                name="TEST_RAW_BGP_CP_V6_GLOBAL_DSCP48_TRAFFIC",
+                line_rate_type=ixia_types.RateType.FRAMES_PER_SECOND,
+                line_rate=2000,
+                traffic_type=ixia_types.TrafficType.RAW,
+                bidirectional=False,
+                packet_headers=BGP_CP_V6_GLOBAL_DSCP48_TRAFFIC_PACKET_HEADERS,
+            ),
+            # CPU_003: BGPv6 link-local + DSCP=48 → HIGH queue
+            taac_types.BasicTrafficItemConfig(
+                src_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_uplink_interface}",
+                        network_group_index=0,
+                        device_group_index=0,
+                    )
+                ],
+                dest_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_downlink_interface}",
+                        network_group_index=0,
+                        device_group_index=0,
+                    )
+                ],
+                name="TEST_RAW_BGP_CP_V6_LINK_LOCAL_DSCP48_TRAFFIC",
+                line_rate_type=ixia_types.RateType.FRAMES_PER_SECOND,
+                line_rate=2000,
+                traffic_type=ixia_types.TrafficType.RAW,
+                bidirectional=False,
+                packet_headers=BGP_CP_V6_LINK_LOCAL_DSCP48_TRAFFIC_PACKET_HEADERS,
+            ),
+            # CPU_004: BGPv6 link-local + DSCP=0 → HIGH queue
+            taac_types.BasicTrafficItemConfig(
+                src_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_uplink_interface}",
+                        network_group_index=0,
+                        device_group_index=0,
+                    )
+                ],
+                dest_endpoints=[
+                    taac_types.TrafficEndpoint(
+                        name=f"{device_name}:{ixia_downlink_interface}",
+                        network_group_index=0,
+                        device_group_index=0,
+                    )
+                ],
+                name="TEST_RAW_BGP_CP_V6_LINK_LOCAL_DSCP0_TRAFFIC",
+                line_rate_type=ixia_types.RateType.FRAMES_PER_SECOND,
+                line_rate=2000,
+                traffic_type=ixia_types.TrafficType.RAW,
+                bidirectional=False,
+                packet_headers=BGP_CP_V6_LINK_LOCAL_DSCP0_TRAFFIC_PACKET_HEADERS,
             ),
             taac_types.BasicTrafficItemConfig(
                 src_endpoints=[

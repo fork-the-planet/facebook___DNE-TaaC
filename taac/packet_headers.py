@@ -4340,3 +4340,362 @@ DSCP_48_TO_SWITCH_LINK_LOCAL_IPV6_TRAFFIC_PACKET_HEADERS: t.List[
         ],
     ),
 ]
+
+
+############################################################
+#  CPU_002: BGPv6 global + DSCP=48 → HIGH queue           #
+############################################################
+# Strict variant matching Cat 4 spec for CPU_002:
+#   - SIP: IXIA-mimic peer's global IPv6 (from SRC_IPV6_ADDRESS reference)
+#   - DIP: switch global IPv6 (from SRC_GATEWAY_IPV6_ADDRESS reference)
+#   - DSCP=48 (Traffic Class = NDP_DSCP_48_TRAFFIC_CLASS)
+#   - TCP src/dst = 179 (BGP)
+# Differs from BGP_CP_TRAFFIC_PACKET_HEADERS by ADDING the Traffic Class
+# field — the prior header omitted it (defaulted DSCP=0), so didn't
+# strictly match any of CPU_002/003/004.
+BGP_CP_V6_GLOBAL_DSCP48_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeader] = [
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_MAC_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StartValue": DEFAULT_SRC_MAC_ADDRESS,
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ipv6$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "::1",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.SRC_IPV6_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "valueList",
+                    }
+                ),
+                references={
+                    "ValueList": taac_types.Reference(
+                        type=taac_types.ReferenceType.SRC_GATEWAY_IPV6_ADDRESS,
+                        data_type=taac_types.DataType.LIST,
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Traffic Class"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": NDP_DSCP_48_TRAFFIC_CLASS,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="tcp", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="ipv6", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="TCP-Source-Port"),
+                attrs_json=json.dumps(
+                    {
+                        "Auto": False,
+                        "ValueType": "valueList",
+                        "ValueList": [BGP_PORT],
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="TCP-Dest-Port"),
+                attrs_json=json.dumps(
+                    {
+                        "Auto": False,
+                        "SingleValue": BGP_PORT,
+                    }
+                ),
+            ),
+        ],
+    ),
+]
+
+
+############################################################
+#  CPU_003: BGPv6 link-local + DSCP=48 → HIGH queue       #
+############################################################
+# Strict variant matching Cat 4 spec for CPU_003:
+#   - SIP: IXIA link-local IPv6 (NDP_IXIA_LINK_LOCAL_IPV6 constant)
+#   - DIP: switch link-local IPv6 (DST_LINK_LOCAL_IPV6_ADDRESS reference)
+#   - DSCP=48 (Traffic Class = NDP_DSCP_48_TRAFFIC_CLASS)
+#   - TCP src/dst = 179 (BGP)
+BGP_CP_V6_LINK_LOCAL_DSCP48_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeader] = [
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_MAC_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "singleValue",
+                        "SingleValue": DEFAULT_SRC_MAC_ADDRESS,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ipv6$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "singleValue",
+                        "SingleValue": NDP_IXIA_LINK_LOCAL_IPV6,
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "valueList",
+                    }
+                ),
+                references={
+                    "ValueList": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_LINK_LOCAL_IPV6_ADDRESS,
+                        data_type=taac_types.DataType.LIST,
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Traffic Class"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": NDP_DSCP_48_TRAFFIC_CLASS,
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Hop Limit"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": "255",
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="tcp", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="ipv6", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="TCP-Source-Port"),
+                attrs_json=json.dumps(
+                    {
+                        "Auto": False,
+                        "ValueType": "valueList",
+                        "ValueList": [BGP_PORT],
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="TCP-Dest-Port"),
+                attrs_json=json.dumps(
+                    {
+                        "Auto": False,
+                        "SingleValue": BGP_PORT,
+                    }
+                ),
+            ),
+        ],
+    ),
+]
+
+
+############################################################
+#  CPU_004: BGPv6 link-local + DSCP=0 → HIGH queue        #
+############################################################
+# Strict variant matching Cat 4 spec for CPU_004:
+#   - SIP: IXIA link-local IPv6 (NDP_IXIA_LINK_LOCAL_IPV6 constant)
+#   - DIP: switch link-local IPv6 (DST_LINK_LOCAL_IPV6_ADDRESS reference)
+#   - DSCP=0 (Traffic Class field omitted → default 0)
+#   - TCP src/dst = 179 (BGP)
+# Mirrors CPU_003 minus the Traffic Class field.
+BGP_CP_V6_LINK_LOCAL_DSCP0_TRAFFIC_PACKET_HEADERS: t.List[taac_types.PacketHeader] = [
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "increment",
+                        "StepValue": "00:00:00:00:00:00",
+                        "CountValue": 1,
+                    }
+                ),
+                references={
+                    "StartValue": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_MAC_ADDRESS
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source MAC Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "singleValue",
+                        "SingleValue": DEFAULT_SRC_MAC_ADDRESS,
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="^ipv6$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="^ethernet$", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="Source Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "singleValue",
+                        "SingleValue": NDP_IXIA_LINK_LOCAL_IPV6,
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Destination Address"),
+                attrs_json=json.dumps(
+                    {
+                        "ValueType": "valueList",
+                    }
+                ),
+                references={
+                    "ValueList": taac_types.Reference(
+                        type=taac_types.ReferenceType.DST_LINK_LOCAL_IPV6_ADDRESS,
+                        data_type=taac_types.DataType.LIST,
+                    ),
+                },
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="Hop Limit"),
+                attrs_json=json.dumps(
+                    {
+                        "SingleValue": "255",
+                    }
+                ),
+            ),
+        ],
+    ),
+    taac_types.PacketHeader(
+        query=ixia_types.Query(
+            regex="tcp", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        append_to_query=ixia_types.Query(
+            regex="ipv6", query_type=ixia_types.QueryType.STACK_TYPE_ID
+        ),
+        fields=[
+            taac_types.Field(
+                query=ixia_types.Query(regex="TCP-Source-Port"),
+                attrs_json=json.dumps(
+                    {
+                        "Auto": False,
+                        "ValueType": "valueList",
+                        "ValueList": [BGP_PORT],
+                    }
+                ),
+            ),
+            taac_types.Field(
+                query=ixia_types.Query(regex="TCP-Dest-Port"),
+                attrs_json=json.dumps(
+                    {
+                        "Auto": False,
+                        "SingleValue": BGP_PORT,
+                    }
+                ),
+            ),
+        ],
+    ),
+]
