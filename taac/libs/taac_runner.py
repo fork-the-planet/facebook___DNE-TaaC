@@ -1462,9 +1462,22 @@ class TaacRunner:
                         f"({pb_idx}/{total_playbooks} complete)...\033[0m"
                     )
         if failed_playbooks:
-            names = ", ".join(f"{name} ({dut})" for name, dut, _ in failed_playbooks)
+            # Include each failed playbook's exception message in the outer
+            # TestCaseFailure so the per-HC detail (introduced in D107926440
+            # for the inner TestCaseFailure at line 1827) propagates through
+            # to test_case_compiler.py → AssertionError → pyunit/Sandcastle.
+            # Without this, the outer wrapper would collapse to
+            # "N playbook(s) failed: <names>" and downstream consumers would
+            # see a uninformative AssertionError that requires log-diving.
+            # The `from failed_playbooks[-1][2]` chain is preserved so the
+            # full traceback remains available, but it's no longer the only
+            # carrier of the actual failure reason.
+            detail_lines = [
+                f"- {name} ({dut}): {exc}" for name, dut, exc in failed_playbooks
+            ]
             raise TestCaseFailure(
-                f"{len(failed_playbooks)} playbook(s) failed: {names}"
+                f"{len(failed_playbooks)} playbook(s) failed:\n"
+                + "\n".join(detail_lines)
             ) from failed_playbooks[-1][2]
 
     async def run_steps(
