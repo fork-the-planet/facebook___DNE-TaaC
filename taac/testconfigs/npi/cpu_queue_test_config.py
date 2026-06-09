@@ -1256,18 +1256,27 @@ def create_npi_cpu_queue_test_config(
                 # the LOW CPU queue (with the DUT emitting ICMPv6 "Packet
                 # Too Big" back).
                 #
-                # IcePack and other modern Meta DC fabric ports run jumbo
-                # MTU (9000+) to accommodate VXLAN/MPLS encap overhead, so
-                # the standard "1500+1 = MTU-exceed" assumption from
-                # textbook routers does not apply here. D107915723 set
-                # fixed_size=1700 expecting MTU=1500 and Run 4.3+4.4
-                # 2026-06-08 showed "No output packet increase detected on
-                # queue 0" because 1700 < 9000 → no MTU-exceed fires.
-                # Default RAW frame size (~64B) is below MTU and the
-                # exception never fires either.
+                # The test-case spec ("Change MTU on interface to be 1500
+                # and send data plane traffic for remote subnet with MTU
+                # > 1500, exp: q0") expects the playbook to shrink the
+                # DUT egress interface MTU to 1500 (see the matching
+                # `change_interface_mtu_patcher` step in the npi_cpu_039
+                # playbook in `playbook_definitions.py`). Once that
+                # patcher applies, **any** frame > 1500 triggers the
+                # silicon's MTU-exceed exception → CPU low queue.
+                #
+                # Use 1700 — just barely above the 1500 DUT MTU so the
+                # punt fires deterministically — and well below any
+                # plausible IXIA-side port limit so the tx never gets
+                # silently dropped at the chassis. Past attempts at
+                # fixed_size=9100 (Run 4.3+4.4 2026-06-08) failed
+                # because the DUT was still at its provisioned jumbo
+                # MTU (~9000) — without the new patcher step, 9100 was
+                # only marginally over MTU and the silicon didn't
+                # punt. 1700 + DUT MTU=1500 is the correct pairing.
                 frame_size_settings=ixia_types.FrameSize(
                     type=ixia_types.FrameSizeType.FIXED,
-                    fixed_size=9100,
+                    fixed_size=1700,
                 ),
             ),
             # CPU_046: martian SIP=switch's default gateway IPv4 address —
