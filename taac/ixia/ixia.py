@@ -567,6 +567,17 @@ class Ixia:
         self.skip_advertised_prefixes_check = skip_advertised_prefixes_check
         self.skip_ixia_protocol_verification = skip_ixia_protocol_verification
         self.ixia_protocol_verification_timeout = ixia_protocol_verification_timeout
+        # Python-side index of vport metadata, populated ONLY by
+        # `assign_ports()` (gated by `is_existing_session` — see
+        # `create_basic_setup`). On IXIA topology-cache HIT (Tier 1
+        # LoadConfig / Tier 2 Manifold via `taac_ixia.load_config_from_chassis`
+        # or `ixia_config_cache_manager.try_load_from_manifold`) the server-
+        # side vports are restored but this dict stays empty. Any TAAC step,
+        # health check, or helper that reads `vport_indices` (e.g.
+        # `register_cpu_queue_static_route_patcher`) will KeyError on cache
+        # hit — the owning TestConfig MUST opt out of the cache via
+        # `ixia_config_cache=taac_types.IxiaConfigCache(enabled=False)`
+        # until the cache layer learns to rehydrate this dict.
         self.vport_indices: t.Dict[str, VportIndex] = {}
         self.traffic_items_start_time: float = 0.0
         self.cfgr_client = ConfigeratorClient()
@@ -698,6 +709,19 @@ class Ixia:
         Args:
             port_configs: t.List of type PortConfig containing port config
                 details.
+
+        WARNING — Cache caveat:
+            This method is the ONLY producer of `self.vport_indices`. It is
+            skipped by `create_basic_setup` when `is_existing_session=True`,
+            which is the state after an IXIA topology-cache HIT
+            (`taac_ixia.load_config_from_chassis` /
+            `ixia_config_cache_manager.try_load_from_manifold`). On cache
+            hit the server-side vports are restored but `vport_indices`
+            stays empty — any downstream API that traverses through
+            `vport_indices` will KeyError. TestConfigs that use such APIs
+            (e.g. `register_cpu_queue_static_route_patcher`) MUST opt out
+            of the cache via
+            `ixia_config_cache=taac_types.IxiaConfigCache(enabled=False)`.
         """
 
         portmap_obj = self.session.PortMapAssistant()
