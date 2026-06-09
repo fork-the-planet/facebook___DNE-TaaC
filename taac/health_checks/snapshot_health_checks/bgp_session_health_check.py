@@ -3,6 +3,7 @@
 # pyre-unsafe
 
 import ipaddress
+import time
 import typing as t
 from collections import namedtuple
 
@@ -40,7 +41,12 @@ class BgpSessionHealthCheck(
     ) -> Snapshot:
         parent_prefixes_to_ignore = check_params.get("parent_prefixes_to_ignore", [])
         bgp_sessions = await self.async_get_bgp_sessions(parent_prefixes_to_ignore)
-        return Snapshot(data=bgp_sessions, timestamp=timestamp)
+        # Stamp the snapshot at the instant the device data is actually read, NOT
+        # the framework-supplied `timestamp` (captured before this query ran). The
+        # device query can take many seconds when the control plane is busy (e.g.
+        # right after an IGP/PNH oscillation playbook); anchoring to the pre-query
+        # moment skews any uptime math derived from this timestamp.
+        return Snapshot(data=bgp_sessions, timestamp=int(time.time()))
 
     async def capture_post_snapshot(
         self,
@@ -51,7 +57,12 @@ class BgpSessionHealthCheck(
     ) -> Snapshot:
         parent_prefixes_to_ignore = check_params.get("parent_prefixes_to_ignore", [])
         bgp_sessions = await self.async_get_bgp_sessions(parent_prefixes_to_ignore)
-        return Snapshot(data=bgp_sessions, timestamp=timestamp)
+        # Stamp the snapshot at the instant the device data is actually read, NOT
+        # the framework-supplied `timestamp` (captured before this query ran). The
+        # device query can take many seconds when the control plane is busy (e.g.
+        # right after an IGP/PNH oscillation playbook); anchoring to the pre-query
+        # moment skews any uptime math derived from this timestamp.
+        return Snapshot(data=bgp_sessions, timestamp=int(time.time()))
 
     async def compare_snapshots(
         self,
@@ -119,7 +130,12 @@ class BgpSessionHealthCheck(
                 )
                 issues.append(f"Flapped BGP sessions:\n    • {flapped_sessions_str}")
 
-        # Enhanced uptime consistency check (ported from BGP Peer route check)
+        # Backstop reset detection: flag any session that is YOUNGER than the
+        # inter-snapshot interval (it could not have stayed up the whole window,
+        # so it must have reset). We intentionally do NOT compare uptime against a
+        # computed "expected" magnitude — a session cannot over-stay, so that
+        # comparison only ever fires on measurement skew. The primary flap signals
+        # are num_of_flaps and uptime-decrease, checked above.
         uptime_issues = []
         if not skip_uptime_check:
             for key in post_snapshot_bgp_sessions.keys():
@@ -130,7 +146,6 @@ class BgpSessionHealthCheck(
 
                 session_uptime_issues = self._check_uptime_consistency(
                     key,
-                    pre_snapshot_bgp_session,
                     post_snapshot_bgp_session,
                     pre_snapshot.timestamp,
                     post_snapshot.timestamp,
@@ -211,48 +226,45 @@ class BgpSessionHealthCheck(
     def _check_uptime_consistency(
         self,
         session_key: BgpSessionId,
-        pre_session: TBgpSession,
         post_session: TBgpSession,
         pre_timestamp: int,
         post_timestamp: int,
     ) -> t.List[str]:
         """
-        Check uptime consistency between pre and post snapshots.
-        Ported from BGP Peer route check for enhanced uptime validation.
+        Detect a BGP session reset across the pre/post snapshot window.
+
+        The only physically meaningful uptime signal for "did the session stay
+        up?" is the session being YOUNGER than it should be: if its post-snapshot
+        uptime is less than the wall-clock elapsed between the two snapshots, it
+        could not have stayed up the whole window and therefore must have reset.
+
+        We deliberately do NOT flag uptime being HIGHER than some computed
+        "expected" value. A session cannot over-stay, so that comparison carries
+        no diagnostic meaning — it only ever fires on measurement skew, because
+        the device-reported uptime and the snapshot timestamp are sampled at
+        slightly different instants (and the gap grows when the device is slow to
+        answer the post-snapshot query). Genuine flaps/resets are already covered
+        by the num_of_flaps and uptime-decrease checks in compare_snapshots; this
+        is a one-directional backstop for the case where neither of those fires.
+
         Returns list of issues found.
         """
         issues = []
 
-        # Convert uptime from milliseconds to seconds
-        pre_uptime_seconds = pre_session.uptime // 1000 if pre_session.uptime else 0
+        # Convert uptime from milliseconds to seconds.
         post_uptime_seconds = post_session.uptime // 1000 if post_session.uptime else 0
 
-        # Calculate time elapsed between snapshots (in seconds)
+        # Wall-clock elapsed between the two snapshots (seconds).
         time_elapsed = post_timestamp - pre_timestamp
-
-        # Calculate expected post uptime
-        expected_post_uptime = pre_uptime_seconds + time_elapsed
-        actual_post_uptime = post_uptime_seconds
-
-        # Tolerance for timing differences (10 seconds)
-        UPTIME_TOLERANCE = 10
 
         session_str = self._format_session_id(session_key)
 
-        # Check for BGP session restart
-        # If actual uptime is significantly less than time elapsed, session likely restarted
-        if actual_post_uptime < time_elapsed:
+        # A session whose current uptime is less than the inter-snapshot interval
+        # must have reset during the window.
+        if post_uptime_seconds < time_elapsed:
             issues.append(
-                f"{session_str}: Session restarted (uptime: {actual_post_uptime}s, expected: >{time_elapsed}s)"
+                f"{session_str}: Session restarted (uptime: {post_uptime_seconds}s, expected: >{time_elapsed}s)"
             )
-        else:
-            # Check for significant uptime discrepancy
-            uptime_diff = abs(actual_post_uptime - expected_post_uptime)
-            if uptime_diff > UPTIME_TOLERANCE:
-                issues.append(
-                    f"{session_str}: Uptime discrepancy (actual: {actual_post_uptime}s, "
-                    f"expected: ~{expected_post_uptime}s, diff: {uptime_diff}s)"
-                )
 
         return issues
 
