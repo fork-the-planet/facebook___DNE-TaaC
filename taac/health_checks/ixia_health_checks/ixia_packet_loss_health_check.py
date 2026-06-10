@@ -72,6 +72,7 @@ class IxiaPacketLossHealthCheck(
             violations.extend(
                 self.verify_packet_loss_threshold(latest_stats, threshold)
             )
+        # pyrefly: ignore [bad-argument-type]
         violations_dict = [try_thrift_to_dict(violation) for violation in violations]
         if violations:
             # Use the Everpaste URL directly; it is already a clickable internalfb.com
