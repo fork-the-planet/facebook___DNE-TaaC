@@ -628,6 +628,7 @@ async def analyze_log_updates(
             seen.add(entry_tuple)
             unique_entries.append(entry)
     timestamps = [e["timestamp"] for e in unique_entries]
+    # pyrefly: ignore [no-matching-overload]
     total_count = sum(e["count"] for e in unique_entries)
     return {
         "lowest_timestamp": min(timestamps),
