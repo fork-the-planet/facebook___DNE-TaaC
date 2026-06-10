@@ -1,9 +1,16 @@
 # pyre-unsafe
+import asyncio
+import inspect
+import time
 import typing as t
 from datetime import datetime
 
 from taac.constants import PeriodicCheckResult
 from taac.tasks.base_task import PeriodicTask
+from taac.tasks.thrift_stress_payloads import (
+    READ_ONLY_FBOSS_APIS,
+    ThriftStressCall,
+)
 from taac.utils.arista_utils import (
     get_nexthop_group_summary,
     NexthopGroupSummary,
@@ -1197,5 +1204,174 @@ class OpticsTemperatureTask(PeriodicTask):
             # pyrefly: ignore [bad-argument-type]
             name=self.NAME,
             status=status,
+            message=message,
+        )
+
+
+class ThriftStressPeriodicTask(PeriodicTask):
+    """Sustained high-volume thrift workload against a FBOSS DUT.
+
+    Each invocation fires every `ThriftStressCall` in the payload concurrently
+    (with `requests_per_burst` copies per call) via a single
+    `asyncio.gather(...)`. The wrapping `PeriodicTaskWorker` loops `run()`
+    back-to-back with `time.sleep(interval)` between bursts, which together
+    reproduces the `while True: gather(...); sleep(5)` shape of
+    `scripts/pavanpatil/thrift_call_disruptive.py:async_thrift_stress_call`.
+
+    Payload selection happens at testconfig-build time via builders in
+    `tasks/thrift_stress_payloads.py` — read-only baselines for any FBOSS
+    device, plus per-platform variants that splice in disruptive calls like
+    qsfp-driven rapid interface flaps. Read-only-only is the default; the
+    disruptive variants are opt-in because they interfere with the
+    IxiaPacketLossCheck postcheck on test ports.
+
+    Backwards-compat: callers may pass `apis: List[str]` instead of `calls`,
+    in which case each api name is wrapped in a default `ThriftStressCall`
+    with the legacy `requests_per_api` request count (default 10000).
+
+    `run_final_check()` always returns PASS — thrift exceptions are expected
+    during the process-restart THFT variants (THFT_001-004) and the per-burst
+    success/exception counts are logged for forensic review, not used to gate
+    the test verdict.
+    """
+
+    NAME = "thrift_stress"
+    DEFAULT_REQUESTS_PER_API: int = 10000
+
+    @staticmethod
+    def _resolve_calls(params: t.Dict[str, t.Any]) -> t.List[ThriftStressCall]:
+        """Pull `calls` (preferred) or build from legacy `apis` shape.
+
+        Use `is not None` (not truthiness) so an explicitly-empty `calls=[]`
+        means "run zero calls", NOT "fall through to default baseline".
+        """
+        calls_raw = params.get("calls")
+        if calls_raw is not None:
+            return [ThriftStressCall.from_dict(d) for d in calls_raw]
+        apis: t.Optional[t.List[str]] = params.get("apis")
+        requests_per_api: int = params.get(
+            "requests_per_api", ThriftStressPeriodicTask.DEFAULT_REQUESTS_PER_API
+        )
+        if apis is None:
+            return [
+                ThriftStressCall(
+                    method=call.method,
+                    args=call.args,
+                    requests_per_burst=requests_per_api,
+                )
+                for call in READ_ONLY_FBOSS_APIS
+            ]
+        return [
+            ThriftStressCall(method=api, requests_per_burst=requests_per_api)
+            for api in apis
+        ]
+
+    async def run(self, params: t.Dict[str, t.Any]) -> None:
+        """Fire one burst of concurrent thrift calls.
+
+        Args:
+            params:
+                - hostname: Device hostname (required).
+                - calls: Preferred. List of `ThriftStressCall.to_dict()` entries
+                    describing exactly what to call, with what args, how many
+                    times concurrently per burst. Built by the catalog functions
+                    in `tasks/thrift_stress_payloads.py`.
+                - apis: Legacy. List of no-arg driver method names. Each is
+                    wrapped in a default `ThriftStressCall`.
+                - requests_per_api: Legacy. Only consulted when `apis` is set.
+                    Default 10000.
+        """
+        hostname = params["hostname"]
+        calls = self._resolve_calls(params)
+
+        try:
+            driver = await async_get_device_driver(hostname)
+        except Exception as e:
+            self.logger.error(
+                f"thrift_stress: failed to get driver for {hostname}: {e}",
+                exc_info=True,
+            )
+            return
+
+        coros: t.List[t.Coroutine] = []
+        skipped: t.List[str] = []
+        scheduled_breakdown: t.List[str] = []
+        for call in calls:
+            method = getattr(driver, call.method, None)
+            if not inspect.iscoroutinefunction(method):
+                skipped.append(call.method)
+                continue
+            for _ in range(call.requests_per_burst):
+                coros.append(method(*call.args))
+            scheduled_breakdown.append(f"{call.method}x{call.requests_per_burst}")
+
+        if skipped:
+            self.logger.warning(
+                f"thrift_stress: methods not async-callable on "
+                f"{type(driver).__name__}: {skipped}"
+            )
+
+        if not coros:
+            self.logger.warning(
+                "thrift_stress: no thrift calls scheduled (all methods missing)"
+            )
+            return
+
+        self.logger.info(
+            f"thrift_stress: firing {len(coros)} concurrent calls "
+            f"({', '.join(scheduled_breakdown)})"
+        )
+        burst_start = time.time()
+        results = await asyncio.gather(*coros, return_exceptions=True)
+        elapsed = time.time() - burst_start
+
+        success = sum(1 for r in results if not isinstance(r, BaseException))
+        failures = len(results) - success
+        self.add_data(
+            {
+                "total": len(results),
+                "success": success,
+                "failures": failures,
+                "elapsed_s": elapsed,
+            }
+        )
+        self.logger.info(
+            f"thrift_stress burst: {success}/{len(results)} ok, "
+            f"{failures} exceptions, elapsed={elapsed:.1f}s"
+        )
+
+    async def run_final_check(self) -> t.Optional[PeriodicCheckResult]:
+        """Summarize total/success/exception counts across all bursts.
+
+        Returns PASS unconditionally: thrift exceptions during the
+        process-restart THFT variants are expected (the restarting service
+        drops in-flight calls). The forensic counts go in the result message.
+        """
+        if not self._data:
+            return PeriodicCheckResult(
+                # pyrefly: ignore [bad-argument-type]
+                name=self.NAME,
+                status=hc_types.HealthCheckStatus.SKIP,
+                message="No thrift stress data collected",
+            )
+
+        batches = len(self._data)
+        total = sum(d.get("total", 0) for d in self._data.values())
+        success = sum(d.get("success", 0) for d in self._data.values())
+        failures = sum(d.get("failures", 0) for d in self._data.values())
+        elapsed_total = sum(d.get("elapsed_s", 0.0) for d in self._data.values())
+        avg_elapsed = elapsed_total / batches if batches else 0.0
+        success_pct = (100.0 * success / total) if total else 0.0
+
+        message = (
+            f"thrift_stress: {batches} bursts, {total} total calls, "
+            f"{success} ok ({success_pct:.1f}%), "
+            f"{failures} exceptions, avg burst {avg_elapsed:.1f}s"
+        )
+
+        return PeriodicCheckResult(
+            # pyrefly: ignore [bad-argument-type]
+            name=self.NAME,
+            status=hc_types.HealthCheckStatus.PASS,
             message=message,
         )

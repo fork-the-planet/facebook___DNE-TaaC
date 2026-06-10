@@ -24,6 +24,7 @@ from taac.constants import (
     Gigabyte,
     OpenRRouteAction,
 )
+from taac.tasks.thrift_stress_payloads import ThriftStressCall
 from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import Params, PeriodicTask, Task
 
@@ -3062,6 +3063,77 @@ def create_nexthop_group_poll_periodic_task(
                 )
             )
         ],
+    )
+
+
+def create_thrift_stress_periodic_task(
+    device_name: str,
+    interval: int = 5,
+    calls: t.Optional[t.List[ThriftStressCall]] = None,
+    requests_per_api: int = 10000,
+    apis: t.Optional[t.List[str]] = None,
+) -> PeriodicTask:
+    """Periodic task that drives a sustained thrift workload.
+
+    Each burst fires every entry in `calls` (or the default read-only FBOSS
+    baseline) via `asyncio.gather`. The wrapping `PeriodicTaskWorker` loops
+    back-to-back with `time.sleep(interval)` between bursts — the
+    `while True: gather(...); sleep(N)` shape from
+    `scripts/pavanpatil/thrift_call_disruptive.py`.
+
+    Use this as
+    `Playbook.periodic_tasks=[create_thrift_stress_periodic_task(dut, calls=...)]`
+    on the THFT (thrift-hardening) test configs. For the THFT_001..004 variants
+    the playbook also runs `create_service_interruption_step` every 5 min in
+    the foreground; combined, they exercise the device under thrift pressure
+    with concurrent process restarts.
+
+    Payload selection happens via builders in
+    `tasks/thrift_stress_payloads.py` — pass a `READ_ONLY_FBOSS_APIS` list or
+    a `icepack_th6_with_qsfp_flaps(interfaces=...)` result here. If neither
+    `calls` nor `apis` is set, the default read-only baseline is used with
+    `requests_per_api` invocations per call (legacy shape).
+
+    Args:
+        device_name: DUT hostname (must be a FBOSS device — the default APIs
+            are FBOSS-only).
+        interval: Sleep between bursts in seconds. Default 5.
+        calls: Preferred. List of `ThriftStressCall` describing each method
+            to call, args, and per-burst concurrency. Mutually exclusive with
+            `apis`.
+        requests_per_api: Legacy. Per-call concurrency when using `apis` or
+            the default baseline. Default 10000 matches the original script.
+            For dry-runs dial down to 100-1000.
+        apis: Legacy. List of no-arg driver method names. Mutually exclusive
+            with `calls`. Each name is wrapped in a default `ThriftStressCall`
+            using `requests_per_api`.
+
+    Returns:
+        A `PeriodicTask` named `"thrift_stress_check"` wrapping
+        `task_name="thrift_stress"`.
+
+    Raises:
+        ValueError: If both `calls` and `apis` are supplied.
+    """
+    if calls is not None and apis is not None:
+        raise ValueError(
+            "create_thrift_stress_periodic_task: pass `calls` OR `apis`, not both"
+        )
+    params: t.Dict[str, t.Any] = {"hostname": device_name}
+    if calls is not None:
+        params["calls"] = [c.to_dict() for c in calls]
+    elif apis is not None:
+        params["apis"] = apis
+        params["requests_per_api"] = requests_per_api
+    else:
+        params["requests_per_api"] = requests_per_api
+    return PeriodicTask(
+        name="thrift_stress_check",
+        interval=interval,
+        task=Task(task_name="thrift_stress"),
+        retryable=False,
+        terminate_on_error=False,
+        params_list=[Params(json_params=json.dumps(params))],
     )
 
 

@@ -117,6 +117,7 @@ from taac.tasks.periodic_tasks import (
     NexthopGroupPoll,
     OpticsTemperatureTask,
     ProcessMonitorTask,
+    ThriftStressPeriodicTask,
 )
 from taac.tasks.verify_best_path_changes_task import (
     VerifyBestPathChangesTask,
@@ -167,6 +168,7 @@ TASK_REGISTRY = [
     BgpSetPeersPolicyTask,
     BgpVerifyReceivedRoutesTask,
     NexthopGroupPoll,
+    ThriftStressPeriodicTask,
     AristaCreateFileFromConfig,
     ValidateBgpcppConfigOnDevice,
     AddBgpWeightPolicyTask,
