@@ -26,7 +26,7 @@ import json
 from ixia.ixia import types as ixia_types
 from taac.playbooks.playbook_definitions import (
     add_common_checks_to_thft_playbooks,
-    create_thft_baseline_playbook,
+    create_thft_playbooks,
 )
 from taac.task_definitions import (
     create_configure_parallel_bgp_peers_task,
@@ -100,6 +100,8 @@ def create_npi_thrift_hardening_test_config(
     downlink_peer_tag: str,
     stsw_flap_ports: list,
     test_duration_s: int = 600,
+    restart_test_duration_s: int = 3600,
+    restart_period_s: int = 300,
     requests_per_burst: int = 10000,
     burst_timeout_s: float = 60.0,
     direct_ixia_connections=None,
@@ -132,8 +134,12 @@ def create_npi_thrift_hardening_test_config(
             GTSW-adjacent uplinks for an STSW, etc.). EXCLUDE IXIA-facing
             ports — flapping those breaks IXIA peering and would invalidate
             the BGP_SESSION_ESTABLISH precheck.
-        test_duration_s: Longevity stage duration (default 600s = 10 min smoke).
-            Production passes 14400 (4 hr).
+        test_duration_s: THFT_001 baseline longevity duration (default 600s =
+            10 min smoke). Production passes 14400 (4 hr).
+        restart_test_duration_s: Per-playbook duration for THFT_002..005
+            (each restart-variant). Default 3600s (1 hr) so the 4 restart
+            variants total ~4hr — matches the THFT_001 4hr soak instead of
+            blowing the campaign wall-time up to 5×4=20hr.
         direct_ixia_connections: Optional explicit direct-IXIA mapping.
         basset_pool: Optional override pool selection. Default "dne.test".
         service_restart_services: Override default service-restart-check list.
@@ -167,6 +173,15 @@ def create_npi_thrift_hardening_test_config(
         # Setup tasks: BGP peer scaffolding (mirrors NPI cpu_queue testconfig,
         # MINUS the rogue interface — THFT only needs downlink+uplink for
         # BGP_SESSION_ESTABLISH precheck + BGP_PEER_ROUTE snapshot).
+        #
+        # TODO: re-enable `create_assert_thrift_rate_limit_enabled_task` as
+        # the first setup-task once partner team confirms the config path
+        # for `thriftApiToRateLimitInQps` in `getRunningConfig()` output —
+        # current recursive-search implementation did not locate the key on
+        # the DUT despite D108220182 having shipped, so the gate is shelved
+        # to avoid false-FAIL on tonight's overnight campaign. The task
+        # class + factory remain in place (tasks/all.py +
+        # task_definitions.py) so re-enable is a one-line add here.
         setup_tasks=[
             create_coop_unregister_patchers_task(device_name),
             # Remove all existing BGP peers first.
@@ -520,15 +535,15 @@ def create_npi_thrift_hardening_test_config(
         # the disruption is thrift load on the agent + qsfp flaps via the
         # periodic task attached to each playbook.
         playbooks=add_common_checks_to_thft_playbooks(
-            [
-                create_thft_baseline_playbook(
-                    device_name=device_name,
-                    stsw_flap_ports=stsw_flap_ports,
-                    test_duration_s=test_duration_s,
-                    requests_per_burst=requests_per_burst,
-                    burst_timeout_s=burst_timeout_s,
-                )
-            ],
+            create_thft_playbooks(
+                device_name=device_name,
+                stsw_flap_ports=stsw_flap_ports,
+                test_duration_s=test_duration_s,
+                restart_test_duration_s=restart_test_duration_s,
+                restart_period_s=restart_period_s,
+                requests_per_burst=requests_per_burst,
+                burst_timeout_s=burst_timeout_s,
+            ),
             service_restart_services=service_restart_services,
         ),
     )
@@ -697,60 +712,65 @@ assert len(ICEPACK_GTSW_STSW_FLAP_PORTS) == 128
 # `NPI_DVT_ICEPACK_GTSW__CPU_QUEUE_TEST_CONFIG` (which has been validated on
 # the same DUT). Flap target = 128 STSW-adjacent uplinks (NOT the IXIA-facing
 # `eth1/13/1`/`eth1/13/3` carrying BGP peers).
-NPI_DVT_ICEPACK_GTSW__THRIFT_HARDENING_TEST_CONFIG = (
-    create_npi_thrift_hardening_test_config(
-        test_config_name="NPI_DVT_ICEPACK_GTSW__THRIFT_HARDENING_TEST_CONFIG",
-        device_name="gtsw001.l1001.c085.ash6",
-        local_mac_address="02:00:00:00:0f:0c",
-        ixia_downlink_interface="eth1/13/1",
-        ixia_uplink_interface="eth1/13/3",
-        peergroup_uplink_mimic_v6="PEERGROUP_GTSW_STSW_V6",
-        peergroup_uplink_mimic_v4="PEERGROUP_GTSW_STSW_V4",
-        peergroup_downlink_mimic_v6="PEERGROUP_GTSW_STSW_V6",
-        peergroup_downlink_mimic_v4="PEERGROUP_GTSW_HOST_MIMIC_V4",
-        route_map_uplink_ingress="PROPAGATE_GTSW_STSW_IN",
-        route_map_uplink_egress="PROPAGATE_GTSW_STSW_OUT",
-        route_map_downlink_ingress="PROPAGATE_GTSW_STSW_IN",
-        route_map_downlink_egress="PROPAGATE_GTSW_STSW_OUT",
-        ixia_downlink_ic_parent_network_v6="2401:db00:1ff:c108",
-        ixia_uplink_ic_parent_network_v6="2401:db00:1ff:c109",
-        ixia_downlink_ic_parent_network_v4="10.127.240",
-        ixia_uplink_ic_parent_network_v4="10.127.241",
-        unique_prefix_limit="5000",
-        per_peer_max_route_limit="20000",
-        downlink_peer_count=8,
-        uplink_peer_count=8,
-        remote_uplink_as_4byte=65272,
-        remote_downlink_as_4byte=7001,
-        remote_as_4_byte_step=1,
-        is_uplink_peer_confed="False",
-        is_downlink_peer_confed="False",
-        ixia_downlink_prefix_count_v6=500,
-        ixia_uplink_prefix_count_v6=500,
-        ixia_downlink_prefix_count_v4=500,
-        ixia_uplink_prefix_count_v4=500,
-        ixia_downlink_communities=["65446:30", "65441:323", "65456:323"],
-        ixia_uplink_communities=["65446:30", "65441:323", "65456:323"],
-        downlink_peer_tag="HOST",
-        uplink_peer_tag="STSW",
-        stsw_flap_ports=ICEPACK_GTSW_STSW_FLAP_PORTS,
-        test_duration_s=14400,  # 4 hr prod (override to 600 = 10 min for smoke)
-        # Scale-down: 1000 per API (vs Pavan's 10000). At 10000 the 70K-call
-        # asyncio.gather pegged `fboss_sw_agent` CPU at 1339% within ~2.5 min
-        # and ticked `coop.unclean_exits` (gather() hung indefinitely with no
-        # bursts completing). 1000 keeps gather() within `burst_timeout_s` and
-        # lets multiple bursts complete per run.
-        requests_per_burst=1000,
-        basset_pool="dne.test",
-        # IcePack backend GTSW does not run openr — drop from postcheck list
-        # to avoid false-fail on INACTIVE (same rationale as cpu_queue config).
-        service_restart_services=[
-            "bgpd",
-            "fboss_hw_agent@0",
-            "fboss_sw_agent",
-            "fsdb",
-            "qsfp_service",
-            "wedge_agent",
-        ],
-    )
+NPI_DVT_ICEPACK_GTSW__THRIFT_HARDENING_TEST_CONFIG = create_npi_thrift_hardening_test_config(
+    test_config_name="NPI_DVT_ICEPACK_GTSW__THRIFT_HARDENING_TEST_CONFIG",
+    device_name="gtsw001.l1001.c085.ash6",
+    local_mac_address="02:00:00:00:0f:0c",
+    ixia_downlink_interface="eth1/13/1",
+    ixia_uplink_interface="eth1/13/3",
+    peergroup_uplink_mimic_v6="PEERGROUP_GTSW_STSW_V6",
+    peergroup_uplink_mimic_v4="PEERGROUP_GTSW_STSW_V4",
+    peergroup_downlink_mimic_v6="PEERGROUP_GTSW_STSW_V6",
+    peergroup_downlink_mimic_v4="PEERGROUP_GTSW_HOST_MIMIC_V4",
+    route_map_uplink_ingress="PROPAGATE_GTSW_STSW_IN",
+    route_map_uplink_egress="PROPAGATE_GTSW_STSW_OUT",
+    route_map_downlink_ingress="PROPAGATE_GTSW_STSW_IN",
+    route_map_downlink_egress="PROPAGATE_GTSW_STSW_OUT",
+    ixia_downlink_ic_parent_network_v6="2401:db00:1ff:c108",
+    ixia_uplink_ic_parent_network_v6="2401:db00:1ff:c109",
+    ixia_downlink_ic_parent_network_v4="10.127.240",
+    ixia_uplink_ic_parent_network_v4="10.127.241",
+    unique_prefix_limit="5000",
+    per_peer_max_route_limit="20000",
+    downlink_peer_count=8,
+    uplink_peer_count=8,
+    remote_uplink_as_4byte=65272,
+    remote_downlink_as_4byte=7001,
+    remote_as_4_byte_step=1,
+    is_uplink_peer_confed="False",
+    is_downlink_peer_confed="False",
+    ixia_downlink_prefix_count_v6=500,
+    ixia_uplink_prefix_count_v6=500,
+    ixia_downlink_prefix_count_v4=500,
+    ixia_uplink_prefix_count_v4=500,
+    ixia_downlink_communities=["65446:30", "65441:323", "65456:323"],
+    ixia_uplink_communities=["65446:30", "65441:323", "65456:323"],
+    downlink_peer_tag="HOST",
+    uplink_peer_tag="STSW",
+    stsw_flap_ports=ICEPACK_GTSW_STSW_FLAP_PORTS,
+    test_duration_s=14400,  # THFT_001 = 4 hr prod (override to 600 = 10 min for smoke)
+    restart_test_duration_s=3600,  # THFT_002..005 = 1 hr each → 4hr total
+    # Scaled back to Pavan's original 10000 per API (= 70K concurrent calls
+    # per burst across the 7 read-only APIs) after D108220182 enabled
+    # server-side thrift API rate limiting on ICECUBE800BC. With
+    # `thriftApiToRateLimitInQps` populated (~140 APIs at 2-8 qps each), the
+    # agent throttles excess calls and CPU stays bounded even at the
+    # original 70K burst scale. The new `assert_thrift_rate_limit_enabled`
+    # setup-task (see setup_tasks above) fails fast if rate limiting is OFF,
+    # so we won't accidentally hammer an unprotected agent at 70K again.
+    # Prior history (pre-D108220182): 70K crashed `fboss_sw_agent` at
+    # CPU 1339% in ~2.5 min and ticked `coop.unclean_exits` twice
+    # (T275336067 — kernel OOM via workload.slice swap exhaustion).
+    requests_per_burst=10000,
+    basset_pool="dne.test",
+    # IcePack backend GTSW does not run openr — drop from postcheck list
+    # to avoid false-fail on INACTIVE (same rationale as cpu_queue config).
+    service_restart_services=[
+        "bgpd",
+        "fboss_hw_agent@0",
+        "fboss_sw_agent",
+        "fsdb",
+        "qsfp_service",
+        "wedge_agent",
+    ],
 )

@@ -58,13 +58,31 @@ class UncleanExitHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCheckI
         key_desc = ",".join(
             [UNCLEAN_EXIT_KEY_DESC.format(service=service) for service in services]
         )
-        ods_data = await async_query_ods(
-            entity_desc=obj.name,
-            key_desc=key_desc,
-            transform_desc=DAILY_TABLE_TRANSFORM_DESC,
-            start_time=int(start_time),
-            end_time=int(end_time),
-        )
+        try:
+            ods_data = await async_query_ods(
+                entity_desc=obj.name,
+                key_desc=key_desc,
+                transform_desc=DAILY_TABLE_TRANSFORM_DESC,
+                start_time=int(start_time),
+                end_time=int(end_time),
+            )
+        except Exception as e:
+            # ODS counter-side throttling is a transient infra issue, not a
+            # DUT-side problem. Treat as SKIP so the playbook doesn't
+            # false-error (the next playbook retries naturally after backoff).
+            # Mirrors the sibling fix in CpuUtilizationHealthCheck +
+            # MemoryUtilizationHealthCheck (D107783972 family).
+            err_msg = str(e)
+            if "throttling your requests" in err_msg.lower():
+                return hc_types.HealthCheckResult(
+                    status=hc_types.HealthCheckStatus.SKIP,
+                    message=(
+                        f"ODS counter throttled — skipping this iteration of "
+                        f"UncleanExitHealthCheck (will retry on next "
+                        f"playbook). Underlying error: {err_msg}"
+                    ),
+                )
+            raise
 
         if not ods_data:
             ods_query_url = await async_generate_ods_url(

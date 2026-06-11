@@ -2043,3 +2043,103 @@ class SetPortChannelMinLinkPatcherTask(BaseTask):
             patcher_args=patcher_args,
             patcher_desc=description,
         )
+
+
+class AssertThriftRateLimitEnabledTask(BaseTask):
+    """Setup-gate task: fail-fast if `thriftApiToRateLimitInQps` is empty in
+    the DUT's running agent config.
+
+    Background: the THFT (thrift-hardening) testconfig fires ~7,000
+    concurrent read-only thrift calls per burst against `fboss_sw_agent`.
+    Without server-side rate limiting (configerator
+    `agent_thrift_api_to_rate_limit.mcconf`), the storm pegs CPU and can
+    cascade into kernel OOMs on swap-tight hosts (see T275336067). With
+    rate limiting on, the agent throttles excess calls and CPU stays
+    bounded.
+
+    D108220182 removed `ICECUBE800BC` from the EMPTY_HW exclusion list so
+    RTSW/FTSW/STSW/GTSW roles on TH6 IcePack now pick up the default
+    `thriftApiToRateLimitInQps` map (~140 APIs at 2-8 qps each). This task
+    asserts that landed reality on the DUT before any THFT playbook runs;
+    if the map is missing or empty, the test fails immediately with a
+    clear pointer rather than burning a 4-hour soak before the postcheck
+    catches the symptom.
+
+    Implementation: calls `getRunningConfig()` thrift API on the agent,
+    recursively searches the returned JSON for a non-empty
+    `thriftApiToRateLimitInQps` map. Recursive search is robust to where
+    the materialized config lands in the SwitchConfig schema (top-level
+    vs nested under switchSettings / cooperConfig / etc.) so this task
+    survives FBOSS-side schema changes that move the key.
+    """
+
+    NAME = "assert_thrift_rate_limit_enabled"
+    THRIFT_RATE_LIMIT_KEY = "thriftApiToRateLimitInQps"
+
+    @classmethod
+    def _find_key_recursive(
+        cls, node: t.Any, target_key: str
+    ) -> t.Optional[t.Dict[str, t.Any]]:
+        """Depth-first search for `target_key` in a nested JSON structure.
+
+        Returns the value at the first match, or None if not found. Used
+        to handle FBOSS schema variations that may nest the rate-limit map.
+        """
+        if isinstance(node, dict):
+            if target_key in node:
+                return node[target_key]
+            for value in node.values():
+                found = cls._find_key_recursive(value, target_key)
+                if found is not None:
+                    return found
+        elif isinstance(node, list):
+            for item in node:
+                found = cls._find_key_recursive(item, target_key)
+                if found is not None:
+                    return found
+        return None
+
+    async def run(self, params: t.Dict[str, t.Any]) -> None:
+        hostname = params["hostname"]
+        driver = await async_get_device_driver(hostname)
+        # pyre-ignore[16]: AbstractSwitch has no attribute `async_agent_client`
+        async with driver.async_agent_client as client:
+            running_config_json = await client.getRunningConfig()
+        try:
+            running_config = json.loads(running_config_json)
+        except (ValueError, TypeError) as e:
+            raise RuntimeError(
+                f"{hostname}: getRunningConfig() returned non-JSON payload "
+                f"({type(e).__name__}: {e}); cannot verify thrift rate limit "
+                f"is enabled."
+            ) from e
+
+        rate_limit_map = self._find_key_recursive(
+            running_config, self.THRIFT_RATE_LIMIT_KEY
+        )
+        if rate_limit_map is None:
+            raise RuntimeError(
+                f"{hostname}: `{self.THRIFT_RATE_LIMIT_KEY}` not found in "
+                f"running agent config. Thrift API rate limiting is NOT "
+                f"enabled — refusing to start a THFT (thrift-hardening) "
+                f"run because the storm will overload `fboss_sw_agent`. "
+                f"See D108220182 (enables defaults for ICECUBE800BC) and "
+                f"verify the configerator change has shipped + COOP has "
+                f"re-applied the agent config on this host."
+            )
+        if not isinstance(rate_limit_map, dict) or len(rate_limit_map) == 0:
+            raise RuntimeError(
+                f"{hostname}: `{self.THRIFT_RATE_LIMIT_KEY}` is present but "
+                f"empty (type={type(rate_limit_map).__name__}, "
+                f"size={len(rate_limit_map) if hasattr(rate_limit_map, '__len__') else 'n/a'}). "
+                f"Thrift API rate limiting is effectively disabled — "
+                f"refusing to start THFT run. See D108220182."
+            )
+
+        self.logger.info(
+            f"{hostname}: thrift API rate limiting is ENABLED "
+            f"({len(rate_limit_map)} APIs in the limit map). "
+            f"Sample rates: "
+            + ", ".join(f"{k}={v}" for k, v in list(rate_limit_map.items())[:5])
+            + " ..."
+        )

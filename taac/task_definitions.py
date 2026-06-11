@@ -241,6 +241,33 @@ def create_wait_for_agent_convergence_task(
     )
 
 
+def create_assert_thrift_rate_limit_enabled_task(
+    hostname: str,
+) -> Task:
+    """Setup-gate task: assert `thriftApiToRateLimitInQps` is non-empty
+    in the DUT's running agent config before any THFT playbook starts.
+
+    Fails fast (raises in the underlying task's `run()`) if the
+    configerator-side rate limit map (set via D108220182 for IcePack TH6
+    / ICECUBE800BC) hasn't shipped or COOP hasn't re-applied the agent
+    config. This prevents burning a 4-hour THFT soak only to discover at
+    postcheck time that the agent had no server-side throttling and got
+    pegged at >1000% CPU.
+
+    Args:
+        hostname: DUT hostname (FBOSS-only — `getRunningConfig()` is a
+            FBOSS thrift API).
+
+    Returns:
+        Task object that runs `AssertThriftRateLimitEnabledTask` at
+        setup time.
+    """
+    return Task(
+        task_name="assert_thrift_rate_limit_enabled",
+        params=Params(json_params=json.dumps({"hostname": hostname})),
+    )
+
+
 def create_wait_for_bgp_convergence_task(
     hostnames: t.List[str] | str,
     num_tries: int = 120,
