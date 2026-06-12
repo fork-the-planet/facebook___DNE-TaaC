@@ -45,6 +45,7 @@ from taac.testconfigs.routing.ebb.bag012_ash6_test_config import (
 )
 from taac.testconfigs.routing.ebb.bag013_ash6_test_config import (
     BAG013_ASH6_CONVEYOR_TEST_CONFIG,
+    BAG013_ASH6_CONVEYOR_TEST_UPDATE_GROUP_CONFIG,
 )
 from taac.testconfigs.routing.ebb.bgp_plus_plus_verify_computational_load_test_config import (
     BGP_PLUS_PLUS_VERIFY_COMPUTATIONAL_LOAD_TEST_CONFIG,
@@ -209,6 +210,7 @@ __all__ = [
     "BAG012_ASH6_CONVEYOR_TEST_CONFIG",
     "BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_CONFIG",
     "BAG013_ASH6_CONVEYOR_TEST_CONFIG",
+    "BAG013_ASH6_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
     "BGP_PLUS_PLUS_VERIFY_COMPUTATIONAL_LOAD_TEST_CONFIG",
     "BGP_PLUS_PLUS_VERIFY_CONSTANT_ATTRIBUTE_STORAGE_TEST_CONFIG",
     "CASE1_TEST_CONFIG",
