@@ -113,6 +113,9 @@ from taac.testconfigs.routing.ebb.eb03_arista_performance_scaling_test_2_test_co
 from taac.testconfigs.routing.ebb.eb03_arista_well_known_community_test_config import (
     EB03_ARISTA_WELL_KNOWN_COMMUNITY_TEST_CONFIG,
 )
+from taac.testconfigs.routing.ebb.eb03_update_group_test_config import (
+    EB03_LAB_ASH6_BGP_TEST_UPDATE_GROUP_CONFIG,
+)
 from taac.testconfigs.routing.ebb.eb04_arista_bgp_plus_plus_separable_policy_1_peer_test_config import (
     EB04_ARISTA_BGP_PLUS_PLUS_SEPARABLE_POLICY_1_PEER_TEST_CONFIG,
 )
@@ -233,6 +236,7 @@ __all__ = [
     "EB03_ARISTA_MIMIC_EBB_TEST_FULL_SCALE_WITH_OPEN_R_TEST_CONFIG",
     "EB03_ARISTA_PERFORMANCE_SCALING_TEST_2_TEST_CONFIG",
     "EB03_ARISTA_WELL_KNOWN_COMMUNITY_TEST_CONFIG",
+    "EB03_LAB_ASH6_BGP_TEST_UPDATE_GROUP_CONFIG",
     "EB04_ARISTA_BGP_PLUS_PLUS_SEPARABLE_POLICY_1_PEER_TEST_CONFIG",
     "EB04_ARISTA_BGP_QUEUE_MEMORY_MONITOR_IPV6_50EBGP_25IBGP_WITH_FLAPPING_TEST_CONFIG",
     "EB04_ARISTA_MIMIC_EBB_TEST_FULL_SCALE_WITH_OPEN_R_TEST_CONFIG",
