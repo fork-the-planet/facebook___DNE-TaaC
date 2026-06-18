@@ -74,6 +74,9 @@ from taac.testconfigs.fpf.fpf_tc37_nic_side_link_flap import (
 from taac.testconfigs.fpf.fpf_tc38_persistent_ndp_clear import (
     TEST_CONFIG as FPF_TC38_PERSISTENT_NDP_CLEAR,
 )
+from taac.testconfigs.fpf.fpf_tc39_fsdb_kill_5min import (
+    TEST_CONFIG as FPF_TC39_FSDB_KILL_5MIN,
+)
 
 __all__ = [
     "FPF_STRESS_TEST_CONFIG",
@@ -100,4 +103,5 @@ __all__ = [
     "FPF_TC36_STSW_ALL_CONNECTIONS_DOWN",
     "FPF_TC37_NIC_SIDE_LINK_FLAP",
     "FPF_TC38_PERSISTENT_NDP_CLEAR",
+    "FPF_TC39_FSDB_KILL_5MIN",
 ]

@@ -2527,9 +2527,42 @@ class FbossSwitch(AbstractSwitch):
         interval_to_link_up: int,
         total_flaps: int,
         down_time_sec: float = 0.1,
+        up_time_sec: Optional[float] = None,
     ) -> None:
+        """Flap interfaces via ``wedge_qsfp_util -tx_disable/-tx_enable``.
+
+        Two modes:
+
+        * ``up_time_sec is None`` (default, legacy): each flap is
+          ``tx_disable -> sleep down_time_sec -> tx_enable``, then the caller
+          waits ``interval_to_link_up`` seconds (on the runner) before the next
+          flap. Used by the thrift-stress / conveyor flap payloads — behavior
+          is unchanged.
+        * ``up_time_sec is not None`` (symmetric flap): each loop is one full
+          cycle held entirely on-box —
+          ``tx_enable -> sleep up_time_sec -> tx_disable -> sleep down_time_sec``
+          — so the link spends ``up_time_sec`` UP and ``down_time_sec`` DOWN per
+          cycle. ``interval_to_link_up`` is NOT used (the up-hold replaces it).
+          After the cycles, a final ``tx_enable`` is issued so the link is left
+          UP for the downstream settle / health-check window.
+        """
+        interface_names_str = " ".join(interface_names)
+        if up_time_sec is not None:
+            for _ in range(total_flaps):
+                flap_command = (
+                    f"wedge_qsfp_util -tx_enable {interface_names_str} "
+                    f"&& sleep {up_time_sec} "
+                    f"&& wedge_qsfp_util -tx_disable {interface_names_str} "
+                    f"&& sleep {down_time_sec}"
+                )
+                await self.async_run_cmd_on_shell(flap_command)
+                self.logger.info("Symmetric flap cycle executed")
+            # Leave the link UP — the cycle above ends tx_disabled.
+            await self.async_run_cmd_on_shell(
+                f"wedge_qsfp_util -tx_enable {interface_names_str}"
+            )
+            return
         for _ in range(total_flaps):
-            interface_names_str = " ".join(interface_names)
             flap_command = f"wedge_qsfp_util -tx_disable {interface_names_str} && sleep {down_time_sec} && wedge_qsfp_util -tx_enable {interface_names_str}"
             await self.async_run_cmd_on_shell(flap_command)
             await asyncio.sleep(interval_to_link_up)

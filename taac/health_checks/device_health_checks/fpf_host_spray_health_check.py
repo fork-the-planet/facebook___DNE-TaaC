@@ -51,6 +51,7 @@ from taac.libs.fpf.fpf_collector_registry import (
     baseline_impaired_lane_union,
     disruption_inconclusive_skip,
     get_allow_baseline_failures,
+    get_disruption_time,
     get_test_case_start_time,
     register_artifact,
 )
@@ -86,6 +87,14 @@ class FpfHostSprayHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCheck
         all_samples (bool): When True, evaluate EVERY per-timestamp sample of
             every beth lane across the window (floor + spread must hold on each
             sample) instead of only each lane's latest sample. Default False.
+        label (str): When non-empty, prefix the PASS/FAIL message (and the
+            leading log line) with ``"{label} "`` so the results-table row is
+            self-describing. Default "".
+        window_from_disruption_time (bool) + window_duration_sec (float): When
+            True and a disruption time was recorded (get_disruption_time() > 0),
+            scope the window to [disruption_time, disruption_time +
+            window_duration_sec] (default window_duration_sec = lookback_sec),
+            overriding the normal window resolution. Default False.
         lookback_sec / window_start / window_end: window overrides.
     """
 
@@ -185,24 +194,75 @@ class FpfHostSprayHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCheck
                         f"(unimpacted lanes)"
                     )
 
+    def _resolve_window(
+        self, check_params: t.Dict[str, t.Any]
+    ) -> t.Tuple[float, float, bool]:
+        """Resolve the [window_start, window_end] query window.
+
+        When ``window_from_disruption_time`` is set and a disruption time was
+        recorded (get_disruption_time() > 0), the window is scoped to
+        [disruption_time, disruption_time + window_duration_sec] (default
+        window_duration_sec = lookback_sec). Otherwise the normal
+        window_start/window_end/tc_start/lookback resolution applies. Returns
+        (window_start, window_end, used_disruption_time).
+        """
+        lookback_sec = float(check_params.get("lookback_sec", DEFAULT_LOOKBACK_SEC))
+        window_duration_sec = float(
+            check_params.get("window_duration_sec", lookback_sec)
+        )
+        # window_offset_sec: skip the first N seconds after the disruption (e.g.
+        # the GR-hold period before the data-plane route purge), so the window
+        # only covers the settled post-purge state.
+        window_offset_sec = float(check_params.get("window_offset_sec", 0))
+        disruption_time = get_disruption_time()
+        if (
+            bool(check_params.get("window_from_disruption_time", False))
+            and disruption_time > 0
+        ):
+            return (
+                disruption_time + window_offset_sec,
+                disruption_time + window_duration_sec,
+                True,
+            )
+        window_end = float(check_params.get("window_end", time.time()))
+        tc_start = get_test_case_start_time()
+        window_start = float(
+            check_params.get(
+                "window_start", tc_start if tc_start else window_end - lookback_sec
+            )
+        )
+        return window_start, window_end, False
+
+    def _resolve_entity_desc(
+        self, obj: TestDevice, check_params: t.Dict[str, t.Any]
+    ) -> t.Optional[str]:
+        """Resolve the ODS entity_desc from check_params / hosts / device.
+
+        Returns None when no hosts/entity_desc/device are available (caller
+        SKIPs).
+        """
+        entity_desc = check_params.get("entity_desc")
+        if entity_desc is not None:
+            return entity_desc
+        hosts = check_params.get("hosts")
+        if hosts:
+            return ",".join(hosts)
+        if obj is not None:
+            return obj.name
+        return None
+
     async def _run(
         self,
         obj: TestDevice,
         input: hc_types.BaseHealthCheckIn,
         check_params: t.Dict[str, t.Any],
     ) -> hc_types.HealthCheckResult:
-        hosts = check_params.get("hosts")
-        entity_desc = check_params.get("entity_desc")
+        entity_desc = self._resolve_entity_desc(obj, check_params)
         if entity_desc is None:
-            if hosts:
-                entity_desc = ",".join(hosts)
-            elif obj is not None:
-                entity_desc = obj.name
-            else:
-                return hc_types.HealthCheckResult(
-                    status=hc_types.HealthCheckStatus.SKIP,
-                    message="No hosts/entity_desc provided for host-spray check",
-                )
+            return hc_types.HealthCheckResult(
+                status=hc_types.HealthCheckStatus.SKIP,
+                message="No hosts/entity_desc provided for host-spray check",
+            )
 
         # all_samples: evaluate EVERY sample per lane (sustained-fairness), not
         # just the latest. Drives both the transform default and the per-sample
@@ -239,22 +299,21 @@ class FpfHostSprayHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCheck
                     status=hc_types.HealthCheckStatus.SKIP, message=_skip
                 )
 
-        window_end = float(check_params.get("window_end", time.time()))
-        tc_start = get_test_case_start_time()
-        lookback_sec = check_params.get("lookback_sec", DEFAULT_LOOKBACK_SEC)
-        window_start = float(
-            check_params.get(
-                "window_start", tc_start if tc_start else window_end - lookback_sec
-            )
-        )
+        # Optional results-table label: when set, prefixes the PASS/FAIL message
+        # (and the leading log line) so the row is self-describing.
+        label = str(check_params.get("label", "") or "")
+
+        window_start, window_end, from_disruption = self._resolve_window(check_params)
         start_time = int(window_start)
         end_time = int(window_end)
 
+        label_prefix = f"{label} " if label else ""
+        disruption_note = " [window from disruption_time]" if from_disruption else ""
         self.logger.info(
-            f"  [host spray] Querying ODS for {entity_desc} key={key_desc} "
-            f"transform={transform_desc} window {start_time} to {end_time} "
-            f"({end_time - start_time}s); floor>{min_egress_gbps:.1f} Gbps, "
-            f"spread<={max_spread_gbps:.1f} Gbps"
+            f"  [host spray] {label_prefix}Querying ODS for {entity_desc} "
+            f"key={key_desc} transform={transform_desc} window {start_time} to "
+            f"{end_time} ({end_time - start_time}s); floor>{min_egress_gbps:.1f} "
+            f"Gbps, spread<={max_spread_gbps:.1f} Gbps{disruption_note}"
         )
 
         ods_data = await async_query_ods(
@@ -384,9 +443,9 @@ class FpfHostSprayHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCheck
             return hc_types.HealthCheckResult(
                 status=hc_types.HealthCheckStatus.PASS,
                 message=(
-                    f"Host spray OK for {num_hosts} host(s) ({scope}): unimpacted "
-                    f"lanes >{min_egress_gbps:.1f} Gbps, spread "
-                    f"<={max_spread_gbps:.1f} Gbps{extra} | ODS: {ods_url}"
+                    f"{label_prefix}Host spray OK for {num_hosts} host(s) "
+                    f"({scope}): unimpacted lanes >{min_egress_gbps:.1f} Gbps, "
+                    f"spread <={max_spread_gbps:.1f} Gbps{extra} | ODS: {ods_url}"
                 ),
             )
         parts: t.List[str] = []
@@ -403,5 +462,5 @@ class FpfHostSprayHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCheck
             )
         return hc_types.HealthCheckResult(
             status=hc_types.HealthCheckStatus.FAIL,
-            message=" | ".join(parts) + f" | ODS: {ods_url}",
+            message=label_prefix + " | ".join(parts) + f" | ODS: {ods_url}",
         )

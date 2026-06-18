@@ -412,6 +412,7 @@ def create_fpf_rapid_flap_step_lldp(
     flap_interval_sec: int = 1,
     neighbor_hosts: t.Optional[t.List[str]] = None,
     flap_down_time_sec: float = 6.0,
+    flap_up_time_sec: float = 6.0,
     device_regexes: t.Optional[t.List[str]] = None,
     description: t.Optional[str] = None,
 ) -> Step:
@@ -444,8 +445,13 @@ def create_fpf_rapid_flap_step_lldp(
         flap_interval_sec: Seconds between flaps / link-up settle; default 1.
         neighbor_hosts: explicit list of remote system names to match exactly
             (domain-stripped, case-insensitive). Preferred over the glob.
-        flap_down_time_sec: Seconds the port is held tx_disabled per flap;
+        flap_down_time_sec: Seconds the port is held tx_disabled per cycle;
             default 6.
+        flap_up_time_sec: Seconds the port is held tx_enabled (UP) per cycle;
+            default 6. Each flap cycle is a full on-box loop —
+            ``tx_enable -> sleep up -> tx_disable -> sleep down`` — and the
+            handler leaves the link UP at the end. ``flap_interval_sec`` is
+            unused with the symmetric cycle.
         device_regexes: Optional device-regex scope (e.g. the DUT GTSW).
         description: Custom step description.
     """
@@ -466,6 +472,7 @@ def create_fpf_rapid_flap_step_lldp(
                     "duration_sec": duration_sec,
                     "flap_interval_sec": flap_interval_sec,
                     "down_time_sec": flap_down_time_sec,
+                    "up_time_sec": flap_up_time_sec,
                 }
             )
         ),

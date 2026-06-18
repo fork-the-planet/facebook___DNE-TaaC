@@ -101,7 +101,9 @@ def create_fpf_tc33_test_config() -> TestConfig:
                 neighbor_pattern=UPLINK_NEIGHBOR_PATTERN,
                 duration_sec=FLAP_DURATION_SEC,
                 flap_interval_sec=FLAP_INTERVAL_SEC,
+                # Symmetric cycle: enable -> 6s up -> disable -> 6s down.
                 flap_down_time_sec=6,
+                flap_up_time_sec=6,
                 device_regexes=[DUT_GTSW],
                 description=(
                     f"Rapid-flap ALL LLDP-resolved GTSW-STSW uplinks "

@@ -278,9 +278,10 @@ class TestRapidFlapStepLldp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(p["neighbor_pattern"], "rtptest*")
         self.assertEqual(p["duration_sec"], 900)
         self.assertEqual(p["flap_interval_sec"], 1)
-        # neighbor_hosts unset -> None; default flap down-time 6s passed through.
+        # neighbor_hosts unset -> None; default symmetric 6s up / 6s down.
         self.assertIsNone(p["neighbor_hosts"])
         self.assertEqual(p["down_time_sec"], 6.0)
+        self.assertEqual(p["up_time_sec"], 6.0)
         # No pre-resolved interface map.
         self.assertNotIn("interfaces_by_device", p)
 
@@ -318,7 +319,8 @@ class TestRapidFlapStepLldp(unittest.IsolatedAsyncioTestCase):
                     "down_time_sec": 6,
                 }
             )
-        # Two single-flap iterations, each with total_flaps=1 and down_time=6.
+        # Two symmetric-cycle iterations, each total_flaps=1 with up=down=6
+        # (up_time_sec defaults to down_time_sec when not passed).
         self.assertEqual(cs.driver.async_do_rapid_interface_flaps.await_count, 2)
         for call in cs.driver.async_do_rapid_interface_flaps.await_args_list:
             self.assertEqual(
@@ -328,6 +330,7 @@ class TestRapidFlapStepLldp(unittest.IsolatedAsyncioTestCase):
                     "interval_to_link_up": 5,
                     "total_flaps": 1,
                     "down_time_sec": 6.0,
+                    "up_time_sec": 6.0,
                 },
             )
 

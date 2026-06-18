@@ -2,15 +2,36 @@
 
 # pyre-unsafe
 
-"""TC30: FSDB GR timer beyond window — stop fsdb 180s, do NOT re-enable.
+"""TC30: FSDB GR timer beyond window — stop fsdb 5min, do NOT re-enable.
 
-Stops ``fsdb`` (systemctl stop) on gtsw001 and holds it stopped for 180s — beyond
-the FSDB graceful-restart grace window — and never starts it back. fsdb owns lane
-0 (gtsw001 -> lane 0), so past GR expiry lane 0 of all 4 GPUs stays withdrawn and
-the impaired steady state persists, exactly like an interface disable that is left
-down (compare to the fpf_tc15 interface-disable DISRUPT playbook): bulk/fsdb on
-lane 0 withdrawn, remote-failure shows the impacted lane, and the HRT CONNECTED
-FSDB-session census settles at 28 (32 - 4) and STAYS there with no recovery.
+Stops ``fsdb`` (systemctl stop) on gtsw001 and holds it stopped for 300s (5m) —
+beyond the FSDB graceful-restart grace window — and never starts it back. The 5m
+hold IS the observation window (there is NO separate longevity playbook). fsdb
+owns lane 0 (gtsw001 -> lane 0 = ``beth0`` on the GPU NIC hosts), so past GR expiry
+lane 0 of all 4 GPUs stays withdrawn and the impaired steady state persists,
+exactly like an interface disable that is left down (compare to the fpf_tc15
+interface-disable DISRUPT playbook): bulk/fsdb on lane 0 withdrawn, remote-failure
+shows the impacted lane, the HRT CONNECTED FSDB-session census settles at 28
+(32 - 4) and STAYS there with no recovery, AND — the added data-plane signal —
+beth0 egress DRAINS (< 10 Gbps) on the GPU host cabled to gtsw001 while its
+lanes 1-3 keep spraying (> 75 Gbps). The other GPU host's beth0 lands on a
+DIFFERENT plane-0 GTSW (confirmed by LLDP: only GPU_HOSTS[0] neighbors gtsw001),
+so it is UNAFFECTED — all 4 of its lanes hold > 75 Gbps, which also validates
+that the disruption's blast radius stays local to the host on gtsw001.
+
+Two distinct timescales (validated on the testbed — keep them separate):
+  - Control plane (the FSDB session census): the transition is IMMEDIATE. On
+    `systemctl stop fsdb` the per-host CONNECTED count drops 32 -> 28 (lane 0 of
+    all 4 GPUs goes to 0) within ~4s. It does NOT wait for the GR grace window —
+    the ~120s grace is purely a routes/data-plane forwarding hold. The session
+    collector confirms: only the single poll captured AT the stop instant reads
+    32; every later sample reads 28. So the stays-down session check skips the
+    first SESSION_WINDOW_OFFSET_SEC (10s) to exclude that boundary sample and
+    asserts a clean steady 28.
+  - Data plane (beth0 egress): held by GR for ~120s, then purged. The host-spray
+    check therefore reads at the END of the 5m hold with an avg(30s),latest
+    transform — well past the purge, with a tight averaging window so the drained
+    reading isn't smeared across the transition.
 
 This config is meant to run BEFORE fpf_tc31 (which re-enables fsdb and validates
 recovery). It deliberately leaves fsdb DOWN.
@@ -27,25 +48,32 @@ deviation from a naive single-playbook session-stat check):
 
   The faithful mapping the check actually supports is mode="stable" with
   expected_connected=28: it asserts min==max==28 across the window with NO recovery
-  requirement — i.e. the impaired census holds steady at 28. To anchor that window
-  AFTER the stop (so the pre-stop 32 samples are excluded), the config uses TWO
-  playbooks: a disruption-only playbook (inject/stabilize/stop/180s, NO checks)
-  followed by a minimal "stays-down" assertion playbook. The TaacRunner re-stamps
-  test_case_start_time at the start of the SECOND playbook, so its stable-mode
-  session-stat check (expected_connected=28) anchors at the post-stop window and
-  validates "settled at 28, stays at 28" — the no-recovery contract.
+  requirement — i.e. the impaired census holds steady at 28. To scope that window
+  to AFTER the stop (so the pre-stop 32 samples are excluded), the stays-down
+  checks set window_from_disruption_time=True + window_duration_sec=
+  STOP_DURATION_SEC, so they evaluate exactly [disruption_time,
+  disruption_time+300] — the 5m hold. The session check additionally sets
+  window_offset_sec=10 to drop the stop-instant boundary sample. The host-spray
+  check uses the same scoped window (latest avg(30s) at the END of the hold) to
+  assert the lane-0-drained / lanes-1-3-hold data-plane state.
 
-  There is no stable-state hardening longevity here: fsdb is intentionally left
-  down, so the FULL stable contract (which expects 32) does not apply.
+  Two-playbook structure is kept: a disruption playbook (inject/stabilize/stop/
+  hold 300s) that CARRIES the stays-down postchecks, followed by a minimal
+  no-step playbook (preserves the structure, carries no checks). There is no
+  stable-state hardening longevity here: fsdb is intentionally left down, so the
+  FULL stable contract (which expects 32) does not apply.
 
 ASSUMPTIONS:
   - mode="stable" + expected_connected=28 is the supported "stays at 28, no
     recovery" mapping (disruption mode cannot express "no recovery"; see above).
-  - The 180s hold exceeds the FSDB GR window (~120s), so lane 0 is fully withdrawn
-    (purged) by the time the second playbook's window opens; the impaired census is
-    a clean steady 28.
-  - lookback_sec on the stays-down check anchors at the second playbook's
-    test_case_start_time and covers its short assertion longevity.
+  - The FSDB session census drops to 28 within ~4s of the stop (control-plane
+    transition is immediate); window_offset_sec=10 excludes the stop-instant
+    boundary sample so the stable check sees a clean steady 28.
+  - The 300s hold exceeds the FSDB GR window (~120s), so lane 0 routes are fully
+    purged within the hold; the end-of-hold avg(30s),latest reading shows beth0
+    drained.
+  - window_from_disruption_time scopes both stays-down checks to the 5m hold
+    ([disruption_time, disruption_time+300]), excluding pre-stop healthy samples.
 
 Headless run stops fsdb via SSH/systemctl — kick off from a Kerberos-ticketed
 terminal.
@@ -58,11 +86,12 @@ Usage:
 """
 
 from taac.health_checks.healthcheck_definitions import (
+    create_fpf_host_spray_check,
     create_fpf_hrt_session_stat_check,
 )
 from taac.libs.fpf.fpf_prod_prefix_map import get_prefix
 from taac.playbooks.playbook_definitions import (
-    create_fpf_disruption_only_playbook,
+    create_fpf_disrupt_window_playbook,
     create_fpf_stays_down_assertion_playbook,
 )
 from taac.steps.step_definitions import (
@@ -93,11 +122,29 @@ from taac.test_as_a_config.types import TestConfig
 
 PREFIX_COUNT = 1000
 STABILIZATION_DELAY_SEC = 120
-STOP_DURATION_SEC = 180  # > GR window (~120s): routes purged, stays down.
-STAYS_DOWN_ASSERT_SEC = 120  # short longevity for the stable "stays at 28" window.
+# 5min (300s) hold >> GR window (~120s): the data-plane route purge (~120s) fully
+# settles, so the lane-0 drained reading is taken well after the transition.
+STOP_DURATION_SEC = 300
 SESSION_LOOKBACK_SEC = 900
+# The FSDB session census drops to 28 within ~4s of the stop (the control-plane
+# transition is IMMEDIATE; the ~120s GR grace applies only to routes/data-plane).
+# Skip the first 10s so the stable window excludes the single boundary sample
+# captured at the exact stop instant (which still reads 32, pre-drop).
+SESSION_WINDOW_OFFSET_SEC = 10
+# tc30-specific host-spray transform: average the last 30s (not 1m) and take the
+# latest sample, so the drained-lane reading isn't smeared across the route-purge
+# transition.
+HOST_SPRAY_TRANSFORM_DESC = "formula(/ $1 125000000),avg(30s),latest"
 
 DUT_GTSW = OBSERVER_GTSWS[0]
+# Only the GPU host whose lane-0 (beth0) uplink is physically cabled to DUT_GTSW
+# (gtsw001) sees its beth0 drain when gtsw001's fsdb is stopped — confirmed by
+# LLDP on gtsw001 (rtptest1555/beth0 -> gtsw001 eth1/45/5). The OTHER GPU host
+# (GPU_HOSTS[1]) lands its beth0 on a different plane-0 GTSW, so it is UNAFFECTED
+# and keeps spraying on all 4 lanes — it serves as the blast-radius-containment
+# control. GPU_HOSTS[0] is the config's primary host (also the prod-prefix and
+# fsdb-session host), so it is the one cabled to DUT_GTSW.
+DUT_HOST = GPU_HOSTS[0]
 IMPACTED_LANES = [0]
 # Steady impaired census after GR expiry on lane 0 of all 4 GPUs: 32 - 4 = 28.
 CONNECTED_STAYS_AT = EXPECTED_FSDB_SESSION_COUNT - 4  # 28
@@ -140,39 +187,58 @@ def create_fpf_tc30_test_config() -> TestConfig:
             ),
         ),
     ]
-    disrupt_playbook = create_fpf_disruption_only_playbook(
-        gtsws=OBSERVER_GTSWS,
-        hosts=GPU_HOSTS,
-        trigger_stsws=TRIGGER_STSWS,
-        disruption_steps=disrupt_steps,
+    # The 5m hold IS the observation window (no separate longevity playbook).
+    # Both stays-down postchecks are scoped to that hold via
+    # window_from_disruption_time=True + window_duration_sec=STOP_DURATION_SEC, so
+    # they evaluate [disruption_time, disruption_time+300] only — the pre-stop 32
+    # samples are excluded (and the session check skips the first 10s boundary).
+    disrupt_playbook = create_fpf_disrupt_window_playbook(
         playbook_name="fpf_tc30_fsdb_gr_stop180_disrupt",
-    )
-
-    # --- Playbook 2: "stays at 28" stable assertion, anchored post-stop. ---
-    stays_down_steps = [
-        create_longevity_step(
-            duration=STAYS_DOWN_ASSERT_SEC,
-            description=(
-                f"Observe the impaired steady state {STAYS_DOWN_ASSERT_SEC}s "
-                f"(fsdb stays down; census stays at {CONNECTED_STAYS_AT})"
-            ),
-        ),
-    ]
-    stays_down_playbook = create_fpf_stays_down_assertion_playbook(
-        playbook_name="fpf_tc30_fsdb_gr_stop180_stays_down",
-        stays_down_steps=stays_down_steps,
+        disruption_steps=disrupt_steps,
         postchecks=[
             create_fpf_hrt_session_stat_check(
                 # mode="stable" asserts the census holds steady (min==max) at the
                 # impaired count with NO recovery requirement — the supported
                 # "stays at 28, no recovery" mapping (see module docstring).
+                # Window scoped to the 180s hold via the disruption time.
                 mode="stable",
                 expected_connected=CONNECTED_STAYS_AT,
                 impacted_lanes=IMPACTED_LANES,
-                lookback_sec=SESSION_LOOKBACK_SEC,
+                window_from_disruption_time=True,
+                window_offset_sec=SESSION_WINDOW_OFFSET_SEC,
+                window_duration_sec=STOP_DURATION_SEC,
                 check_id="fpf_tc30_fsdb_gr_stop180_session_stat",
             ),
+            # Data-plane "more color": over the SAME hold window, lane 0 (beth0)
+            # is drained < 10 Gbps ONLY on the GPU host cabled to gtsw001
+            # (DUT_HOST) — routes purged past GR — while its lanes 1-3 keep
+            # spraying > 75 Gbps. The OTHER GPU host is unaffected (its beth0
+            # lands on a different plane-0 GTSW), so all 4 of its lanes stay
+            # > 75 Gbps; this doubles as a blast-radius-containment control.
+            create_fpf_host_spray_check(
+                hosts=GPU_HOSTS,
+                impacted_lanes_by_host={DUT_HOST: ["beth0"]},
+                impacted_max_gbps=10.0,
+                min_egress_gbps=75.0,
+                transform_desc=HOST_SPRAY_TRANSFORM_DESC,
+                window_from_disruption_time=True,
+                window_duration_sec=STOP_DURATION_SEC,
+                label=(
+                    "[fsdb-down window @5min, avg30s] DUT-host lane0(beth0) "
+                    "drained <10Gbps + its lanes1-3 >75Gbps; other host all "
+                    "4 lanes >75Gbps (containment)"
+                ),
+                check_id="fpf_tc30_fsdb_gr_stop180_host_spray",
+            ),
         ],
+    )
+
+    # --- Playbook 2: no steps — the 180s hold above is the observation window.
+    # Kept to preserve the two-playbook structure; carries no checks. ---
+    stays_down_playbook = create_fpf_stays_down_assertion_playbook(
+        playbook_name="fpf_tc30_fsdb_gr_stop180_stays_down",
+        stays_down_steps=[],
+        postchecks=[],
     )
 
     return TestConfig(

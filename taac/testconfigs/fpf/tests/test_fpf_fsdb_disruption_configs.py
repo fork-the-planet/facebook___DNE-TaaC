@@ -246,11 +246,16 @@ class TestFpfTc30FsdbGrStop180(unittest.TestCase):
         # Exactly one service-interruption step (the stop); fsdb is NOT re-enabled.
         self.assertEqual(si_count, 1)
 
-    def test_disrupt_playbook_has_no_postchecks(self):
-        self.assertEqual(_all_postchecks(self.cfg.playbooks[0]), [])
+    def test_stays_down_playbook_has_no_postchecks(self):
+        # tc30's stays_down (Playbook[1]) is empty — the stays-down checks live
+        # on Playbook[0] (disrupt) scoped via window_from_disruption_time. The
+        # 5-min hold IS the observation window; no separate longevity playbook.
+        self.assertEqual(_all_postchecks(self.cfg.playbooks[1]), [])
 
-    def test_stays_down_session_stat_stable_28_no_recovery(self):
-        checks = _session_stat_checks(self.cfg.playbooks[1])
+    def test_disrupt_carries_session_stat_stable_28_no_recovery(self):
+        # The session-stat stable check now lives on the disrupt playbook,
+        # scoped to the 5-min hold via window_from_disruption_time.
+        checks = _session_stat_checks(self.cfg.playbooks[0])
         self.assertEqual(len(checks), 1)
         params = _check_params(checks[0])
         # "stays at 28, no recovery" -> stable mode, expected_connected=28.
@@ -431,8 +436,10 @@ class TestTc30SessionStatHCExpectations(_SessionStatHCExpectationsBase):
 
     async def test_steady_28_pass(self):
         cfg = fpf_tc30_fsdb_gr_stop180_no_reenable.create_fpf_tc30_test_config()
+        # Session-stat check now lives on the disrupt playbook (playbooks[0]),
+        # scoped to the 5-min hold via window_from_disruption_time.
         params = self._params_from_config(
-            cfg.playbooks[1], "fpf_tc30_fsdb_gr_stop180_session_stat"
+            cfg.playbooks[0], "fpf_tc30_fsdb_gr_stop180_session_stat"
         )
         self.assertEqual(params["mode"], "stable")
         self.assertEqual(params["expected_connected"], 28)
@@ -451,8 +458,10 @@ class TestTc30SessionStatHCExpectations(_SessionStatHCExpectationsBase):
 
     async def test_climbs_back_to_32_fail(self):
         cfg = fpf_tc30_fsdb_gr_stop180_no_reenable.create_fpf_tc30_test_config()
+        # Session-stat check now lives on the disrupt playbook (playbooks[0]),
+        # scoped to the 5-min hold via window_from_disruption_time.
         params = self._params_from_config(
-            cfg.playbooks[1], "fpf_tc30_fsdb_gr_stop180_session_stat"
+            cfg.playbooks[0], "fpf_tc30_fsdb_gr_stop180_session_stat"
         )
         # The impaired-steady-state contract requires min==max==28; a climb to
         # 32 (fsdb came back unexpectedly) breaks that.

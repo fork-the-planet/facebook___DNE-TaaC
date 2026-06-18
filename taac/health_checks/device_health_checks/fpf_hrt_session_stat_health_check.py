@@ -62,6 +62,11 @@ class FpfHrtSessionStatHealthCheck(
             disruption mode only. Default 60.
         window_start / window_end (float): explicit window overrides.
         lookback_sec (int): fallback window length if no test-case start time.
+        window_from_disruption_time (bool) + window_duration_sec (float): When
+            True and a disruption time was recorded (get_disruption_time() > 0),
+            scope the window to [disruption_time, disruption_time +
+            window_duration_sec] (default window_duration_sec = lookback_sec),
+            overriding the lookback/tc_start window. Default False.
     """
 
     CHECK_NAME = hc_types.CheckName.FPF_HRT_SESSION_STAT_CHECK
@@ -104,22 +109,53 @@ class FpfHrtSessionStatHealthCheck(
                     status=hc_types.HealthCheckStatus.SKIP, message=_skip
                 )
 
-        window_end = float(check_params.get("window_end", time.time()))
-        tc_start = get_test_case_start_time()
-        lookback_sec = check_params.get("lookback_sec", DEFAULT_LOOKBACK_SEC)
-        default_start = tc_start if tc_start else window_end - lookback_sec
-        window_start = float(check_params.get("window_start", default_start))
+        lookback_sec = float(check_params.get("lookback_sec", DEFAULT_LOOKBACK_SEC))
+        # window_from_disruption_time: scope the ODS/collector window to
+        # [disruption_time, disruption_time + window_duration_sec] (the recorded
+        # disruptive-action epoch) instead of the lookback/tc_start window. Falls
+        # back to the normal window resolution when False or when no disruption
+        # time was recorded.
+        window_from_disruption_time = bool(
+            check_params.get("window_from_disruption_time", False)
+        )
+        window_duration_sec = float(
+            check_params.get("window_duration_sec", lookback_sec)
+        )
+        # window_offset_sec: skip the first N seconds after the disruption so the
+        # window excludes the stop-instant boundary sample. The FSDB session
+        # census drops within a few seconds of the stop, so a small offset (~10s)
+        # drops the single pre-drop poll captured at the exact stop epoch.
+        window_offset_sec = float(check_params.get("window_offset_sec", 0))
+        disruption_time = get_disruption_time()
+        if window_from_disruption_time and disruption_time > 0:
+            window_start = disruption_time + window_offset_sec
+            window_end = disruption_time + window_duration_sec
+        else:
+            window_end = float(check_params.get("window_end", time.time()))
+            tc_start = get_test_case_start_time()
+            default_start = tc_start if tc_start else window_end - lookback_sec
+            window_start = float(check_params.get("window_start", default_start))
 
         host = getattr(collector, "host", "?")
         self.logger.info(
             f"  [HRT session-stat] mode={mode} host={host} "
             f"window: {window_start:.0f} to {window_end:.0f} "
             f"({window_end - window_start:.0f}s span)"
+            + (
+                f" [window from disruption_time {int(disruption_time)} "
+                f"+{int(window_duration_sec)}s]"
+                if window_from_disruption_time and disruption_time > 0
+                else ""
+            )
         )
 
         if mode == "stable":
             return await self._run_stable(
-                collector, window_start, window_end, expected_connected
+                collector,
+                window_start,
+                window_end,
+                expected_connected,
+                impacted_lanes,
             )
         return await self._run_disruption(
             collector,
@@ -137,6 +173,7 @@ class FpfHrtSessionStatHealthCheck(
         window_start: float,
         window_end: float,
         expected_connected: int,
+        impacted_lanes: t.Optional[t.List[int]] = None,
     ) -> hc_types.HealthCheckResult:
         res = collector.evaluate_window(
             window_start=window_start,
@@ -149,20 +186,36 @@ class FpfHrtSessionStatHealthCheck(
             and res.min_connected == expected_connected
             and res.max_connected == expected_connected
         )
+        # Color: name the window span + the impacted lane(s) this steady census
+        # reflects + the observed per-host connected min/max/last, so the
+        # returned message is self-describing in the results table.
+        span_sec = window_end - window_start
+        impacted_str = (
+            "lane(s) " + ",".join(f"L{lane}" for lane in (impacted_lanes or []))
+            if impacted_lanes
+            else "none"
+        )
+        window_color = (
+            f"window {span_sec:.0f}s [{window_start:.0f}-{window_end:.0f}], "
+            f"impacted {impacted_str}, "
+            f"connected min={res.min_connected}/max={res.max_connected}/"
+            f"last={res.last_connected} on {host_label(res)}"
+        )
         if res.samples == 0:
             status = hc_types.HealthCheckStatus.SKIP
             reason = f"No in-window HRT session samples — {res.detail}"
         elif ok:
             status = hc_types.HealthCheckStatus.PASS
             reason = (
-                f"CONNECTED held at {expected_connected} across {res.samples} "
-                f"samples (no churn) — {res.detail}"
+                f"CONNECTED held steady at {expected_connected} across "
+                f"{res.samples} samples (no churn; {window_color}) — {res.detail}"
             )
         else:
             status = hc_types.HealthCheckStatus.FAIL
             reason = (
                 f"CONNECTED dipped to {res.min_connected} "
-                f"(expected steady {expected_connected}) — {res.detail}"
+                f"(expected steady {expected_connected}; {window_color}) "
+                f"— {res.detail}"
             )
 
         self.logger.info(f"  [HRT session-stat] (stable) [{status}] {reason}")

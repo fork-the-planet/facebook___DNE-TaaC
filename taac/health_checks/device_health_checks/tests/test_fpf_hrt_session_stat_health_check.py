@@ -70,6 +70,10 @@ class TestFpfHrtSessionStatHealthCheck(unittest.IsolatedAsyncioTestCase):
         )
         self.addCleanup(tcs_patcher.stop)
         tcs_patcher.start()
+        # Default: no disruption time recorded.
+        dt_patcher = patch(f"{HC_MODULE}.get_disruption_time", return_value=0.0)
+        self.addCleanup(dt_patcher.stop)
+        dt_patcher.start()
 
     async def _run(self, collector, params):
         with patch(f"{HC_MODULE}.get_collector", return_value=collector):
@@ -273,6 +277,93 @@ class TestFpfHrtSessionStatHealthCheck(unittest.IsolatedAsyncioTestCase):
         collector = _make_collector(res)
         result = await self._run(collector, {"mode": "stable"})
         self.assertEqual(result.status, hc_types.HealthCheckStatus.SKIP)
+
+    async def test_stable_message_names_window_and_impacted_lane(self):
+        """The stable PASS message includes the window span + impacted lane(s)."""
+        res = FsdbSessionWindowResult(
+            host=GPU_HOST,
+            samples=50,
+            error_samples=0,
+            min_connected=28,
+            max_connected=28,
+            last_connected=28,
+            reached_expected=True,
+            detail="connected min=28 max=28 last=28",
+        )
+        collector = _make_collector(res)
+        result = await self._run(
+            collector,
+            {"mode": "stable", "expected_connected": 28, "impacted_lanes": [0]},
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS)
+        self.assertIn("L0", result.message)
+        self.assertIn("window", result.message)
+        self.assertIn("connected min=28", result.message)
+
+    # ---- window_from_disruption_time --------------------------------------
+
+    async def test_window_from_disruption_time_scopes_window(self):
+        """window_from_disruption_time scopes evaluate_window to
+        [disruption_time, disruption_time + window_duration_sec]."""
+        res = FsdbSessionWindowResult(
+            host=GPU_HOST,
+            samples=50,
+            error_samples=0,
+            min_connected=28,
+            max_connected=28,
+            last_connected=28,
+            reached_expected=True,
+            detail="connected min=28 max=28 last=28",
+        )
+        collector = _make_collector(res)
+        with (
+            patch(f"{HC_MODULE}.get_collector", return_value=collector),
+            patch(f"{HC_MODULE}.get_disruption_time", return_value=7000.0),
+        ):
+            result = await self.health_check._run(
+                self.device,
+                hc_types.BaseHealthCheckIn(),
+                {
+                    "mode": "stable",
+                    "expected_connected": 28,
+                    "impacted_lanes": [0],
+                    "window_from_disruption_time": True,
+                    "window_duration_sec": 180,
+                },
+            )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS)
+        kwargs = collector.evaluate_window.call_args.kwargs
+        self.assertEqual(kwargs["window_start"], 7000.0)
+        self.assertEqual(kwargs["window_end"], 7180.0)
+
+    async def test_window_from_disruption_time_falls_back_when_unset(self):
+        """When no disruption time was recorded (0.0), the normal window is used."""
+        res = FsdbSessionWindowResult(
+            host=GPU_HOST,
+            samples=50,
+            error_samples=0,
+            min_connected=28,
+            max_connected=28,
+            last_connected=28,
+            reached_expected=True,
+            detail="connected min=28 max=28 last=28",
+        )
+        collector = _make_collector(res)
+        # get_disruption_time defaults to 0.0 via setUp patch.
+        result = await self._run(
+            collector,
+            {
+                "mode": "stable",
+                "expected_connected": 28,
+                "impacted_lanes": [0],
+                "window_from_disruption_time": True,
+                "window_duration_sec": 180,
+            },
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS)
+        kwargs = collector.evaluate_window.call_args.kwargs
+        # Falls back to tc_start (1000.0), not the disruption window.
+        self.assertEqual(kwargs["window_start"], 1000.0)
 
     # ---- misc --------------------------------------------------------------
 

@@ -2450,6 +2450,9 @@ def create_fpf_hrt_session_stat_check(
     lookback_sec: int = 900,
     window_start: t.Optional[float] = None,
     window_end: t.Optional[float] = None,
+    window_from_disruption_time: bool = False,
+    window_duration_sec: t.Optional[float] = None,
+    window_offset_sec: t.Optional[float] = None,
     check_id: t.Optional[str] = None,
 ) -> PointInTimeHealthCheck:
     """FPF_HRT_SESSION_STAT_CHECK — HRT CONNECTED FSDB-session census statistics.
@@ -2480,6 +2483,12 @@ def create_fpf_hrt_session_stat_check(
         params["window_start"] = window_start
     if window_end is not None:
         params["window_end"] = window_end
+    if window_from_disruption_time:
+        params["window_from_disruption_time"] = True
+    if window_duration_sec is not None:
+        params["window_duration_sec"] = window_duration_sec
+    if window_offset_sec is not None:
+        params["window_offset_sec"] = window_offset_sec
     return PointInTimeHealthCheck(
         name=hc_types.CheckName.FPF_HRT_SESSION_STAT_CHECK,
         check_params=Params(json_params=json.dumps(params)),
@@ -2590,6 +2599,10 @@ def create_fpf_host_spray_check(
     lookback_sec: int = 900,
     window_start: t.Optional[float] = None,
     window_end: t.Optional[float] = None,
+    label: t.Optional[str] = None,
+    window_from_disruption_time: bool = False,
+    window_duration_sec: t.Optional[float] = None,
+    window_offset_sec: t.Optional[float] = None,
     check_id: t.Optional[str] = None,
 ) -> PointInTimeHealthCheck:
     """FPF_HOST_SPRAY_CHECK — per-lane RDMA egress floor + spray fairness.
@@ -2621,26 +2634,25 @@ def create_fpf_host_spray_check(
     }
     if all_samples:
         params["all_samples"] = True
-    if hosts is not None:
-        params["hosts"] = hosts
-    if entity_desc is not None:
-        params["entity_desc"] = entity_desc
-    if key_desc is not None:
-        params["key_desc"] = key_desc
-    if transform_desc is not None:
-        params["transform_desc"] = transform_desc
-    if min_egress_gbps is not None:
-        params["min_egress_gbps"] = min_egress_gbps
-    if max_spread_gbps is not None:
-        params["max_spread_gbps"] = max_spread_gbps
-    if impacted_lanes_by_host is not None:
-        params["impacted_lanes_by_host"] = impacted_lanes_by_host
-    if impacted_max_gbps is not None:
-        params["impacted_max_gbps"] = impacted_max_gbps
-    if window_start is not None:
-        params["window_start"] = window_start
-    if window_end is not None:
-        params["window_end"] = window_end
+    if window_from_disruption_time:
+        params["window_from_disruption_time"] = True
+    # Emit each optional param only when explicitly provided (not None).
+    optional_params: t.Dict[str, t.Any] = {
+        "hosts": hosts,
+        "entity_desc": entity_desc,
+        "key_desc": key_desc,
+        "transform_desc": transform_desc,
+        "min_egress_gbps": min_egress_gbps,
+        "max_spread_gbps": max_spread_gbps,
+        "impacted_lanes_by_host": impacted_lanes_by_host,
+        "impacted_max_gbps": impacted_max_gbps,
+        "window_start": window_start,
+        "window_end": window_end,
+        "label": label,
+        "window_duration_sec": window_duration_sec,
+        "window_offset_sec": window_offset_sec,
+    }
+    params.update({k: v for k, v in optional_params.items() if v is not None})
     return PointInTimeHealthCheck(
         name=hc_types.CheckName.FPF_HOST_SPRAY_CHECK,
         check_params=Params(json_params=json.dumps(params)),
