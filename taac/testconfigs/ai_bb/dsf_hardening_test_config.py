@@ -10,8 +10,6 @@ golden RDMA traffic item and an RDSW-to-RDSW same-cluster traffic item
 run continuously. Validates that DSF stays consistent across stresses.
 """
 
-import json
-
 from ixia.ixia import types as ixia_types
 from taac.health_checks.healthcheck_definitions import (
     create_core_dumps_snapshot_check,
@@ -32,7 +30,7 @@ from taac.task_definitions import (
     create_run_commands_on_shell_task,
 )
 from taac.test_as_a_config import types as taac_types
-from taac.test_as_a_config.types import Params, TestConfig
+from taac.test_as_a_config.types import TestConfig
 
 # Constants for DSF hardening test
 PEERGROUP_RDSW_EDSW_V6 = "PEERGROUP_RDSW_EDSW_V6"
@@ -324,6 +322,7 @@ def test_config_for_dsf_hardening_in_conveyor(
                                     device_group_name="BGP_ROUTE_INJECTOR",
                                     network_group_name="uplink_golden_prefixes",
                                     network_group_multiplier=2048,
+                                    number_of_addresses_per_row=13,
                                     prefix_start_value="5000:dd::",
                                     prefix_length=64,
                                     nexthop_start_value=f"{ixia_rogue_ic_parent_network_v6}::a000",
@@ -336,6 +335,7 @@ def test_config_for_dsf_hardening_in_conveyor(
                                     device_group_name="BGP_ROUTE_INJECTOR",
                                     network_group_name="uplink_rogue_prefixes",
                                     network_group_multiplier=4096,
+                                    number_of_addresses_per_row=13,
                                     prefix_start_value="5000:ee::",
                                     prefix_length=64,
                                     nexthop_start_value=f"{ixia_rogue_ic_parent_network_v6}::a000",
@@ -380,6 +380,7 @@ def test_config_for_dsf_hardening_in_conveyor(
                                     device_group_name="MIMIC_BGP_PEER",
                                     network_group_name="MIMIC_BGP_PREFIXES",
                                     network_group_multiplier=2048,
+                                    number_of_addresses_per_row=13,
                                     prefix_start_value="5000:dd::",
                                     prefix_length=64,
                                     nexthop_start_value=f"{ixia_rogue_ic_parent_network_v6}::a000",
@@ -392,6 +393,7 @@ def test_config_for_dsf_hardening_in_conveyor(
                                     device_group_name="BGP_ROUTE_INJECTOR",
                                     network_group_name="uplink_rogue_prefixes",
                                     network_group_multiplier=4096,
+                                    number_of_addresses_per_row=13,
                                     prefix_start_value="5000:ee::",
                                     prefix_length=64,
                                     nexthop_start_value=f"{ixia_rogue_ic_parent_network_v6}::a000",
@@ -407,7 +409,7 @@ def test_config_for_dsf_hardening_in_conveyor(
                     taac_types.DeviceGroupConfig(
                         device_group_index=1,
                         tag_name="NDP_SUPPORTING_NEXTHOP",
-                        enable=False,
+                        enable=True,
                         multiplier=2000,
                         v6_addresses_config=taac_types.IpAddressesConfig(
                             starting_ip=f"{ixia_rogue_ic_parent_network_v6}::a000",
@@ -534,17 +536,17 @@ RDSW004_C085_N001_SNC1_HARDENING_NODE = test_config_for_dsf_hardening_in_conveyo
     direct_ixia_connections=[
         taac_types.DirectIxiaConnection(
             interface="eth1/11/1",  # Downlink interface
-            ixia_chassis_ip="2401:db00:116:3006:7ec2:55ff:fee0:fd44",
+            ixia_chassis_ip="2401:db00:116:3006:21a:c5ff:fe01:6f54",
             ixia_port="1/19",
         ),
         taac_types.DirectIxiaConnection(
             interface="eth1/15/1",  # Uplink interface
-            ixia_chassis_ip="2401:db00:116:3006:7ec2:55ff:fee0:fd44",
+            ixia_chassis_ip="2401:db00:116:3006:21a:c5ff:fe01:6f54",
             ixia_port="1/13",
         ),
         taac_types.DirectIxiaConnection(
             interface="eth1/25/1",  # Rogue interface
-            ixia_chassis_ip="2401:db00:116:3006:7ec2:55ff:fee0:fd44",
+            ixia_chassis_ip="2401:db00:116:3006:21a:c5ff:fe01:6f54",
             ixia_port="1/11",
         ),
     ],
@@ -554,7 +556,7 @@ RDSW004_C085_N001_SNC1_HARDENING_NODE = test_config_for_dsf_hardening_in_conveyo
     remote_direct_ixia_connections=[
         taac_types.DirectIxiaConnection(
             interface="eth1/15/1",
-            ixia_chassis_ip="2401:db00:116:3006:7ec2:55ff:fee0:fd44",
+            ixia_chassis_ip="2401:db00:116:3006:21a:c5ff:fe01:6f54",
             ixia_port="1/20",
         ),
     ],
