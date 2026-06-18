@@ -39,16 +39,16 @@ Usage:
     --prefixes 5000:dd::/64,5000:dd:1::/64,5000:dd:2::/64
 
   # Range of 16 prefixes: 5000:dd::, 5000:dd:1::, ... 5000:dd:f:: /64
-  # --increment-step is an IPv6 with a 1 in the hextet to advance.
-  # '0:0:1::' = increment the 3rd hextet (default).
+  # Total count = --pods x --prefixes-per-pod (here 1 x 16). --increment-step
+  # is an IPv6 with a 1 in the hextet to advance ('0:0:1::' = 3rd hextet).
   buck2 run fbcode//scripts/pavanpatil:inject_bgp_prefixes -- \\
     --device gtsw001.l1002.c087.mwg2 \\
-    --prefix-base 5000:dd::/64 --count 16 --increment-step 0:0:1::
+    --prefix-base 5000:dd::/64 --prefixes-per-pod 16 --increment-step 0:0:1::
 
   # Withdraw-only mode (no injection, no validation)
   buck2 run fbcode//scripts/pavanpatil:inject_bgp_prefixes -- \\
     --device gtsw001.l1002.c087.mwg2 \\
-    --prefix-base 5000:dd::/64 --count 16 --increment-step 0:0:1:: \\
+    --prefix-base 5000:dd::/64 --prefixes-per-pod 16 --increment-step 0:0:1:: \\
     --withdraw
 
   # Inject + validate + cleanup at the end
@@ -60,31 +60,74 @@ Usage:
   # the prefix is visible on plane 0 ONLY for device 0
   buck2 run fbcode//scripts/pavanpatil:inject_bgp_prefixes -- \\
     --device gtsw001.l1002.c087.mwg2 \\
-    --prefix-base 5000:dd::/64 --count 16 \\
+    --prefix-base 5000:dd::/64 --prefixes-per-pod 16 \\
     --validate-hrt-host rtptest1544.mwg2 \\
     --validate-hrt-device-id 0
 
   # Use the built-in STSW community preset (PATH_COMMUNITY_STSW_*_HOP2)
   buck2 run fbcode//scripts/pavanpatil:inject_bgp_prefixes -- \\
     --device stsw001.s001.l202.mwg2 \\
-    --prefix-base 5000:dd::/64 --count 16 \\
+    --prefix-base 5000:dd::/64 --prefixes-per-pod 16 \\
     --community-list stsw
 
   # Use the built-in GTSW community preset (PATH_COMMUNITY_GTSW_*_HOP1)
   buck2 run fbcode//scripts/pavanpatil:inject_bgp_prefixes -- \\
     --device gtsw001.l1002.c087.mwg2 \\
-    --prefix-base 5000:dd::/64 --count 16 \\
+    --prefix-base 5000:dd::/64 --prefixes-per-pod 16 \\
     --community-list gtsw
+
+  # Multi-group, INLINE: same attributes everywhere, only the prefix->devices
+  # binding changes. Shared flags (prefixes-per-pod/increment/community/pods/
+  # base-asn) are given ONCE; each --bind maps a prefix base to its device set.
+  # All parallel. e.g. 5000:dd::/64 -> spine planes 1-4, 5000:ee::/64 -> 5-8.
+  # Total per group = --pods x --prefixes-per-pod (144 x 240 = 34560).
+  buck2 run fbcode//scripts/pavanpatil:inject_bgp_prefixes -- \\
+    --pods 144 --prefixes-per-pod 240 --increment-step 0:0:1:: \\
+    --community-list stsw --base-asn-path 4203699001 \\
+    --bind 5000:dd::/64=stsw001.s001.l202.mwg2,stsw001.s002.l202.mwg2,stsw001.s003.l202.mwg2,stsw001.s004.l202.mwg2 \\
+    --bind 5000:ee::/64=stsw001.s005.l202.mwg2,stsw001.s006.l202.mwg2,stsw001.s007.l202.mwg2,stsw001.s008.l202.mwg2
+
+  # Multi-group, FILE form (use when attributes ALSO differ per group).
+  buck2 run fbcode//scripts/pavanpatil:inject_bgp_prefixes -- \\
+    --groups-file /path/to/groups.json
+  #
+  # groups.json:
+  # {
+  #   "groups": [
+  #     {
+  #       "name": "dd-planes-1to4",
+  #       "prefix_base": "5000:dd::/64", "prefixes_per_pod": 240,
+  #       "increment_step": "0:0:1::", "community_list": "stsw",
+  #       "pods": 144, "base_asn_path": 4203699001,
+  #       "devices": ["stsw001.s001.l202.mwg2", "stsw001.s002.l202.mwg2",
+  #                   "stsw001.s003.l202.mwg2", "stsw001.s004.l202.mwg2"]
+  #     },
+  #     {
+  #       "name": "ee-planes-5to8",
+  #       "prefix_base": "5000:ee::/64", "prefixes_per_pod": 240,
+  #       "increment_step": "0:0:1::", "community_list": "stsw",
+  #       "pods": 144, "base_asn_path": 4203699001,
+  #       "devices": ["stsw001.s005.l202.mwg2", "stsw001.s006.l202.mwg2",
+  #                   "stsw001.s007.l202.mwg2", "stsw001.s008.l202.mwg2"]
+  #     }
+  #   ]
+  # }
+  #
+  # Global operation-mode flags still apply to every group, e.g. withdraw all:
+  buck2 run fbcode//scripts/pavanpatil:inject_bgp_prefixes -- \\
+    --groups-file /path/to/groups.json --withdraw
 """
 
 import argparse
 import asyncio
+import copy
 import io
 import ipaddress
+import json
 import re
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, TextIO
+from typing import Any, Dict, List, Optional, Sequence, TextIO
 
 from neteng.fboss.bgp_attr.types import (
     TAsPathSeg,
@@ -730,15 +773,61 @@ def parse_args() -> argparse.Namespace:
         "--devices",
         default=None,
         help="Comma-separated list of device hostnames to inject into. "
-        "Each device gets the same prefixes/communities/flags in sequence. "
-        "Example: --devices stsw001.s001.l202.mwg2,stsw001.s002.l202.mwg2,"
-        "stsw001.s003.l202.mwg2",
+        "Each device gets the same prefixes/communities/flags, injected IN "
+        "PARALLEL. Example: --devices stsw001.s001.l202.mwg2,"
+        "stsw001.s002.l202.mwg2,stsw001.s003.l202.mwg2",
+    )
+    parser.add_argument(
+        "--bind",
+        action="append",
+        default=None,
+        metavar="PREFIX_BASE=DEV1,DEV2,...",
+        help=(
+            "Repeatable shortcut for multi-group injection when ONLY the "
+            "prefix->devices binding changes and every other attribute is "
+            "shared. Each --bind maps one prefix base to a comma-separated "
+            "device list; every binding INHERITS the shared flags "
+            "(--prefixes-per-pod, --increment-step, "
+            "--community-list/--communities, --pods, --base-asn-path, "
+            "--increment-asn-per-pod, ...) and all "
+            "bindings inject IN PARALLEL. Mutually exclusive with "
+            "--groups-file. Example: "
+            "--bind 5000:dd::/64=stsw001.s001.l202.mwg2,stsw001.s002.l202.mwg2 "
+            "--bind 5000:ee::/64=stsw001.s005.l202.mwg2,stsw001.s006.l202.mwg2"
+        ),
+    )
+    parser.add_argument(
+        "--groups-file",
+        default=None,
+        help=(
+            "Path to a JSON spec describing MULTIPLE injection groups, each "
+            "binding its own prefix set + injection logic to its own set of "
+            "devices. Overrides the flat --device(s)/--prefix*/--pod* flags "
+            "(those become per-group defaults). All (group x device) units "
+            "are injected IN PARALLEL. Global operation-mode flags "
+            "(--withdraw, --cleanup, --no-validate, --show-fsdb-communities) "
+            "apply to every group. Schema: "
+            '{"groups": [{"name": "dd-1to4", "prefix_base": "5000:dd::/64", '
+            '"prefixes_per_pod": 240, "increment_step": "0:0:1::", '
+            '"community_list": "stsw", "pods": 144, '
+            '"base_asn_path": 4203699001, "devices": '
+            '["stsw001.s001.l202.mwg2", "...", "stsw001.s004.l202.mwg2"]}, '
+            '{"name": "ee-5to8", "prefix_base": "5000:ee::/64", "...": "...", '
+            '"devices": ["stsw001.s005.l202.mwg2", "..."]}]}. Per-group keys '
+            "mirror the flag names (prefix_base, prefixes, prefix, "
+            "prefixes_per_pod, "
+            "increment_step, community_list, communities, pods, "
+            "pod_asn_preset, pod_asn_list, base_asn_path, "
+            "increment_asn_per_pod, device, devices, name); list-valued keys "
+            "accept a JSON array or a CSV string. Any key omitted in a group "
+            "falls back to the corresponding CLI flag value."
+        ),
     )
     parser.add_argument(
         "--prefix",
         default=DEFAULT_PREFIX,
         help=f"Single CIDR prefix (default: {DEFAULT_PREFIX}). Ignored if "
-        "--prefixes or --prefix-base+--count given.",
+        "--prefixes or --prefix-base given.",
     )
     parser.add_argument(
         "--prefixes",
@@ -749,16 +838,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--prefix-base",
         default=None,
-        help="Base CIDR to auto-generate a range of prefixes from. "
-        "Used with --count and --increment-step. Overrides --prefix and --prefixes. "
-        "Example: --prefix-base 5000:dd::/64 --count 16 --increment-step 0:0:1::  "
-        "yields 5000:dd::, 5000:dd:1::, ... 5000:dd:f::/64",
+        help="Base CIDR to auto-generate a range of prefixes from. The total "
+        "count is --pods x --prefixes-per-pod (see --prefixes-per-pod). Used "
+        "with --increment-step. Overrides --prefix and --prefixes. Example: "
+        "--prefix-base 5000:dd::/64 --pods 1 --prefixes-per-pod 16 "
+        "--increment-step 0:0:1:: yields 5000:dd::, 5000:dd:1::, "
+        "... 5000:dd:f::/64",
     )
     parser.add_argument(
-        "--count",
+        "--prefixes-per-pod",
         type=int,
         default=1,
-        help="Number of prefixes to generate from --prefix-base (default: 1)",
+        help="Number of prefixes to generate from --prefix-base PER POD "
+        "(default: 1). The total prefix count is --pods x --prefixes-per-pod, "
+        "and each Pod Mosaic bucket owns exactly this many prefixes. With the "
+        "default --pods 1 this is simply the total prefix count. There is no "
+        "separate --count flag; the total is always derived this way. "
+        "Example: --pods 144 --prefixes-per-pod 240 -> 34560 prefixes.",
     )
     parser.add_argument(
         "--increment-step",
@@ -802,6 +898,14 @@ def parse_args() -> argparse.Namespace:
         "--no-validate",
         action="store_true",
         help="Skip the RIB validation step (inject only)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Resolve and validate the plan (groups, prefixes, communities, "
+        "Pod Mosaic ASNs, devices) and print a summary WITHOUT connecting to "
+        "any device or injecting anything. Useful for vetting a --groups-file "
+        "before a large blast.",
     )
     parser.add_argument(
         "--show-fsdb-communities",
@@ -1089,10 +1193,34 @@ async def show_fsdb_communities(
     return filtered
 
 
+def _effective_pod_count(args: argparse.Namespace) -> int:
+    """The pod count used to size a --prefix-base range, resolved the SAME way
+    resolve_pod_mosaic resolves it: explicit --pods when >= 2, otherwise the
+    length implied by a --pod-asn-preset / --pod-asn-list, else 1. Keeps the
+    derived total (pods x prefixes-per-pod) consistent with the partition."""
+    pods = int(getattr(args, "pods", 1) or 1)
+    if pods >= 2:
+        return pods
+    preset = getattr(args, "pod_asn_preset", None)
+    csv = getattr(args, "pod_asn_list", None)
+    if preset is not None:
+        return len(POD_MOSAIC_PRESETS[preset])
+    if csv is not None:
+        return len(_parse_pod_asn_csv(csv))
+    return 1
+
+
 def resolve_prefix_strs(args: argparse.Namespace) -> List[str]:
-    """Pick the prefix source in priority order: --prefix-base > --prefixes > --prefix."""
+    """Pick the prefix source in priority order: --prefix-base > --prefixes >
+    --prefix. For --prefix-base the total count is derived as
+    --pods x --prefixes-per-pod (there is no standalone --count flag)."""
     if args.prefix_base:
-        return expand_prefix_range(args.prefix_base, args.count, args.increment_step)
+        per_pod = getattr(args, "prefixes_per_pod", 1)
+        per_pod = 1 if per_pod is None else int(per_pod)
+        if per_pod < 1:
+            raise ValueError("--prefixes-per-pod must be >= 1")
+        count = _effective_pod_count(args) * per_pod
+        return expand_prefix_range(args.prefix_base, count, args.increment_step)
     if args.prefixes:
         return [p.strip() for p in args.prefixes.split(",") if p.strip()]
     return [args.prefix]
@@ -1221,142 +1349,357 @@ def resolve_pod_mosaic(
     return pod_asn_list
 
 
-async def run(args: argparse.Namespace) -> int:
-    community_strs = resolve_community_strs(args)
-    if not community_strs:
-        logger.error("No communities provided")
-        return 2
-    if args.community_list:
-        logger.info(
-            f"Using preset community list '{args.community_list}' "
-            f"({len(community_strs)} communities)"
-        )
+# ---------------------------------------------------------------------------
+# Multi-group injection — distinct prefix sets to distinct device sets
+# ---------------------------------------------------------------------------
+#
+# A "group" binds one fully-resolved prefix set + injection attributes (the
+# same logic the flat single-group path builds: prefix range, communities, and
+# optional Pod Mosaic AS_PATH) to its OWN set of devices. Multiple groups let
+# you, e.g., inject 5000:dd::/64 onto STSW spine planes 1-4 and 5000:ee::/64
+# onto planes 5-8 in the same run. Every (group x device) unit is injected in
+# parallel.
 
-    prefix_strs = resolve_prefix_strs(args)
+# Per-group JSON keys that mirror argparse dests one-to-one (scalar values).
+_GROUP_SCALAR_KEYS = frozenset(
+    {
+        "prefix_base",
+        "prefix",
+        "prefixes_per_pod",
+        "increment_step",
+        "community_list",
+        "pods",
+        "pod_asn_preset",
+        "base_asn_path",
+        "increment_asn_per_pod",
+        "device",
+    }
+)
+# List-valued keys: accept a JSON array OR a CSV string. Normalized back to CSV
+# so the existing resolve_* helpers (which split on ",") work unchanged.
+_GROUP_CSV_KEYS = frozenset({"prefixes", "communities", "pod_asn_list", "devices"})
+_ALLOWED_GROUP_KEYS = _GROUP_SCALAR_KEYS | _GROUP_CSV_KEYS | {"name"}
+
+
+@dataclass
+class GroupPlan:
+    """One fully-resolved injection group: a prefix set + injection attributes
+    bound to a set of devices."""
+
+    label: str
+    devices: List[str]
+    prefixes: List[TIpPrefix]
+    communities: List[TBgpCommunity]
+    display_strs: List[str]
+    community_strs: List[str]
+    prefix_as_path: Optional[Dict[TIpPrefix, List[int]]]
+    pod_asn_list: Optional[List[int]]
+
+
+@dataclass
+class InjectionUnit:
+    """A single (group, device) pair — the atom of parallel execution."""
+
+    key: str
+    plan: GroupPlan
+    device: str
+
+
+def _csv_from_json(value: Any) -> str:
+    """Normalize a JSON list-or-scalar into the CSV form resolve_* expects."""
+    if isinstance(value, list):
+        return ",".join(str(v).strip() for v in value)
+    return str(value)
+
+
+def _namespace_for_group(
+    base_args: argparse.Namespace, group: Dict[str, Any]
+) -> argparse.Namespace:
+    """Build a per-group namespace by copying base_args and overriding the keys
+    present in the group dict. copy.copy isolates resolve_pod_mosaic's mutation
+    of .pods so groups don't contaminate each other."""
+    unknown = set(group) - _ALLOWED_GROUP_KEYS
+    if unknown:
+        raise ValueError(
+            f"group {group.get('name', '?')!r}: unknown key(s) "
+            f"{sorted(unknown)}; allowed keys are {sorted(_ALLOWED_GROUP_KEYS)}"
+        )
+    ns = copy.copy(base_args)
+    ns.groups_file = None  # a group never re-inherits the spec path
+    for key, value in group.items():
+        if key == "name":
+            continue
+        if key in _GROUP_CSV_KEYS:
+            setattr(ns, key, _csv_from_json(value))
+        else:
+            setattr(ns, key, value)
+    return ns
+
+
+def _resolve_group(label: str, ns: argparse.Namespace) -> GroupPlan:
+    """Resolve one group's namespace into a GroupPlan, running every validation
+    the flat single-group path runs."""
+    community_strs = resolve_community_strs(ns)
+    if not community_strs:
+        raise ValueError(f"group {label!r}: no communities provided")
+    prefix_strs = resolve_prefix_strs(ns)
     if not prefix_strs:
-        logger.error("No prefixes provided")
-        return 2
+        raise ValueError(f"group {label!r}: no prefixes provided")
+    devices = resolve_device_strs(ns)
+    if not devices:
+        raise ValueError(f"group {label!r}: no devices provided")
 
     prefixes = [build_tip_prefix(p) for p in prefix_strs]
     communities = build_communities(community_strs)
     display_strs = [prefix_to_str(p) for p in prefixes]
-
-    # Pod Mosaic resolution (validates flags, returns None on backcompat path).
     try:
-        pod_asn_list = resolve_pod_mosaic(args, len(prefixes))
+        pod_asn_list = resolve_pod_mosaic(ns, len(prefixes))
     except ValueError as e:
-        logger.error(f"Pod Mosaic flag error: {e}")
-        return 2
+        raise ValueError(f"group {label!r}: Pod Mosaic flag error: {e}") from e
     prefix_as_path: Optional[Dict[TIpPrefix, List[int]]] = None
     if pod_asn_list is not None:
         prefix_as_path = build_pod_mosaic_as_path_map(prefixes, pod_asn_list)
-        logger.info(
-            f"Pod Mosaic active: --pods={args.pods}, "
-            f"pod_asn_list={pod_asn_list}; "
-            f"{len(prefixes)} prefix(es) partitioned across {args.pods} buckets"
-        )
-
-    devices = resolve_device_strs(args)
-    logger.info(
-        f"Operating on {len(devices)} device(s) IN PARALLEL with "
-        f"{len(prefixes)} prefix(es): {', '.join(devices)}"
+    return GroupPlan(
+        label=label,
+        devices=devices,
+        prefixes=prefixes,
+        communities=communities,
+        display_strs=display_strs,
+        community_strs=community_strs,
+        prefix_as_path=prefix_as_path,
+        pod_asn_list=pod_asn_list,
     )
 
-    # Per-device output buffers so async tasks don't interleave reports
-    buffers: Dict[str, io.StringIO] = {d: io.StringIO() for d in devices}
 
-    async def _one(device: str) -> bool:
-        buf = buffers[device]
-        print(f"\n{'#' * 78}\n#  DEVICE: {device}\n{'#' * 78}", file=buf)
+def _plans_from_binds(args: argparse.Namespace) -> List[GroupPlan]:
+    """Build one GroupPlan per --bind PREFIX_BASE=DEV1,DEV2,... entry. Every
+    binding inherits the shared flat flags (count, increment, community, Pod
+    Mosaic, ...); only the prefix base and device set vary."""
+    plans: List[GroupPlan] = []
+    seen: set = set()
+    for i, raw in enumerate(args.bind):
+        if "=" not in raw:
+            raise ValueError(
+                f"--bind #{i}: expected PREFIX_BASE=DEV1,DEV2,...; got {raw!r}"
+            )
+        prefix_base, dev_csv = raw.split("=", 1)
+        prefix_base, dev_csv = prefix_base.strip(), dev_csv.strip()
+        if not prefix_base or not dev_csv:
+            raise ValueError(
+                f"--bind #{i}: both a prefix base and a device list are "
+                f"required; got {raw!r}"
+            )
+        if prefix_base in seen:
+            raise ValueError(f"--bind: duplicate prefix base {prefix_base!r}")
+        seen.add(prefix_base)
+        ns = copy.copy(args)
+        ns.bind = None
+        ns.groups_file = None
+        # Override only the prefix source + devices; prefix_base wins over any
+        # inherited --prefixes/--prefix in resolve_prefix_strs.
+        ns.prefix_base = prefix_base
+        ns.devices = dev_csv
+        plans.append(_resolve_group(prefix_base, ns))
+    return plans
+
+
+def build_group_plans(args: argparse.Namespace) -> List[GroupPlan]:
+    """Return the injection groups. --bind: one GroupPlan per inline
+    PREFIX=devices binding (shared attrs). --groups-file: one GroupPlan per
+    JSON group (each MUST name its own devices). Otherwise: a single GroupPlan
+    from the flat CLI flags (byte-for-byte backcompat)."""
+    if args.bind and args.groups_file:
+        raise ValueError("--bind and --groups-file are mutually exclusive")
+    if args.bind:
+        return _plans_from_binds(args)
+    if not args.groups_file:
+        return [_resolve_group("default", args)]
+
+    with open(args.groups_file) as fh:
+        spec = json.load(fh)
+    groups = spec.get("groups") if isinstance(spec, dict) else spec
+    if not isinstance(groups, list) or not groups:
+        raise ValueError(
+            f"--groups-file {args.groups_file!r}: expected a non-empty "
+            '"groups" list (or a top-level JSON array of group objects).'
+        )
+
+    plans: List[GroupPlan] = []
+    seen_labels: set = set()
+    for i, group in enumerate(groups):
+        if not isinstance(group, dict):
+            raise ValueError(f"--groups-file: group #{i} is not a JSON object")
+        if "devices" not in group and "device" not in group:
+            raise ValueError(
+                f"--groups-file: group #{i} ({group.get('name', '?')!r}) must "
+                "specify 'devices' or 'device' (groups mode does not fall back "
+                "to the flat --device default)."
+            )
+        label = str(group.get("name") or f"group{i + 1}")
+        if label in seen_labels:
+            raise ValueError(f"--groups-file: duplicate group name {label!r}")
+        seen_labels.add(label)
+        plans.append(_resolve_group(label, _namespace_for_group(args, group)))
+    return plans
+
+
+async def run(args: argparse.Namespace) -> int:
+    try:
+        plans = build_group_plans(args)
+    except (ValueError, OSError, json.JSONDecodeError) as e:
+        logger.error(f"Group/prefix spec error: {e}")
+        return 2
+
+    for plan in plans:
+        tag = "" if plan.label == "default" else f"[group {plan.label}] "
+        if plan.community_strs and getattr(args, "community_list", None):
+            logger.info(
+                f"{tag}Using preset community list '{args.community_list}' "
+                f"({len(plan.community_strs)} communities)"
+            )
+        if plan.pod_asn_list is not None:
+            logger.info(
+                f"{tag}Pod Mosaic active: pod_asn_list={plan.pod_asn_list}; "
+                f"{len(plan.prefixes)} prefix(es) partitioned across "
+                f"{len(plan.pod_asn_list)} buckets"
+            )
+
+    # Expand to (group x device) units. Single-group runs key by bare device
+    # name (backcompat); multi-group runs disambiguate with the group label.
+    multi = len(plans) > 1
+    units: List[InjectionUnit] = []
+    for plan in plans:
+        for device in plan.devices:
+            key = f"{plan.label} :: {device}" if multi else device
+            units.append(InjectionUnit(key=key, plan=plan, device=device))
+
+    total_injections = sum(len(u.plan.prefixes) for u in units)
+    logger.info(
+        f"Operating on {len(units)} unit(s) across {len(plans)} group(s) "
+        f"IN PARALLEL; {total_injections} total prefix-injection(s)"
+    )
+
+    if args.dry_run:
+        print("\n" + "=" * 78)
+        print(
+            f"  DRY RUN — {len(plans)} group(s), {len(units)} unit(s), "
+            f"{total_injections} total prefix-injection(s); nothing sent"
+        )
+        print("=" * 78)
+        for plan in plans:
+            asn_span = (
+                f"{plan.pod_asn_list[0]}..{plan.pod_asn_list[-1]}"
+                if plan.pod_asn_list
+                else "none"
+            )
+            print(
+                f"  group {plan.label!r}: {len(plan.prefixes)} prefix(es) "
+                f"[{plan.display_strs[0]} .. {plan.display_strs[-1]}], "
+                f"{len(plan.community_strs)} community(ies), "
+                f"pod_asn={asn_span}, {len(plan.devices)} device(s):"
+            )
+            for d in plan.devices:
+                print(f"      - {d}")
+        print("=" * 78 + "\n")
+        return 0
+
+    # Per-unit output buffers so async tasks don't interleave reports.
+    buffers: Dict[str, io.StringIO] = {u.key: io.StringIO() for u in units}
+
+    async def _one(unit: InjectionUnit) -> bool:
+        buf = buffers[unit.key]
+        print(f"\n{'#' * 78}\n#  UNIT: {unit.key}\n{'#' * 78}", file=buf)
         try:
             return await run_for_device(
                 args,
-                device,
-                prefixes,
-                communities,
-                display_strs,
-                community_strs,
+                unit.device,
+                unit.plan.prefixes,
+                unit.plan.communities,
+                unit.plan.display_strs,
+                unit.plan.community_strs,
                 out=buf,
-                prefix_as_path=prefix_as_path,
-                pod_asn_list=pod_asn_list,
+                prefix_as_path=unit.plan.prefix_as_path,
+                pod_asn_list=unit.plan.pod_asn_list,
             )
         except Exception as e:
-            print(f"\n  EXCEPTION on {device}: {e!r}\n", file=buf)
-            logger.exception(f"[{device}] run_for_device failed")
+            print(f"\n  EXCEPTION on {unit.key}: {e!r}\n", file=buf)
+            logger.exception(f"[{unit.key}] run_for_device failed")
             return False
 
-    results_list = await asyncio.gather(*(_one(d) for d in devices))
+    results_list = await asyncio.gather(*(_one(u) for u in units))
 
-    per_device_pass: Dict[str, bool] = dict(zip(devices, results_list))
+    per_unit_pass: Dict[str, bool] = {u.key: r for u, r in zip(units, results_list)}
     all_passed = all(results_list)
 
     await _flush_or_paste(
-        devices=devices,
-        prefix_count=len(prefixes),
+        unit_keys=[u.key for u in units],
+        prefix_count=total_injections,
         buffers=buffers,
-        per_device_pass=per_device_pass,
+        per_unit_pass=per_unit_pass,
         title=(
-            "Multi-device WITHDRAW report"
+            "Multi-unit WITHDRAW report"
             if args.withdraw
-            else "Multi-device INJECT + VALIDATION report"
+            else "Multi-unit INJECT + VALIDATION report"
         ),
     )
 
     return 0 if all_passed else 1
 
 
-# Threshold above which per-device reports are concatenated and uploaded to
+# Threshold above which per-unit reports are concatenated and uploaded to
 # Everpaste rather than printed inline (avoids flooding the terminal for
 # large injections / withdrawals).
 INLINE_REPORT_PREFIX_THRESHOLD = 20
 
 
 async def _flush_or_paste(
-    devices: Sequence[str],
+    unit_keys: Sequence[str],
     prefix_count: int,
     buffers: Dict[str, io.StringIO],
-    per_device_pass: Dict[str, bool],
+    per_unit_pass: Dict[str, bool],
     title: str,
 ) -> None:
-    """If prefix_count is small, dump per-device buffers inline. Otherwise
+    """If prefix_count is small, dump per-unit buffers inline. Otherwise
     concatenate them all and upload to Everpaste; print only the link plus
-    the multi-device summary inline."""
+    the multi-unit summary inline. A "unit" is one (group, device) pair."""
     big = prefix_count > INLINE_REPORT_PREFIX_THRESHOLD
 
     if not big:
-        for d in devices:
-            sys.stdout.write(buffers[d].getvalue())
+        for k in unit_keys:
+            sys.stdout.write(buffers[k].getvalue())
         sys.stdout.flush()
     else:
         full = []
         full.append(f"{title}\n")
-        full.append(f"Prefix count: {prefix_count}  |  Devices: {len(devices)}\n")
+        full.append(
+            f"Total prefix-injections: {prefix_count}  |  Units: {len(unit_keys)}\n"
+        )
         full.append("=" * 78 + "\n\n")
-        for d in devices:
-            full.append(buffers[d].getvalue())
+        for k in unit_keys:
+            full.append(buffers[k].getvalue())
         body = "".join(full)
         try:
             ep_url = await async_everpaste_str(body, logger=logger)
             print(
-                f"\n  Per-device report ({prefix_count} prefixes × "
-                f"{len(devices)} devices) is large -> uploaded to Everpaste"
+                f"\n  Per-unit report ({prefix_count} prefix-injections across "
+                f"{len(unit_keys)} units) is large -> uploaded to Everpaste"
             )
             print(f"  -> {ep_url}\n")
         except Exception as e:
             logger.error(
                 f"Everpaste upload failed ({e}); falling back to inline output"
             )
-            for d in devices:
-                sys.stdout.write(buffers[d].getvalue())
+            for k in unit_keys:
+                sys.stdout.write(buffers[k].getvalue())
             sys.stdout.flush()
 
-    # Multi-device summary is always inline; it's tiny and important.
-    if len(devices) > 1:
+    # Multi-unit summary is always inline; it's tiny and important.
+    if len(unit_keys) > 1:
         print("\n" + "=" * 78)
-        print("  Multi-device summary")
+        print("  Multi-unit summary")
         print("=" * 78)
-        for d in devices:
-            print(f"  {'PASS' if per_device_pass[d] else 'FAIL'}  {d}")
+        for k in unit_keys:
+            print(f"  {'PASS' if per_unit_pass[k] else 'FAIL'}  {k}")
         print("=" * 78 + "\n")
 
 
