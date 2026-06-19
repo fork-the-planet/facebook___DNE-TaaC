@@ -17,7 +17,6 @@ import typing as t
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from enum import Enum
-from functools import reduce
 from ipaddress import ip_address, ip_network, IPv4Interface, IPv6Interface
 from typing import (
     Any,
@@ -36,7 +35,25 @@ from typing import (
 # =============================================================================
 # Third-party (PyPI / OSS-compatible)
 # =============================================================================
-import bunch
+if t.TYPE_CHECKING:
+    # Keep Pyre on the real `bunch` types; the runtime fallback below would
+    # otherwise widen `bunch.Bunch` to `Bunch | SimpleNamespace`, which breaks
+    # callers (and the `import *` re-export in dne/drivers/fboss_switch.py).
+    import bunch
+else:
+    try:
+        import bunch
+    except ImportError:
+        # bunch is abandoned (last updated 2011), use types.SimpleNamespace as replacement
+        from types import SimpleNamespace as Bunch
+
+        class BunchModule:
+            """Compatibility wrapper for abandoned bunch module"""
+
+            Bunch = Bunch
+
+        bunch = BunchModule()
+
 
 # =============================================================================
 # FBOSS thrift types & clients (already OSS'd)
@@ -44,7 +61,46 @@ import bunch
 import neteng.fboss.bgp_thrift.types as fboss_bgp_thrift_types
 import neteng.fboss.fsdb.types as fsdb_types
 import pexpect
-from fboss.fb_thrift_clients import FbossAgentClient, FbossAgentClientWrapper
+
+TAAC_OSS = os.environ.get("TAAC_OSS", "").lower() in ("1", "true", "yes")
+
+# `t.TYPE_CHECKING or` keeps the real FbossAgentClient visible to Pyre so
+# `with self._get_fboss_agent_client() as client:` type-checks as a context
+# manager (the OSS stub below is a runtime-only fallback).
+if t.TYPE_CHECKING or not TAAC_OSS:
+    from fboss.fb_thrift_clients import FbossAgentClient, FbossAgentClientWrapper
+else:
+    # OSS stubs - fboss.fb_thrift_clients is Meta-internal
+    # Use FbossCtrl from OSS bindings as base
+    class FbossAgentClient:  # type: ignore
+        """OSS stub - using FbossCtrl from neteng.fboss.ctrl.clients"""
+
+        def __init__(self, hostname: str, port: int = 5909, timeout: int = 30):
+            from neteng.fboss.ctrl.clients import FbossCtrl
+
+            self.hostname = hostname
+            self.port = port
+            self.timeout = timeout
+            self._client = FbossCtrl
+
+    class FbossAgentClientWrapper:  # type: ignore
+        """OSS stub - context manager wrapper for FbossCtrl"""
+
+        def __init__(self, host: str, timeout: int = 30):
+            self.host = host
+            self.timeout = timeout
+            self._client = None
+
+        def __enter__(self):
+            from neteng.fboss.ctrl.clients import FbossCtrl
+
+            # In OSS, return the client class - actual instantiation happens elsewhere
+            return FbossCtrl
+
+        def __exit__(self, *args):
+            pass
+
+
 from neteng.fboss.bgp_attr.types import TBgpAfi, TIpPrefix
 from neteng.fboss.bgp_route_types.types import TBgpPath, TRibEntry
 from neteng.fboss.bgp_thrift.clients import TBgpService
@@ -126,8 +182,6 @@ from taac.driver.driver_constants import (
     SwitchLldpData,
     SystemctlServiceName,
     SystemctlServiceStatus,
-    SystemRebootMethod,
-    WAIT_FOR_DEVICE_UP_AFTER_REBOOT,
 )
 from taac.driver.drivers_common import (
     BgpPeerNotFoundError,
@@ -153,15 +207,11 @@ from taac.utils.oss_taac_lib_utils import (
     async_memoize_timed,
     async_retryable,
     await_sync,
-    ConsoleFileLogger,
-    convert_to_async,
     none_throws,
     retryable,
     to_fb_fqdn,
     to_fb_uqdn,
 )
-
-TAAC_OSS = os.environ.get("TAAC_OSS", "").lower() in ("1", "true", "yes")
 
 if not TAAC_OSS:
     from openr.py.openr.cli.utils.commands import OpenrCtrlCmd
@@ -180,7 +230,7 @@ from thrift.python.exceptions import Error as ThriftPythonError
 
 def fb_gethostbyname(hostname: str) -> str:
     """Resolve hostname to IP address."""
-    return socket.gethostbyname(hostname)
+    return socket.gethostbyname(hostname)  # @nolint PATTERNLINT(python-dns-deps)
 
 
 PexpectSpawnType = pexpect.spawn
@@ -1972,9 +2022,9 @@ class FbossSwitch(AbstractSwitch):
                 elif isinstance(ip_addr, ipaddress.IPv6Interface):
                     intf_name_to_local_v6_ip_map[intf_name] = str(ip_addr.ip)
 
-        intf_name_to_prefix_count_map: Dict[str, int] = {
-            intf_name: 0 for intf_name in intf_addr_map.keys()
-        }
+        intf_name_to_prefix_count_map: Dict[str, int] = dict.fromkeys(
+            intf_addr_map.keys(), 0
+        )
         for session in all_bgp_sessions:
             for intf_name in intf_name_to_prefix_count_map.keys():
                 local_v4_ip = intf_name_to_local_v4_ip_map.get(intf_name, "")
@@ -2172,7 +2222,7 @@ class FbossSwitch(AbstractSwitch):
         running on the whole device
         """
 
-        all_bgp_neigh_state: DefaultDict[str, int] = defaultdict(int)
+        all_bgp_neigh_state: DefaultDict[str, int] = defaultdict(int)  # noqa: B910
 
         all_bgp_sessions = await self.async_get_bgp_sessions()
         if not all_bgp_sessions:
@@ -2206,7 +2256,7 @@ class FbossSwitch(AbstractSwitch):
         running on the whole device
         """
 
-        all_bgp_neigh_state: DefaultDict[str, int] = defaultdict(int)
+        all_bgp_neigh_state: DefaultDict[str, int] = defaultdict(int)  # noqa: B910
 
         all_bgp_sessions = await self.async_get_bgp_sessions()
         if not all_bgp_sessions:
@@ -2281,11 +2331,9 @@ class FbossSwitch(AbstractSwitch):
                 <ingress_interface_2>: <in_bits.rate.60_value>,
             },
         """
-        ingress_interface_keys = list(
-            map(
-                lambda interface: INGRESS_RATE_KEY.format(interface), ingress_interfaces
-            )
-        )
+        ingress_interface_keys = [
+            INGRESS_RATE_KEY.format(interface) for interface in ingress_interfaces
+        ]
         ingress_stats_bytes = await self.async_get_selected_counters(
             ingress_interface_keys
         )
@@ -2312,9 +2360,9 @@ class FbossSwitch(AbstractSwitch):
                 <egress_interface_2>: <out_bits.rate.60_value>,
             },
         """
-        egress_interface_keys = list(
-            map(lambda interface: EGRESS_RATE_KEY.format(interface), egress_interfaces)
-        )
+        egress_interface_keys = [
+            EGRESS_RATE_KEY.format(interface) for interface in egress_interfaces
+        ]
         egress_stats_bytes = await self.async_get_selected_counters(
             egress_interface_keys
         )
@@ -3604,12 +3652,9 @@ class FbossSwitch(AbstractSwitch):
     async def async_get_egress_pkt_traffic_stats(
         self, egress_interfaces: List[str]
     ) -> Dict[str, float]:
-        egress_interface_keys = list(
-            map(
-                lambda interface: EGRESS_PKT_RATE_KEY.format(interface),
-                egress_interfaces,
-            )
-        )
+        egress_interface_keys = [
+            EGRESS_PKT_RATE_KEY.format(interface) for interface in egress_interfaces
+        ]
         egress_stats_pkts = await self.async_get_selected_counters(
             egress_interface_keys
         )
@@ -4574,11 +4619,6 @@ class FbossSwitch(AbstractSwitch):
         }
         interfaces = interfaces or list(interface_to_port_id.keys())
 
-        port_ids = [
-            interface_to_port_id[intf]
-            for intf in interfaces
-            if intf in interface_to_port_id
-        ]
         port_status_map: Mapping[int, PortStatus] = await self.async_get_port_status()
 
         interface_states = {}
@@ -5357,7 +5397,6 @@ class FbossSwitch(AbstractSwitch):
         from openr.thrift.Network.thrift_types import PrefixType
         from openr.thrift.Types.thrift_types import PrefixEntry
 
-        network = ip_network(prefix, strict=False)
         prefix_entry = PrefixEntry(
             prefix=ip_str_to_prefix(prefix),
             type=PrefixType.BREEZE,

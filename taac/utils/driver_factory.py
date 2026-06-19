@@ -6,14 +6,6 @@ import typing as t
 
 from taac.constants import OS_TO_DEVICE_OS_TYPE_MAP
 from taac.driver.abstract_switch import AbstractSwitch
-from taac.internal.driver.arista_fboss_switch import (
-    AristaFbossSwitch,
-)
-from taac.internal.driver.arista_switch import AristaSwitch
-from taac.internal.driver.cisco_switch import CiscoSwitch
-from taac.internal.driver.fboss_switch_internal import (
-    FbossSwitchInternal,
-)
 from taac.utils.oss_taac_lib_utils import (
     async_memoize_timed,
     ConsoleFileLogger,
@@ -24,13 +16,33 @@ from taac.test_as_a_config import types as taac_types
 LOGGER: ConsoleFileLogger = get_root_logger()
 TAAC_OSS = os.environ.get("TAAC_OSS", "").lower() in ("1", "true", "yes")
 
-DEVICE_OS_DRIVER_CLASS_MAP = {
-    taac_types.DeviceOsType.FBOSS: FbossSwitchInternal,
-    taac_types.DeviceOsType.ARISTA_OS: AristaSwitch,
-    taac_types.DeviceOsType.CISCO: CiscoSwitch,
-    taac_types.DeviceOsType.IOSXR: CiscoSwitch,
-    taac_types.DeviceOsType.ARISTA_FBOSS: AristaFbossSwitch,
-}
+# Meta-internal drivers — only importable outside OSS mode. In OSS, the
+# map starts empty and users are expected to register their own drivers
+# (custom subclasses of AbstractSwitch) via add_device_os_driver_class(),
+# alongside add_host_to_device_os_type_data() for OS detection.
+if not TAAC_OSS:
+    from taac.internal.driver.arista_fboss_switch import (
+        AristaFbossSwitch,
+    )
+    from taac.internal.driver.arista_switch import AristaSwitch
+    from taac.internal.driver.cisco_switch import CiscoSwitch
+    from taac.internal.driver.fboss_switch_internal import (
+        FbossSwitchInternal,
+    )
+
+    DEVICE_OS_DRIVER_CLASS_MAP: t.Dict[
+        taac_types.DeviceOsType, t.Type[AbstractSwitch]
+    ] = {
+        taac_types.DeviceOsType.FBOSS: FbossSwitchInternal,
+        taac_types.DeviceOsType.ARISTA_OS: AristaSwitch,
+        taac_types.DeviceOsType.CISCO: CiscoSwitch,
+        taac_types.DeviceOsType.IOSXR: CiscoSwitch,
+        taac_types.DeviceOsType.ARISTA_FBOSS: AristaFbossSwitch,
+    }
+else:
+    DEVICE_OS_DRIVER_CLASS_MAP: t.Dict[
+        taac_types.DeviceOsType, t.Type[AbstractSwitch]
+    ] = {}
 
 HOST_TO_DEVICE_OS_TYPE_MAP = {}
 HOST_TO_DRIVER_ARGS_MAP = {}
@@ -46,6 +58,19 @@ def add_host_to_driver_args_data(
     hostname: str, driver_args: t.Dict[str, t.Any]
 ) -> None:
     HOST_TO_DRIVER_ARGS_MAP[hostname] = driver_args
+
+
+def add_device_os_driver_class(
+    device_os_type: taac_types.DeviceOsType,
+    driver_class: t.Type[AbstractSwitch],
+) -> None:
+    """Register a driver class for a device OS type.
+
+    In OSS mode the driver map starts empty; callers must register their own
+    AbstractSwitch subclasses before async_get_device_driver() can resolve a
+    driver for that OS type.
+    """
+    DEVICE_OS_DRIVER_CLASS_MAP[device_os_type] = driver_class
 
 
 @async_memoize_timed(3600)
@@ -110,7 +135,13 @@ async def async_get_device_driver(
                     )
 
     LOGGER.debug(f"device os type for {hostname} is {device_os_type.name}")
-    driver_class = DEVICE_OS_DRIVER_CLASS_MAP[device_os_type]
+    driver_class = DEVICE_OS_DRIVER_CLASS_MAP.get(device_os_type)
+    if driver_class is None:
+        raise ValueError(
+            f"No driver class registered for device OS type "
+            f"'{device_os_type.name}' (hostname '{hostname}'). "
+            f"In OSS mode, register one via add_device_os_driver_class()."
+        )
     # pyrefly: ignore [bad-argument-type]
     driver_args_dict = json.loads(HOST_TO_DRIVER_ARGS_MAP.get(hostname, "{}"))
     device_driver_class = driver_class(
