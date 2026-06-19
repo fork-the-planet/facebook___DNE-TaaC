@@ -214,14 +214,15 @@ def _create_2_1_1_initial_dump_identical_routes_playbook():
     )
     # Steps 6-7: capture the initial-dump UPDATEs to two iBGP peers in the same
     # update group and assert they are identical (NLRI/AS_PATH/LOCAL_PREF/
-    # COMMUNITY/MED; only next-hop may differ). Runs as a custom step that flaps
-    # BOTH iBGP peers TOGETHER under a single capture (brings both down, settles,
-    # then brings both up) so they rejoin the update group at the same point in
-    # its dump cycle and receive the same synchronized distribution -- flapping
-    # one peer at a time is invalid (a peer rejoining an already-converged group
-    # alone gets a different slice of the table). It captures on the iBGP vport,
-    # then parses + compares the pcaps. Requires a full IXIA run (capture won't
-    # work under --skip-setup-tasks).
+    # COMMUNITY/MED; only next-hop may differ). Per the 2.1.1 test plan this is a
+    # COLD START: the custom step flaps the WHOLE BGP layer DOWN (no established
+    # sessions -- pre-condition 1) then all UP together (step 1), so the update
+    # group re-forms with all members and every peer dumps at once. It captures
+    # only the observed peers' vport(s) (+ BGP-MON) and compares the two. It
+    # flaps BGP sessions via regex='.*' (relies on the per-peer session_end_idx
+    # fix in start_bgp_peers), NOT stop_protocols (which tears down reachability).
+    # capture_duration must span full reconvergence (route sources bounce too).
+    # Requires a full IXIA run (won't work under --skip-setup-tasks).
     pcap_compare_step = create_custom_step(
         params_dict={
             "custom_step_name": "test_bgp_update_group_dump_compare",
@@ -232,7 +233,9 @@ def _create_2_1_1_initial_dump_identical_routes_playbook():
             # update group 0 (all EB-EB-V6 peers share one group).
             "ibgp_peer_regex": "BGP_PEER_IPV6_IBGP_PLANE_1_REMOTE_EB",
             "ibgp_peer_session_indices": [1, 2],
-            "capture_duration_seconds": 90,
+            # Flapping ALL sessions bounces the route sources too, so the dump
+            # spans full reconvergence -- give it a long window.
+            "capture_duration_seconds": 300,
             "settle_seconds": 10,
             # Criterion 4: BGP-Monitor (add-path capable) UPDATEs must be
             # add-path formatted (distinct from iBGP).

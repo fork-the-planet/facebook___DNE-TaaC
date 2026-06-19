@@ -2534,13 +2534,20 @@ class Ixia:
                 if network_group_index.ipv6_bgp_peer:
                     bgp_peers.append(network_group_index.ipv6_bgp_peer)
         for bgp_peer in bgp_peers:
-            session_end_idx = session_end_idx or bgp_peer.Count
+            # Compute the end index PER PEER. Must be a local -- reassigning
+            # session_end_idx would lock it to the first peer's Count and apply
+            # that (wrong) range to every subsequent peer, which breaks
+            # multi-peer regex matches (e.g. ".*") across peers with differing
+            # session counts.
+            peer_end_idx = (
+                session_end_idx if session_end_idx is not None else bgp_peer.Count
+            )
             if start:
-                bgp_peer.Start(SessionIndices=f"{session_start_idx}-{session_end_idx}")
+                bgp_peer.Start(SessionIndices=f"{session_start_idx}-{peer_end_idx}")
             else:
-                bgp_peer.Stop(SessionIndices=f"{session_start_idx}-{session_end_idx}")
+                bgp_peer.Stop(SessionIndices=f"{session_start_idx}-{peer_end_idx}")
             self.logger.debug(
-                f"Successfully {'started' if start else 'stopped'} BGP sessions {session_start_idx}-{session_end_idx} on {bgp_peer.Name}"
+                f"Successfully {'started' if start else 'stopped'} BGP sessions {session_start_idx}-{peer_end_idx} on {bgp_peer.Name}"
             )
 
     @external_api
