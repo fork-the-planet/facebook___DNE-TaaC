@@ -20,12 +20,14 @@ from taac.health_checks.healthcheck_definitions import (
     create_systemctl_active_state_check,
 )
 from taac.packet_headers import DSF_RDMA_IB_PACKET_HEADERS
+from taac.playbooks.dlb_platform_constants import DlbAsic
 from taac.playbooks.playbook_definitions import (
     create_ecmp_groups_playbooks,
     create_ecmp_members_playbooks,
     create_spillover_testing_playbooks,
 )
 from taac.task_definitions import (
+    create_configure_parallel_bgp_peers_task,
     create_coop_apply_patchers_task,
     create_coop_register_patcher_task,
     create_coop_unregister_patchers_task,
@@ -80,8 +82,8 @@ def get_rtsw_ixia_peer_group_tasks(device_name):
                 "description": "eBGP peering from RTSW to IXIA, IPv6 sessions",
                 "disable_ipv4_afi": "True",
                 "disable_ipv6_afi": "False",
-                "ingress_policy_name": "PROPAGATE_RTSW_IXIA_IN",
-                "egress_policy_name": "PROPAGATE_RTSW_IXIA_OUT",
+                "ingress_policy_name": "PROPAGATE_EVERYTHING",
+                "egress_policy_name": "PROPAGATE_NOTHING",
                 "bgp_peer_timers_hold_time_seconds": "30",
                 "bgp_peer_timers_keep_alive_seconds": "10",
                 "bgp_peer_timers_out_delay_seconds": "0",
@@ -98,40 +100,6 @@ def get_rtsw_ixia_peer_group_tasks(device_name):
                 "link_bandwidth_bps": "auto",
             },
             py_func_name="add_peer_group_patcher",
-        ),
-        create_coop_register_patcher_task(
-            hostname=device_name,
-            config_name="bgpcpp",
-            patcher_name="a_add_bgp_policy_statement_PROPAGATE_RTSW_IXIA_IN",
-            task_name="add_bgp_policy_statement",
-            patcher_args={
-                "name": "PROPAGATE_RTSW_IXIA_IN",
-                "description": "Policy for RTSW IXIA IN",
-            },
-            py_func_name="add_bgp_policy_statement",
-        ),
-        create_coop_register_patcher_task(
-            hostname=device_name,
-            config_name="bgpcpp",
-            patcher_name="a_add_bgp_policy_statement_PROPAGATE_RTSW_IXIA_OUT",
-            task_name="add_bgp_policy_statement",
-            patcher_args={
-                "name": "PROPAGATE_RTSW_IXIA_OUT",
-                "description": "Policy for RTSW IXIA OUT",
-            },
-            py_func_name="add_bgp_policy_statement",
-        ),
-        create_coop_register_patcher_task(
-            hostname=device_name,
-            config_name="bgpcpp",
-            patcher_name="add_bgp_policy_match_prefix_to_propagate_routes_PROPAGATE_RTSW_IXIA_IN_v6",
-            task_name="add_bgp_policy_match_prefix_to_propagate_routes",
-            patcher_args={
-                "matching_prefix": "5000::/16",
-                "in_stmt_name": "PROPAGATE_RTSW_IXIA_IN",
-                "out_stmt_name": "RANDOM",
-            },
-            py_func_name="add_bgp_policy_match_prefix_to_propagate_routes",
         ),
     ]
 
@@ -160,6 +128,7 @@ def test_config_for_wedge400_ecmp_resource_testing(
     basset_pool=None,
     ixia_remote_interface=None,
     ixia_remote_ic_parent_network_v6=None,
+    asic=DlbAsic.TOMAHAWK3,
 ):
     """
     Wedge400 ECMP Resource Testing configuration.
@@ -235,11 +204,43 @@ def test_config_for_wedge400_ecmp_resource_testing(
             ],
             dut=True,
             mac_address=local_mac_address,
-            direct_ixia_connections=direct_ixia_connections
-            if direct_ixia_connections
-            else [],
+            direct_ixia_connections=(
+                direct_ixia_connections if direct_ixia_connections else []
+            ),
         ),
     ]
+
+    # Interface (RIF) IP setup. Assign the DUT-side gateway address (::a) on
+    # each IXIA-facing interface/VLAN so (a) BGP can source the sessions from a
+    # connected address and (b) IXIA NDP/ARP and L2/L3 traffic apply can resolve
+    # the gateway. Driven by the configure_vlans COOP patcher via
+    # create_configure_parallel_bgp_peers_task with config_only_interface_ip=True
+    # (mirrors the FBOSS hardening template). Without these RIF IPs, BGP peers
+    # stay IDLE and IXIA setup fails with "Error in L2/L3 Traffic Apply".
+    def _rif_only_block(parent_network_v6: str) -> dict:
+        return {
+            "starting_ip": f"{parent_network_v6}::a",
+            "increment_ip": "0:0:0:0::0",
+            "prefix_length": 64,
+            "num_sessions": 1,
+            # gateway_* / peer fields are required keys but unused when
+            # config_only_interface_ip is True (no BGP peer is created here).
+            "gateway_starting_ip": f"{parent_network_v6}::b",
+            "gateway_increment_ip": "0:0:0:0::0",
+            "peer_group_name": peergroup_uplink_mimic_v6,
+            "remote_as_4_byte": remote_uplink_as_4byte,
+            "description": "IXIA-facing RIF IP (interface only)",
+            "config_only_interface_ip": True,
+        }
+
+    ixia_rif_config = {
+        ixia_downlink_interface: [_rif_only_block(ixia_downlink_ic_parent_network_v6)],
+        ixia_rogue_interface: [_rif_only_block(ixia_rogue_ic_parent_network_v6)],
+    }
+    if ixia_remote_interface and ixia_remote_ic_parent_network_v6:
+        ixia_rif_config[ixia_remote_interface] = [
+            _rif_only_block(ixia_remote_ic_parent_network_v6)
+        ]
 
     return TestConfig(
         name=test_config_name,
@@ -286,6 +287,14 @@ def test_config_for_wedge400_ecmp_resource_testing(
                     ),
                 },
                 py_func_name="add_bgp_peers",
+            ),
+            # Assign IXIA-facing RIF IPs (::a) via the configure_vlans patcher
+            # so BGP can source and IXIA NDP/traffic apply can resolve.
+            create_configure_parallel_bgp_peers_task(
+                hostname=device_name,
+                configure_vlans_patcher_name="configure_vlans_ixia_rifs",
+                add_bgp_peers_patcher_name="add_bgp_peers_ixia_rifs_noop",
+                config_json=json.dumps(ixia_rif_config),
             ),
             create_coop_apply_patchers_task(
                 hostnames=[device_name],
@@ -485,7 +494,11 @@ def test_config_for_wedge400_ecmp_resource_testing(
                                     network_group_multiplier=34500,
                                     prefix_start_value="5000:ee::",
                                     prefix_length=64,
-                                    nexthop_start_value="2401:db00:206a:1::a001",
+                                    # Parameterized (was hardcoded to U001's
+                                    # 2401:db00:206a:1::a001, which made silver
+                                    # routes install with Action: Drop on every
+                                    # other testbed).
+                                    nexthop_start_value=ixia_nexthop_supporting_ndp_network,
                                     nexthop_increments="::2",
                                     ecmp_width=25,
                                     community_list=["65446:30"],
@@ -524,7 +537,9 @@ def test_config_for_wedge400_ecmp_resource_testing(
                                     network_group_multiplier=7000,
                                     prefix_start_value="5000:ff::",
                                     prefix_length=64,
-                                    nexthop_start_value="2401:db00:206a:1::a001",
+                                    # Parameterized (was hardcoded to U001's
+                                    # 2401:db00:206a:1::a001, same bug as silver).
+                                    nexthop_start_value=ixia_nexthop_supporting_ndp_network,
                                     nexthop_increments="::3",
                                     ecmp_width=64,
                                     community_list=["65446:30"],
@@ -591,12 +606,14 @@ def test_config_for_wedge400_ecmp_resource_testing(
         #     ),
         # ],
         playbooks=_add_tc_checks_to_playbooks(
-            create_ecmp_groups_playbooks(ixia_downlink_interface, ixia_remote_interface)
+            create_ecmp_groups_playbooks(
+                ixia_downlink_interface, ixia_remote_interface, asic
+            )
             + create_ecmp_members_playbooks(
-                ixia_downlink_interface, ixia_remote_interface
+                ixia_downlink_interface, ixia_remote_interface, asic
             )
             + create_spillover_testing_playbooks(
-                ixia_downlink_interface, ixia_remote_interface
+                ixia_downlink_interface, ixia_remote_interface, asic
             )
         ),
     )

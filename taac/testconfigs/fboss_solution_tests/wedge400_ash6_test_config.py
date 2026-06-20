@@ -36,6 +36,7 @@ from taac.packet_headers import (
     DSF_NC_PACKET_HEADERS,
     DSF_RDMA_IB_PACKET_HEADERS,
 )
+from taac.playbooks.dlb_platform_constants import DlbAsic
 from taac.playbooks.playbook_definitions import (
     create_pfc_rdma_only_with_clear_counters_playbook,
     create_w400_agent_crash_playbook,
@@ -49,6 +50,9 @@ from taac.task_definitions import (
     create_configure_parallel_bgp_peers_task,
     create_coop_apply_patchers_task,
     create_coop_unregister_patchers_task,
+)
+from taac.testconfigs.ai_bb.wedge400_ecmp_resource_testing_config import (
+    test_config_for_wedge400_ecmp_resource_testing,
 )
 from taac.testconfigs.fboss_solution_tests.network_ai_hardening_test_config import (
     get_rtsw_ixia_peer_group_tasks,
@@ -503,6 +507,58 @@ W400_ASH6_PFC_TEST_CONFIG = W400_ASH6_PFC_TEST_CONFIG(
     ],
 )
 
+# ============================================================
+# W400_ASH6_DLB_D1_TEST_CONFIG — Sriram's DLB framework on c085
+# Wraps test_config_for_wedge400_ecmp_resource_testing factory.
+# Topology mapping: eth1/1/1 = Downlink, eth1/2/1 = Rogue (3 BGP peers
+# + NDP pool), eth1/3/1 = Remote (Silver+Rouge src), eth1/4/1 unused.
+# teardown_tasks=[] override keeps BGP up between runs for iteration.
+# ============================================================
+W400_ASH6_DLB_D1_TEST_CONFIG: TestConfig = (
+    test_config_for_wedge400_ecmp_resource_testing(
+        test_config_name="W400_ASH6_DLB_D1_TEST_CONFIG",
+        device_name=DEVICE_NAME,
+        local_mac_address="02:00:00:00:00:01",
+        ixia_downlink_interface="eth1/1/1",
+        ixia_rogue_interface="eth1/2/1",
+        peergroup_uplink_mimic_v6="PEERGROUP_RTSW_IXIA_V6",
+        ixia_downlink_ic_parent_network_v6="2401:db00:2066:5001",
+        ixia_rogue_ic_parent_network_v6="2401:db00:2066:5002",
+        prefix_limit="75000",
+        per_peer_max_route_limit="25000",
+        uplink_peer_count=1,
+        remote_uplink_as_4byte=4200000005,
+        is_uplink_peer_confed="False",
+        ixia_nexthop_supporting_ndp_network="2401:db00:2066:5002::a001",
+        ixia_nexthop_supporting_ndp_gateway="2401:db00:2066:5002::a",
+        basset_pool="dne.test",
+        direct_ixia_connections=[
+            taac_types.DirectIxiaConnection(
+                interface="eth1/1/1",
+                ixia_chassis_ip=IXIA_CHASSIS_IP,
+                ixia_port="1/13",
+            ),
+            taac_types.DirectIxiaConnection(
+                interface="eth1/2/1",
+                ixia_chassis_ip=IXIA_CHASSIS_IP,
+                ixia_port="1/14",
+            ),
+            taac_types.DirectIxiaConnection(
+                interface="eth1/3/1",
+                ixia_chassis_ip=IXIA_CHASSIS_IP,
+                ixia_port="1/19",
+            ),
+        ],
+        ixia_remote_interface="eth1/3/1",
+        ixia_remote_ic_parent_network_v6="2401:db00:2066:5003",
+        # rtsw001.c085.f00.ash6 is a Wedge400 (Tomahawk3): DLB cap = 10 groups.
+        asic=DlbAsic.TOMAHAWK3,
+    )
+)
+# Keep BGP up between same-config runs. Subsequent TAAC commands still
+# wipe state via their own setup_tasks unregister_patchers.
+W400_ASH6_DLB_D1_TEST_CONFIG = W400_ASH6_DLB_D1_TEST_CONFIG(teardown_tasks=[])
+
 W400_ASH6_TEST_CONFIGS = [
     W400_ASH6_LONGEVITY_TEST_CONFIG,
     W400_ASH6_AGENT_RESTART_TEST_CONFIG,
@@ -511,4 +567,5 @@ W400_ASH6_TEST_CONFIGS = [
     W400_ASH6_BGPD_RESTART_TEST_CONFIG,
     W400_ASH6_INTERFACE_FLAP_TEST_CONFIG,
     W400_ASH6_PFC_TEST_CONFIG,
+    W400_ASH6_DLB_D1_TEST_CONFIG,
 ]
