@@ -22,6 +22,7 @@ from taac.test_as_a_config.types import (
     ParamValue,
     PointInTimeHealthCheck,
     SnapshotHealthCheck,
+    TransformFunction,
 )
 
 _PV = ParamValue
@@ -307,6 +308,7 @@ def create_ixia_packet_loss_check(
     clear_traffic_stats: bool = False,
     priority: t.Optional[int] = None,
     json_params: t.Optional[t.Dict[str, t.Any]] = None,
+    sleep_time: int = 10,
 ) -> PointInTimeHealthCheck:
     """IXIA_PACKET_LOSS_CHECK — generic thrift-input variant.
 
@@ -319,6 +321,8 @@ def create_ixia_packet_loss_check(
     `priority` controls the check's run priority (higher = runs first).
     `json_params` selects the legacy untyped check_params.json_params variant
     (e.g. `{"expect_loss": True}`).
+    `sleep_time` is the seconds the check waits between stopping traffic and
+    sampling stats (lets in-flight frames drain before measuring); default 10.
     """
     if json_params is not None:
         return PointInTimeHealthCheck(
@@ -332,6 +336,7 @@ def create_ixia_packet_loss_check(
             hc_types.IxiaPacketLossHealthCheckIn(
                 thresholds=thresholds or [],
                 clear_traffic_stats=clear_traffic_stats,
+                sleep_time=sleep_time,
             )
         ),
         priority=priority,
@@ -1234,13 +1239,34 @@ def create_port_tx_rx_check(
 
 def create_lldp_check(
     disabled_interfaces_jq_var: t.Optional[str] = None,
+    disabled_interfaces_jq: t.Optional[str] = None,
+    disabled_interfaces_transforms: t.Optional[t.List[TransformFunction]] = None,
 ) -> PointInTimeHealthCheck:
     """LLDP_CHECK — LLDP neighbor verification.
 
     Args:
         disabled_interfaces_jq_var: jq path expression that resolves to a list of
             interface names to skip (e.g. ``"cached.odd_interfaces"``).
+        disabled_interfaces_jq: a full jq expression (NOT prefixed) that resolves
+            the candidate interface list directly from the topology (e.g.
+            ``'."host".interfaces'``); evaluated cache-free against the live
+            topology. Use with ``disabled_interfaces_transforms`` to derive the
+            expected-down set deterministically (no prior cache step needed).
+        disabled_interfaces_transforms: transforms applied to the jq result to
+            select the expected-down set (e.g. ``SELECT_SNAKE_CIRCUIT_A_ENDS``).
     """
+    if disabled_interfaces_jq is not None:
+        return PointInTimeHealthCheck(
+            name=hc_types.CheckName.LLDP_CHECK,
+            check_params=Params(
+                jq_params={"disabled_interfaces": disabled_interfaces_jq},
+                transform_params=(
+                    {"disabled_interfaces": disabled_interfaces_transforms}
+                    if disabled_interfaces_transforms
+                    else None
+                ),
+            ),
+        )
     if disabled_interfaces_jq_var is None:
         return PointInTimeHealthCheck(name=hc_types.CheckName.LLDP_CHECK)
     return PointInTimeHealthCheck(
@@ -1255,6 +1281,8 @@ def create_port_state_check(
     additional_interfaces: t.Optional[t.List[t.Dict[str, str]]] = None,
     disabled_interfaces: t.Optional[t.List[t.Dict[str, str]]] = None,
     disabled_interfaces_jq_var: t.Optional[str] = None,
+    disabled_interfaces_jq: t.Optional[str] = None,
+    disabled_interfaces_transforms: t.Optional[t.List[TransformFunction]] = None,
 ) -> PointInTimeHealthCheck:
     """PORT_STATE_CHECK — port operational-state verification.
 
@@ -1265,7 +1293,31 @@ def create_port_state_check(
             to be down (e.g., transceiver-removal tests).
         disabled_interfaces_jq_var: jq path expression resolving to the list of
             interfaces to treat as expected-down (e.g. ``"cached.odd_interfaces"``).
+        disabled_interfaces_jq: a full jq expression (NOT prefixed) resolving the
+            candidate interface list directly from the topology (e.g.
+            ``'."host".interfaces'``); evaluated cache-free. Use with
+            ``disabled_interfaces_transforms`` to derive the expected-down set
+            deterministically (no prior cache step needed).
+        disabled_interfaces_transforms: transforms applied to the jq result to
+            select the expected-down set (e.g. ``SELECT_SNAKE_CIRCUIT_A_ENDS``).
     """
+    if disabled_interfaces_jq is not None:
+        return PointInTimeHealthCheck(
+            name=hc_types.CheckName.PORT_STATE_CHECK,
+            check_params=Params(
+                json_params=(
+                    json.dumps({"additional_interfaces": additional_interfaces})
+                    if additional_interfaces is not None
+                    else None
+                ),
+                jq_params={"disabled_interfaces": disabled_interfaces_jq},
+                transform_params=(
+                    {"disabled_interfaces": disabled_interfaces_transforms}
+                    if disabled_interfaces_transforms
+                    else None
+                ),
+            ),
+        )
     if (
         additional_interfaces is None
         and disabled_interfaces is None

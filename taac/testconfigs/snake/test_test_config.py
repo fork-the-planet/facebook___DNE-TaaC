@@ -24,10 +24,14 @@ definition file, not a unit test (per the TAAC repo convention).
 import typing as t
 
 from ixia.ixia import types as ixia_types
+from taac.health_checks.healthcheck_definitions import (
+    create_ixia_packet_loss_check,
+)
 from taac.playbooks.playbook_definitions import (
     gen_common_hcs,
     gen_snake_playbooks,
 )
+from taac.health_check.health_check import types as hc_types
 from taac.test_as_a_config import types as taac_types
 
 
@@ -95,6 +99,9 @@ def gen_snake_test_config(
     playbooks_to_skip: t.Optional[t.List[str]] = None,
     include_link_flap_longevity: bool = False,
     manual_test_interfaces: t.Optional[t.List[str]] = None,
+    ixia_ports: t.Optional[t.List[str]] = None,
+    precheck_packet_loss_clear_stats: bool = False,
+    packet_loss_sleep_time: int = 10,
 ) -> taac_types.TestConfig:
     """Build a single-DUT snake/loopback ``TestConfig``.
 
@@ -117,6 +124,12 @@ def gen_snake_test_config(
                 switch) is used.
             skip_lldp_check: When True, drop the LLDP health check from
                 ``gen_common_hcs``.
+            ixia_ports: Optional allowlist of local DUT interfaces (bare
+                names, e.g. ``["eth1/1/1", "eth1/64/1"]``) to use as the
+                IXIA endpoints. When set, LLDP-discovered IXIA ports not
+                in this list are ignored (``select_ixia_assets``). Use
+                when the device is cabled to more IXIA ports than the
+                snake actually traverses.
 
         Traffic shape:
             line_rate: Per-traffic-item line rate as percent (default
@@ -155,6 +168,38 @@ def gen_snake_test_config(
 
     common_hcs = gen_common_hcs(skip_lldp_check)
 
+    # Optionally override the IXIA_PACKET_LOSS_CHECK on pre/post checks:
+    #  * precheck_packet_loss_clear_stats: clear IXIA stats first so the PRE-check
+    #    measures STEADY-STATE loss (excludes the NDP/MAC startup transient).
+    #    This is ONLY ever applied to the pre-check. The post-check is ALWAYS
+    #    clear_traffic_stats=False — clearing it would discard exactly the
+    #    test/disruption-window loss the post-check exists to catch.
+    #  * packet_loss_sleep_time: seconds between stop_traffic and sampling stats
+    #    (the in-flight drain window); a longer drain lets all in-flight frames
+    #    arrive before measuring. Applies to both pre and post checks.
+    def _override_packet_loss(hcs, clear_traffic_stats):
+        return [
+            (
+                create_ixia_packet_loss_check(
+                    clear_traffic_stats=clear_traffic_stats,
+                    sleep_time=packet_loss_sleep_time,
+                )
+                if hc.name == hc_types.CheckName.IXIA_PACKET_LOSS_CHECK
+                else hc
+            )
+            for hc in hcs
+        ]
+
+    common_prechecks = common_hcs
+    common_postchecks = common_hcs
+    if precheck_packet_loss_clear_stats or packet_loss_sleep_time != 10:
+        common_prechecks = _override_packet_loss(
+            common_hcs, clear_traffic_stats=precheck_packet_loss_clear_stats
+        )
+    if packet_loss_sleep_time != 10:
+        # post-check: keep clear_traffic_stats=False, only adjust the drain window
+        common_postchecks = _override_packet_loss(common_hcs, clear_traffic_stats=False)
+
     ptp_configs = [
         ixia_types.PTPConfig(
             server_endpoint=ixia_types.PTPEndpoint(
@@ -185,6 +230,7 @@ def gen_snake_test_config(
                 dut=True,
                 ixia_needed=True,
                 direct_ixia_connections=direct_ixia_connections or [],
+                ixia_ports=ixia_ports,
             ),
         ],
         # Deprecated - define at playbook level
@@ -196,8 +242,8 @@ def gen_snake_test_config(
             iteration,
             playbooks_to_skip,
             include_link_flap_longevity,
-            common_prechecks=common_hcs,
-            common_postchecks=common_hcs,
+            common_prechecks=common_prechecks,
+            common_postchecks=common_postchecks,
             manual_test_interfaces=manual_test_interfaces,
         ),
         # Opt out of the two-tier IXIA topology cache (default-on per D107780401).
@@ -326,7 +372,12 @@ MINIPACK3_STANDALONE_TEST_CONFIG_800G = gen_snake_test_config(
         type=ixia_types.FrameSizeType.CUSTOM_IMIX,
         imix_weight={94: 1, 96: 18, 192: 3, 512: 1, 1200: 1, 4600: 76},
     ),
-    playbooks_to_skip=["test_snake_half_interface_toggle_with_thrift_api"],
+    # NOTE: test_snake_half_interface_toggle_with_thrift_api is no longer skipped.
+    # It used to be skipped because the old positional ::4/2::4 slicing split a
+    # jumper's two ends across waves and forced a circuit's partner DOWN while the
+    # check still expected it UP -- a guaranteed false failure on a loopback snake.
+    # The playbook now selects whole snake circuits and disables only the A-end, so
+    # disabling "even circuits" downs exactly the even circuits and the check passes.
     # Specify the number of iterations required for the endurance testing (e.g., 100) rather than the default below
     iteration=10,
 )
@@ -489,7 +540,70 @@ KODIAK3_STANDALONE_TEST_CONFIG_ZR4_800G = gen_snake_test_config(
 )
 
 
+# fboss159.99.ash6 — Minipack3 (montblanc) 800G DR4 gearbox serpentine snake
+# (NPI T267419633): 2x400G DR4 optics per module driven through the gearbox (800G/module).
+# The on-box config is a SINGLE serpentine chain with exactly
+# two clean IXIA endpoints (verified via VLAN membership on /etc/coop/agent/current):
+#   ingress eth1/1/1 (VLAN 2000, bridged with first hop eth1/2/1)
+#   egress  eth1/64/1 (VLAN 2094, bridged with last hop eth1/63/7)
+# The device is also cabled to eth1/1/5 and eth1/64/5, but those two IXIA taps dangle
+# (not part of the snake chain), so we pin ixia_ports to the two real endpoints and let
+# select_ixia_assets ignore the extra LLDP-discovered taps. No topology/device change.
+# Scoped to the stable-state baseline only (test_one_min_longevity).
+MINIPACK3_STANDALONE_TEST_CONFIG_FBOSS159_800G_DR4_GEARBOX = gen_snake_test_config(
+    name="MINIPACK3_STANDALONE_TEST_CONFIG_FBOSS159_800G_DR4_GEARBOX",
+    basset_pool="dne.standalone",
+    snake_configs=[
+        taac_types.SnakeConfig(
+            source="fboss159.99.ash6:eth1/1/1",
+            destination="fboss159.99.ash6:eth1/64/1",
+            source_ip="5000:1::1/64",
+            destination_ip="5000:1::2/64",
+        ),
+    ],
+    hostname="fboss159.99.ash6",
+    # DR4 gearbox optics at 400B frames have a derated usable rate: 45% is the effective
+    # "line rate" for this optic/frame-size. 50% over-drives the gearbox -> shortfall shows
+    # up as ~10% packet loss. 45% is the lossless operating point for the qual.
+    line_rate=45,
+    # Use only the two clean IXIA endpoints; ignore the dangling eth1/1/5, eth1/64/5 taps.
+    ixia_ports=["eth1/1/1", "eth1/64/1"],
+    # LLDP_CHECK enabled: D109171150 (eth1/34<->eth1/35 lane-swap) has LANDED, so the
+    # check's expected neighbor (read from the landed static topology) now matches the
+    # real swapped cabling. LLDP is validated, not skipped.
+    skip_lldp_check=False,
+    # Measure STEADY-STATE packet loss (clear IXIA stats after convergence) so the precheck
+    # doesn't fail on the harmless NDP/MAC startup transient.
+    precheck_packet_loss_clear_stats=True,
+    # Wait 30s (not the default 10s) between stop_traffic and sampling stats, so all
+    # in-flight frames fully drain on this 96-hop snake before the loss measurement.
+    packet_loss_sleep_time=30,
+    # Enabled: Phase 1 (test_one_min_longevity) + Phase 3 (link-event/lane re-sync) +
+    # Phase 4 (service resilience). Skipped for now: Phase 2 longevity (10m/1h/72h),
+    # Phase 5 system reboots, Phase 6 transceiver/fiber removal.
+    # fsdb restart/crash are skipped: fsdb is not deployed/running on this manually
+    # brought-up box (no fsdb.service unit/package), so those tests have no target and
+    # time out waiting for fsdb thrift (an environment gap, not a DR4/recovery bug).
+    playbooks_to_skip=[
+        "test_ten_min_longevity",
+        "test_one_hour_longevity",
+        "test_72hr_longevity",
+        "test_snake_system_reboot_bmc_full",
+        "test_snake_system_reboot_bmc_microserver",
+        "test_snake_system_reboot_microserver",
+        "test_snake_transceiver_removal",
+        "test_snake_fiber_removal",
+        "test_snake_fsdb_restart",
+        "test_snake_fsdb_crash",
+    ],
+    # iteration=1 for the first full Phase 3/4 sweep (validate each disruption once);
+    # bump later once a clean single-iteration sweep is confirmed.
+    iteration=1,
+)
+
+
 SNAKE_TEST_CONFIGS = [
+    MINIPACK3_STANDALONE_TEST_CONFIG_FBOSS159_800G_DR4_GEARBOX,
     MINIPACK3_STANDALONE_TEST_CONFIG,
     MINIPACK3_STANDALONE_TEST_CONFIG_100G,
     MINIPACK3_STANDALONE_TEST_CONFIG_200G,
