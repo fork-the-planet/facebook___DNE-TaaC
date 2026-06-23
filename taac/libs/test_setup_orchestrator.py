@@ -452,6 +452,11 @@ class TestSetupOrchestrator:
             ixia_protocol_verification_timeout=self.test_config.ixia_protocol_verification_timeout,
             ixia_config_cache=ixia_config_cache,
             ixia_recovery=ixia_recovery,
+            # v3 IXIA topology-cache key folds in setup_tasks so cache
+            # auto-invalidates when an engineer edits a setup task during
+            # testconfig development. See
+            # `ixia_config_cache_manager.py:_CACHE_VERSION` history.
+            setup_tasks=self.test_config.setup_tasks,
         )
 
         _log(

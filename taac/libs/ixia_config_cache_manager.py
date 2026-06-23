@@ -9,14 +9,22 @@ in `create_basic_setup` calling per-API REST setup for the IXIA topology. This
 manager replaces that with a `LoadConfig` of a pre-built ixncfg on the API
 server — ~10-20s on cache hit.
 
-Cache key shape: `{test_config_name}__{chassis_id}__{config_hash}.ixncfg`
-  - test_config_name: different tests need different topologies
-  - chassis_id: ixncfg embeds vport↔chassis-port bindings; cross-chassis breaks
-  - config_hash: 12-char prefix of sha256(_CACHE_VERSION + IxiaConfig Thrift bytes).
-    The hash rolls (and invalidates stale caches) when EITHER the IxiaConfig
-    struct content changes OR `_CACHE_VERSION` is bumped. Bump _CACHE_VERSION
-    when Python setup logic (`create_basic_setup`, etc.) changes in a way that
-    affects the resulting topology even if the IxiaConfig struct is unchanged.
+Cache key shape (v3): `{test_config_name}__{chassis_id}__{declarative_hash}__{_CACHE_VERSION}.ixncfg`
+  - test_config_name: different tests need different topologies.
+  - chassis_id: ixncfg embeds vport↔chassis-port bindings; cross-chassis breaks.
+  - declarative_hash: 12-char prefix of sha256 over CANONICAL bytes of the
+    SOURCE-of-truth declarative inputs that drive topology construction —
+    `basic_port_configs` + `setup_tasks` from the TestConfig. Rolls
+    automatically when an engineer edits a `basic_port_config` (BGP peer
+    set, prefix counts, device-group wiring) or adds / edits a setup task,
+    invalidating the stale cache without manual `_CACHE_VERSION` bumps.
+    Critically does NOT include the runtime-built `IxiaConfig` output
+    (which embeds chassis-resolved `logical_port_num` values that vary
+    run-to-run — the v1 trap that caused warm cache to never hit on
+    bag012 e2e 2026-06-05).
+  - _CACHE_VERSION: manual knob, bumped only for Python-side topology-
+    generation logic changes that don't surface in the hashed thrift
+    inputs (rare under v3).
 
 Tier 1 (chassis-local) is implemented but de facto broken — IxNetwork's
 SaveConfig does not durably write to arbitrary server paths and the default
@@ -34,9 +42,11 @@ to live for one `LoadConfig` call.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import tempfile
 import time
+import typing as t
 from pathlib import Path
 
 from ixia.ixia import types as ixia_types
@@ -48,6 +58,7 @@ from taac.utils.oss_taac_lib_utils import (
     none_throws,
 )
 from taac.test_as_a_config import types as taac_types
+from thrift.py3.serializer import Protocol, serialize as thrift_serialize
 
 # NOTE: `manifold_utils` is imported lazily inside `try_load_from_manifold` /
 # `save_to_manifold` to keep this OSS-safe `libs/` module free of any
@@ -64,25 +75,25 @@ from taac.test_as_a_config import types as taac_types
 # through it.
 _SAFE_KEY_RE = re.compile(r"[^A-Za-z0-9_-]")
 
-# Cache version: bump when Python topology-generation logic changes in a way
-# that would affect the saved `.ixncfg` (e.g. new DG/peer/prefix wiring in
-# `create_basic_setup`, change in port-config builder, etc.). Bumping
-# invalidates ALL existing cached ixncfg files across all testbeds — they'll be
-# re-created on the next cold run.
+# Cache version: bump ONLY when Python topology-generation logic changes in a
+# way that would affect the saved `.ixncfg` but that doesn't surface in the
+# hashed declarative thrift inputs (rare under v3 — most topology drift is
+# now auto-detected via `compute_declarative_hash`).
 #
-# v2 (2026-06-05): dropped IxiaConfig content from the hash. The built
-# IxiaConfig embeds runtime chassis-queried state (e.g. logical port numbers
-# resolved via `async_get_ixia_logical_port`) that varies run-to-run even for
-# an identical TestConfig — observed on bag012.ash6 cold→warm where two
-# back-to-back runs of the same TestConfig produced different hashes
-# (7ca5ecc43fa6 vs adc161447418), causing warm cache to never hit. Cache is
-# now keyed purely by (test_config_name, chassis_id, _CACHE_VERSION), which
-# is stable per testbed. The trade-off: cache will NOT auto-invalidate when a
-# TestConfig's declarative content (port map, BGP peers) changes — the
-# engineer must bump _CACHE_VERSION manually. A follow-up should hash a
-# canonical subset of the SOURCE TestConfig (basic_port_configs etc.) to get
-# the best of both: stable per run, auto-invalidating per declarative drift.
-_CACHE_VERSION = "v2"
+# v1: hashed everything including the built IxiaConfig — broken because
+#     IxiaConfig embeds runtime-resolved logical port numbers that vary
+#     run-to-run, so warm cache never hit (bag012.ash6 e2e 2026-06-05).
+# v2 (2026-06-05): dropped IxiaConfig content entirely. Cache hit reliably
+#     BUT never auto-invalidated when an engineer edited a TestConfig's
+#     declarative content (port map / BGP peers / setup tasks) — silent
+#     staleness during testconfig development.
+# v3 (2026-06-23): added `declarative_hash` over the SOURCE thrift inputs
+#     (`basic_port_configs` + `setup_tasks`). Cache hits reliably AND
+#     auto-invalidates on declarative drift, without the v1 chassis-state
+#     trap. The thrift COMPACT protocol writes fields in tag order so the
+#     byte output is deterministic per struct content. See
+#     `compute_declarative_hash` below.
+_CACHE_VERSION = "v3"
 
 
 def _sanitize(s: str) -> str:
@@ -90,21 +101,88 @@ def _sanitize(s: str) -> str:
     return _SAFE_KEY_RE.sub("_", s)
 
 
+def _hash_thrift_struct(h: "hashlib._Hash", struct: t.Any) -> None:
+    """sha256-update with canonical thrift COMPACT bytes of a struct.
+
+    COMPACT protocol writes fields in tag order, so the byte output is stable
+    per struct content regardless of construction order — exactly what we
+    need for a content-addressed cache key. None / unset is skipped (the
+    caller filters before calling). Any serializer error propagates so the
+    test author sees a clear hash failure rather than a silent cache miss.
+    """
+    h.update(thrift_serialize(struct, protocol=Protocol.COMPACT))
+    h.update(b"\0")  # delimiter so adjacent entries can't collide
+
+
+def compute_declarative_hash(
+    basic_port_configs: t.Optional[t.Sequence[taac_types.BasicPortConfig]] = None,
+    setup_tasks: t.Optional[t.Sequence[taac_types.Task]] = None,
+) -> str:
+    """Canonical 12-char sha256 prefix of the declarative inputs that drive
+    IXIA topology construction.
+
+    Inputs are SOURCE-of-truth thrift structs from the TestConfig and are
+    chassis-independent (no runtime-resolved logical port numbers). Editing
+    any of them in the TestConfig automatically rolls the hash and
+    invalidates the stale cache — solving the testconfig-development
+    silent-staleness gap from v2.
+
+    `_CACHE_VERSION` is folded in so a Python-side logic bump also rolls
+    the hash (otherwise an engineer would have to manually invalidate
+    cached files across all testbeds when only the version bumps).
+
+    Args:
+        basic_port_configs: TestConfig's `Sequence[BasicPortConfig]` —
+            the per-endpoint device-group / BGP / address declarations
+            that produce the bulk of the topology shape.
+        setup_tasks: TestConfig's `Sequence[Task]` — over-conservative
+            inclusion (hashes ALL setup tasks, including device-side
+            tasks like `ARISTA_DAEMON_CONTROL` that don't affect the
+            `.ixncfg`). The trade-off is a slightly lower cache hit
+            rate on device-side task edits in exchange for guaranteed
+            invalidation on any IXIA-affecting setup-task edit
+            without an allowlist-maintenance burden.
+
+    Returns:
+        12-character lowercase hex prefix of sha256.
+    """
+    h = hashlib.sha256()
+    h.update(_CACHE_VERSION.encode())
+    h.update(b"\0")
+    for bpc in basic_port_configs or []:
+        _hash_thrift_struct(h, bpc)
+    for task in setup_tasks or []:
+        _hash_thrift_struct(h, task)
+    return h.hexdigest()[:12]
+
+
 def compute_cache_key(
     test_config_name: str,
     chassis_id: str,
-    ixia_config: ixia_types.IxiaConfig,  # accepted for API back-compat, NOT hashed
+    ixia_config: t.Optional[ixia_types.IxiaConfig] = None,
+    *,
+    basic_port_configs: t.Optional[t.Sequence[taac_types.BasicPortConfig]] = None,
+    setup_tasks: t.Optional[t.Sequence[taac_types.Task]] = None,
 ) -> str:
-    """Stable cache key for a `(test_config_name, chassis_id, _CACHE_VERSION)` triple.
+    """v3 cache key for `(test_config_name, chassis_id, declarative_hash)`.
 
-    `ixia_config` is accepted for API back-compat with v1 callers but is NOT
-    included in the key — see the docstring on `_CACHE_VERSION` for why.
+    `ixia_config` is accepted positionally for v1/v2 back-compat but is
+    EXPLICITLY IGNORED — including it caused warm cache to never hit due
+    to chassis-resolved logical port numbers (see `_CACHE_VERSION`
+    history). New callers should pass declarative inputs via
+    `basic_port_configs` / `setup_tasks` so the hash auto-invalidates on
+    TestConfig edits.
     """
-    # Suppress unused-arg warning while keeping the back-compat signature.
+    # Suppress unused-arg warning while keeping the v1/v2 positional signature.
     _ = ixia_config
+    declarative_hash = compute_declarative_hash(
+        basic_port_configs=basic_port_configs,
+        setup_tasks=setup_tasks,
+    )
     return (
         f"{_sanitize(test_config_name)}__"
-        f"{_sanitize(chassis_id)}__{_CACHE_VERSION}.ixncfg"
+        f"{_sanitize(chassis_id)}__"
+        f"{declarative_hash}__{_CACHE_VERSION}.ixncfg"
     )
 
 
@@ -134,9 +212,18 @@ class IxiaConfigCacheManager:
     def compute_key(
         self,
         test_config_name: str,
-        ixia_config: ixia_types.IxiaConfig,
+        ixia_config: t.Optional[ixia_types.IxiaConfig] = None,
+        *,
+        basic_port_configs: t.Optional[t.Sequence[taac_types.BasicPortConfig]] = None,
+        setup_tasks: t.Optional[t.Sequence[taac_types.Task]] = None,
     ) -> str:
-        """Compute cache key including chassis identity (from self._ixia).
+        """Compute v3 cache key including chassis identity (from self._ixia).
+
+        Pass declarative inputs (`basic_port_configs`, `setup_tasks`) so the
+        `declarative_hash` portion of the key auto-invalidates the cache when
+        the TestConfig is edited. `ixia_config` is accepted positionally for
+        v1/v2 callsite back-compat but is explicitly ignored — see
+        `compute_cache_key` docstring.
 
         `primary_chassis_ip` is typed as Optional, but at this point in the
         runner flow the IXIA session is established so it must be set; fail
@@ -146,6 +233,8 @@ class IxiaConfigCacheManager:
             test_config_name,
             none_throws(self._ixia.primary_chassis_ip),
             ixia_config,
+            basic_port_configs=basic_port_configs,
+            setup_tasks=setup_tasks,
         )
 
     def chassis_path(self, key: str) -> str:

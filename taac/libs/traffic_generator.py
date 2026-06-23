@@ -114,6 +114,7 @@ class TrafficGenerator:
         ixia_protocol_verification_timeout: int = 90,
         ixia_config_cache: t.Optional[taac_types.IxiaConfigCache] = None,
         ixia_recovery: t.Optional[taac_types.IxiaRecovery] = None,
+        setup_tasks: t.Optional[t.Sequence[taac_types.Task]] = None,
         *args,
         **kwargs,
     ) -> None:
@@ -148,6 +149,13 @@ class TrafficGenerator:
         self.ixia_config_cache = ixia_config_cache
         # Opt-in IXIA REST API soft recovery — see IxiaRecovery Thrift docstring
         self.ixia_recovery = ixia_recovery
+        # TestConfig setup_tasks — used by the v3 IXIA topology-cache key so
+        # the cache auto-invalidates when an engineer edits a setup task
+        # during testconfig development. Hashed via
+        # `compute_declarative_hash` together with `basic_port_configs`.
+        # See `ixia_config_cache_manager.py:_CACHE_VERSION` for the v1→v2→v3
+        # history that motivated this.
+        self.setup_tasks = setup_tasks
         # snake testing
         self.snake_configs = snake_configs or []
         self.is_standalone = bool(self.snake_configs)
@@ -274,8 +282,16 @@ class TrafficGenerator:
                     # session_name is Optional but always set by
                     # TestSetupOrchestrator (test_config.name); none_throws fails
                     # fast if the contract breaks.
+                    # v3 cache key: pass declarative inputs so the hash
+                    # auto-rolls on TestConfig edits to basic_port_configs or
+                    # setup_tasks. `built_ixia_config` is still passed
+                    # positionally for v1/v2 callsite back-compat but is
+                    # explicitly ignored by `compute_cache_key` (see history).
                     cache_key = cache_mgr.compute_key(
-                        none_throws(self.session_name), built_ixia_config
+                        none_throws(self.session_name),
+                        built_ixia_config,
+                        basic_port_configs=self.basic_port_configs,
+                        setup_tasks=self.setup_tasks,
                     )
                     self.logger.info(
                         f"\033[36m[IXIA]\033[0m cache enabled — key: "
