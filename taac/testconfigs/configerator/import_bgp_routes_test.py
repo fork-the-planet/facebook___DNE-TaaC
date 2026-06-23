@@ -5,9 +5,6 @@
 import json
 
 from ixia.ixia import types as ixia_thrift
-from taac.testconfigs.configerator.test_config import (
-    thrift_to_json,
-)
 from taac.health_check.health_check import types as hc_thrift
 from taac.test_as_a_config import types as taac_thrift
 
