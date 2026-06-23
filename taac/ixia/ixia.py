@@ -3,6 +3,7 @@
 
 # pyre-unsafe
 
+import functools
 import ipaddress
 import itertools
 import logging
@@ -389,9 +390,61 @@ def require_traffic_item(func: t.Callable) -> t.Callable:
     return wrapper
 
 
+# `source` values emitted into `inband_502_observed` Scuba rows. Mirrored
+# from `ixia_recovery_lib.SOURCE_INBAND_API_CALL` /
+# `SOURCE_BETWEEN_PLAYBOOK_GATE` so the per-RPC wrapper can use them without
+# a non-OSS import at module load. A unit test
+# (`test_ixia_inband_recovery.SourceConstantsTest`) pins these equal to the
+# canonical lib values so a rename on either side breaks the build instead
+# of silently splitting the Scuba dataset.
+_INBAND_SOURCE_API_CALL: str = "inband_api_call"
+_INBAND_SOURCE_BETWEEN_PLAYBOOK_GATE: str = "between_playbook_gate"
+
+
 def external_api(func: t.Callable) -> t.Callable:
+    """Marks a method that issues IxNetwork SDK RPCs to the chassis and routes
+    it through the in-band 5xx recovery wrapper.
+
+    On a 5xx from the wrapped call, the wrapper emits a Scuba
+    `inband_502_observed` row, invokes the already-tested-e2e recovery CLI
+    (`ixia._attempt_inband_recovery` → `ixia_recovery_lib.restart_ixnetwork`),
+    and retries the RPC once if recovery succeeded. On the healthy path the
+    only overhead is one `try`/`except`; on the cooldown / refusal / failure
+    path the original 5xx propagates.
+
+    The recovery action's own cooldown (default 30 min, enforced inside
+    `restart_ixnetwork`) is the global rate limit — no per-RPC budget is
+    layered on top. If a retry hits a different error class (e.g. session
+    was rebuilt by the restart and is now gone), it propagates honestly so
+    the playbook records as FAILED rather than silently spinning.
+
+    The OSS guard lives inside `_attempt_inband_recovery`, which returns
+    False under `TAAC_OSS`; this wrapper therefore degrades to its previous
+    no-op behavior in OSS builds.
+    """
+
+    @functools.wraps(func)
     def wrapper(self, *args, **kwargs) -> t.Any:
-        return func(self, *args, **kwargs)
+        try:
+            return func(self, *args, **kwargs)
+        except Exception as exc:
+            # Use the budget-free eligibility check: the per-connect
+            # `_ixia_recovery_attempts_remaining` counter must NOT gate the
+            # per-RPC wrapper (a single connect-time recovery would exhaust
+            # it and silently block every mid-test recovery for the rest of
+            # the run — see Devmate review of D109398929 V1).
+            if not self._is_recovery_eligible_5xx(exc):
+                raise
+            self._emit_inband_502(func.__name__, exc, source=_INBAND_SOURCE_API_CALL)
+            self.logger.warning(
+                f"{_YELLOW}[IXIA]{_RESET} {func.__name__} hit 5xx mid-test — "
+                f"invoking in-band recovery"
+            )
+            if not self._attempt_inband_recovery():
+                # cooldown / auth / no_password / refusal / failure — keep the
+                # original 5xx in the traceback so triage sees the real cause.
+                raise
+            return func(self, *args, **kwargs)
 
     return wrapper
 
@@ -637,6 +690,11 @@ class Ixia:
         self._ixia_recovery_attempts_remaining: int = (
             ixia_recovery.max_attempts if ixia_recovery else 1
         )
+        # Telemetry context populated by `ensure_ixia_alive` so per-RPC
+        # `inband_502_observed` rows can name the playbook / testconfig that
+        # was running when a 5xx fired. Optional — emitter tolerates None.
+        self._current_playbook_name: t.Optional[str] = None
+        self._current_testconfig_name: t.Optional[str] = None
 
     @staticmethod
     def get_formatted_ip_address(ixia_server_ip: str) -> str:
@@ -782,26 +840,43 @@ class Ixia:
 
     _RECOVERY_TRIGGER_TOKENS: t.Tuple[str, ...] = ("502", "503", "504")
 
-    def _should_attempt_recovery(self, exc: BaseException) -> bool:
-        """Decide whether to invoke `ixia_recovery_lib.restart_ixnetwork`.
+    def _is_recovery_eligible_5xx(self, exc: BaseException) -> bool:
+        """Just the opt-in + 5xx-token check — NO budget gating.
 
-        Returns True only when ALL hold:
-        - The TestConfig opted in (or omitted opt-out — see
-          `_DEFAULT_IXIA_RECOVERY` in `libs/test_setup_orchestrator.py`).
-        - `_ixia_recovery_attempts_remaining > 0` for this `connect()` round.
-        - The exception's stringified message contains a 5xx token (502/503/
-          504). We grep the message because `ixnetwork-restpy` wraps the
-          underlying `HTTPError` and the wrapper type does not preserve the
-          status code as an attribute we can read.
+        Used by the per-RPC `@external_api` wrapper and the cross-playbook
+        `ensure_ixia_alive` gate, both of which are event-driven by
+        independent 5xx events spread out over time. The 30-min cooldown
+        inside `restart_ixnetwork` is the rate limit for these paths; the
+        per-connect `_ixia_recovery_attempts_remaining` budget intentionally
+        does NOT apply (otherwise a single connect-time recovery exhausts
+        the counter and silently blocks every subsequent in-band recovery
+        for the rest of the run).
+
+        Defensive `getattr` reads: Ixia instances constructed via mock /
+        `Ixia.__init__` bypass paths (used by some unit tests) may not
+        have `ixia_recovery` set. Treat missing as recovery-disabled — the
+        wrapper then degrades to the previous no-op pass-through behavior.
         """
-        if self.ixia_recovery is None or not getattr(
-            self.ixia_recovery, "enabled", False
-        ):
-            return False
-        if self._ixia_recovery_attempts_remaining <= 0:
+        ixia_recovery = getattr(self, "ixia_recovery", None)
+        if ixia_recovery is None or not getattr(ixia_recovery, "enabled", False):
             return False
         msg = f"{type(exc).__name__}: {exc!s}"
         return any(token in msg for token in self._RECOVERY_TRIGGER_TOKENS)
+
+    def _should_attempt_recovery(self, exc: BaseException) -> bool:
+        """Connect-time path: eligibility + per-connect attempts budget.
+
+        Adds `_ixia_recovery_attempts_remaining > 0` on top of
+        `_is_recovery_eligible_5xx`. This budget bounds the **inner retry
+        loop** in `_create_basic_setup`, which retries the SAME connect
+        operation up to `max_attempts` times within one TaacRunner setup —
+        without it that loop could thrash indefinitely.
+        """
+        if not self._is_recovery_eligible_5xx(exc):
+            return False
+        if getattr(self, "_ixia_recovery_attempts_remaining", 0) <= 0:
+            return False
+        return True
 
     def _attempt_inband_recovery(self) -> bool:
         """Best-effort soft restart of `ixnetworkweb` via `ixia_recovery_lib`.
@@ -850,6 +925,128 @@ class Ixia:
             )
             return False
         return True
+
+    def _extract_5xx_status(self, exc: BaseException) -> int:
+        """Best-effort numeric status for telemetry (defaults to 502)."""
+        msg = f"{type(exc).__name__}: {exc!s}"
+        for tok in self._RECOVERY_TRIGGER_TOKENS:
+            if tok in msg:
+                return int(tok)
+        return 502
+
+    def _emit_inband_502(self, op_name: str, exc: BaseException, source: str) -> None:
+        """Best-effort `inband_502_observed` Scuba write.
+
+        Fires the moment a 5xx is caught — BEFORE recovery — so the
+        underlying rate is queryable even when recovery is cooldown-blocked
+        (and can't be inferred from the `recovery_attempt` denominator).
+        Silent under OSS / if the recovery lib is unavailable.
+        """
+        if TAAC_OSS:
+            return
+        try:
+            from taac.internal.utils.ixia_recovery_lib import (
+                emit_inband_502_scuba,
+            )
+        except ImportError:
+            return
+        try:
+            emit_inband_502_scuba(
+                chassis=str(self.primary_chassis_ip),
+                op_name=op_name,
+                http_status=self._extract_5xx_status(exc),
+                source=source,
+                session_id=self.session_id,
+                playbook_name=self._current_playbook_name,
+                testconfig_name=self._current_testconfig_name,
+            )
+        except Exception as e:
+            # Telemetry must never escalate to a test failure.
+            self.logger.warning(
+                f"{_YELLOW}[IXIA]{_RESET} emit_inband_502 failed: {e!r}"
+            )
+
+    def ensure_ixia_alive(
+        self,
+        playbook_name: t.Optional[str] = None,
+        testconfig_name: t.Optional[str] = None,
+    ) -> None:
+        """Cross-playbook health gate (called by `TaacRunner` between playbooks).
+
+        Refreshes the telemetry context, then — when a session already exists —
+        probes IXIA health and fires `_attempt_inband_recovery` if the chassis
+        is in a Jetty-wedge state (`API_DOWN_502` / `API_DOWN_OTHER`). This
+        catches the cross-playbook cascade where the chassis wedges between
+        playbooks (no in-flight RPC fires the per-RPC wrapper) and every
+        subsequent playbook would inherit the dead session.
+
+        Intentionally minimal: no per-playbook recovery budget (the chassis-
+        wide 30-min cooldown inside `restart_ixnetwork` is the rate limit),
+        no sticky "session rebuilt" flag (if the recovery rebuilt the session,
+        the first RPC in this playbook will fail with a session-gone error
+        which the runner records honestly — same outcome, no new state).
+
+        `HEALTHY` / `AUTH_FAILED` / `CHASSIS_DOWN` / `UNREACHABLE` are all
+        skipped: only the Jetty-wedge variants are recoverable by a soft
+        restart.
+        """
+        # Always refresh telemetry context, even when recovery is disabled.
+        # Assign unconditionally so callers can pass `None` to clear stale
+        # context between testconfigs (otherwise a prior playbook's name
+        # could bleed into later `inband_502_observed` rows — see Devmate
+        # review of D109398929 V1).
+        self._current_playbook_name = playbook_name
+        self._current_testconfig_name = testconfig_name
+        if TAAC_OSS or self.session_id is None:
+            return
+        if self.ixia_recovery is None or not getattr(
+            self.ixia_recovery, "enabled", False
+        ):
+            return
+        try:
+            from taac.internal.utils.ixia_recovery_lib import (
+                classify_health,
+                HealthStatus,
+            )
+        except ImportError:
+            return
+        try:
+            health = classify_health(
+                str(self.primary_chassis_ip),
+                username=str(self.username),
+                password=self.password,
+            )
+        except Exception as e:
+            # Probe failure isn't itself proof of a wedge — log and let the
+            # playbook proceed (the per-RPC wrapper still guards every call).
+            self.logger.warning(
+                f"{_YELLOW}[IXIA]{_RESET} ensure_ixia_alive probe raised "
+                f"{type(e).__name__}: {e!r} — skipping gate"
+            )
+            return
+        status = health.get("status")
+        if status not in (HealthStatus.API_DOWN_502, HealthStatus.API_DOWN_OTHER):
+            # HEALTHY / AUTH_FAILED → not wedged. CHASSIS_DOWN / UNREACHABLE →
+            # hardware/network issue, not fixable by a soft restart.
+            return
+        http_status = health.get("sessions_endpoint", {}).get("status_code") or 502
+        self.logger.warning(
+            f"{_YELLOW}[IXIA]{_RESET} between-playbook gate detected {status} "
+            f"on {self.primary_chassis_ip} before "
+            f"{self._current_playbook_name!r} — firing recovery"
+        )
+        # Synthesize an exception just for the inband_502_observed emission.
+        # The Scuba schema wants an http_status; reuse `_emit_inband_502` for
+        # the single-source emission path.
+        self._emit_inband_502(
+            op_name="ensure_ixia_alive",
+            exc=Exception(f"HTTP {http_status}"),
+            source=_INBAND_SOURCE_BETWEEN_PLAYBOOK_GATE,
+        )
+        self._attempt_inband_recovery()
+        # Outcome is intentionally not raised: if recovery rebuilt the
+        # session, the playbook's first RPC fails honestly and the runner
+        # records it as FAILED — no new exception type / sticky flag needed.
 
     def assign_ports(self, port_configs: t.Sequence[ixia_types.PortConfig]) -> None:
         """API to assign ports to the IXIA setup by creating new vport instances
@@ -1366,6 +1563,7 @@ class Ixia:
 
         return IpAddressResult(ipv4=ipv4_addr, ipv6=ipv6_addr)
 
+    @external_api
     def start_protocols(self) -> None:
         """Used to start all the protocols synchronously"""
 
@@ -1374,6 +1572,7 @@ class Ixia:
             "[GLOBAL] Successfully started all the protocols in the IXIA setup"
         )
 
+    @external_api
     def stop_protocols(self, sleep_timer: int = 0) -> None:
         """Used to stop all the protocols synchronously"""
 
@@ -1408,6 +1607,7 @@ class Ixia:
             "the protocols in the IXIA setup!"
         )
 
+    @external_api
     @retryable(num_tries=3, sleep_time=10, debug=True)
     def apply_changes(self, sleep_timer: int = 0) -> None:
         """API to apply the changes made on the fly to the topology"""
@@ -4288,6 +4488,7 @@ class Ixia:
         else:
             assert not is_traffic_running, " Traffic is not STOPPED"
 
+    @external_api
     @require_traffic_item
     @retryable(num_tries=15, sleep_time=5, debug=True)
     def start_traffic(self, regenerate_traffic_items: bool = False) -> None:
@@ -4308,6 +4509,7 @@ class Ixia:
             "[GLOBAL] Successfully started all the traffic items in the IXIA setup!"
         )
 
+    @external_api
     @require_traffic_item
     @retryable(num_tries=3, sleep_time=10, debug=True)
     def stop_traffic(self) -> None:

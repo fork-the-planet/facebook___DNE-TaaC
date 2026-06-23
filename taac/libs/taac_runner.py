@@ -1511,6 +1511,20 @@ class TaacRunner:
                 # pyrefly: ignore [bad-assignment]
                 self._current_playbook = playbook
                 try:
+                    # Cross-playbook IXIA health gate. Fires the in-band 5xx
+                    # recovery if the chassis is in a Jetty-wedge state
+                    # between playbooks (catches the R124.1 BAG010/BAG011
+                    # cascade where the dead session was silently inherited
+                    # by every subsequent playbook). Best-effort: any internal
+                    # failure is logged inside `ensure_ixia_alive` and
+                    # swallowed; the per-RPC `@external_api` wrapper remains
+                    # the last line of defense.
+                    if self.ixia is not None:
+                        self.ixia.ensure_ixia_alive(
+                            # pyrefly: ignore [missing-attribute]
+                            playbook_name=playbook.name,
+                            testconfig_name=self.test_config.name,
+                        )
                     # pyrefly: ignore [bad-argument-type]
                     await self.run_test_case(playbook, test_device)
                 except Exception as e:
