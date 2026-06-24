@@ -26,6 +26,11 @@ from taac.testconfigs.ai_bb.dsf_snc1_c084_test_config import (
 from taac.testconfigs.ai_bb.edsw003_n001_l201_snc1_hardening_test_config import (
     EDSW003_N001_L201_SNC1_HARDENING_NODE,
 )
+from taac.testconfigs.ai_bb.fa003_du003_qza1_prefix_profiling_config import (  # noqa: F401
+    FA003_DU003_QZA1_CONTIGUOUS_PREFIX_ALL,
+    FA003_DU003_QZA1_HYBRID_PREFIX_ALL,
+    FA003_DU003_QZA1_NON_CONTIGUOUS_PREFIX_ALL,
+)
 from taac.testconfigs.ai_bb.mp3n_bgp_path_scale_test_config import (
     EXP1_1_5M_ECMP52,
     EXP3_4M_ECMP120,
@@ -34,6 +39,9 @@ from taac.testconfigs.ai_bb.mp3n_bgp_path_scale_test_config import (
 from taac.testconfigs.ai_bb.mp3n_prefix_profiling_ixia_config import (
     CONTIGUOUS_PREFIX_ALL,
     CONTIGUOUS_PREFIX_ALL_SETUP_ONLY,
+    GTSW001_CONTIGUOUS_PREFIX_ALL,
+    GTSW001_HYBRID_PREFIX_ALL,
+    GTSW001_NON_CONTIGUOUS_PREFIX_ALL,
     HYBRID_PREFIX_ALL,
     NON_CONTIGUOUS_PREFIX_ALL,
 )
@@ -51,6 +59,12 @@ __all__ = [
     "EXP1_1_5M_ECMP52",
     "EXP3_4M_ECMP120",
     "EXP5_4M_ECMP240",
+    "FA003_DU003_QZA1_CONTIGUOUS_PREFIX_ALL",
+    "FA003_DU003_QZA1_HYBRID_PREFIX_ALL",
+    "FA003_DU003_QZA1_NON_CONTIGUOUS_PREFIX_ALL",
+    "GTSW001_CONTIGUOUS_PREFIX_ALL",
+    "GTSW001_HYBRID_PREFIX_ALL",
+    "GTSW001_NON_CONTIGUOUS_PREFIX_ALL",
     "HYBRID_PREFIX_ALL",
     "NON_CONTIGUOUS_PREFIX_ALL",
     "RDSW004_C085_N001_SNC1_HARDENING_NODE",

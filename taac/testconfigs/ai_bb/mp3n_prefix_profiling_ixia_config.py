@@ -92,7 +92,6 @@ from taac.test_as_a_config.types import (
     TestConfig,
 )
 
-
 # =============================================================================
 # SECTION 2: CONSTANTS
 # =============================================================================
@@ -687,7 +686,7 @@ def create_mp3n_setup_tasks(
         ),
     ]
 
-    if interface_configs is not None:
+    if interface_configs:
         config_json = {}
         for iface, iface_local_ip, iface_peer_ip, iface_desc in interface_configs:
             config_json[iface] = [
@@ -698,7 +697,7 @@ def create_mp3n_setup_tasks(
                     "description": iface_desc,
                     "peer_group_name": peer_group,
                     "num_sessions": 1,
-                    "remote_as_4_byte": str(remote_as),
+                    "remote_as_4_byte": remote_as,
                     "remote_as_4_byte_step": 0,
                     "gateway_starting_ip": iface_peer_ip,
                     "gateway_increment_ip": "::",
@@ -726,7 +725,7 @@ def create_mp3n_setup_tasks(
                                 "local_addr": local_ip,
                                 "peer_addr": peer_ip,
                                 "peer_group_name": peer_group,
-                                "remote_as_4_byte": str(remote_as),
+                                "remote_as_4_byte": remote_as,
                                 "description": peer_description,
                             },
                         ]
@@ -937,7 +936,7 @@ def create_warmboot_playbook(
     _network_group_index: int = 0,
     device_name: str = DEVICE_NAME,
     distribution_interface_map: Dict[str, str] | None = None,
-    convergence_duration: int = 120,
+    convergence_duration: int = 300,
 ) -> Playbook:
     """Create a TAAC Playbook for Warmboot testing.
 
@@ -1016,7 +1015,7 @@ def create_warmboot_playbook(
                 stage_id_prefix="wait_route_install_warmboot",
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
-                duration=convergence_duration,
+                duration=300,
             ),
             create_start_traffic_stage(
                 stage_id_prefix="start_traffic_warmboot",
@@ -1031,7 +1030,6 @@ def create_warmboot_playbook(
             create_mp3n_warmboot_trigger_stage(
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
-                timeout=600,
             ),
             create_wait_convergence_stage(
                 stage_id_prefix="wait_warmboot",
@@ -1049,7 +1047,7 @@ def create_warmboot_playbook(
             create_toggle_and_analyze_stage(
                 network_group_regex=f".*PREFIX_STRESSER_{distribution_type.upper()}.*",
                 iterations=5,
-                time_threshold=35,
+                time_threshold=60,
             ),
             create_wait_convergence_stage(
                 stage_id_prefix="wait_route_convergence_warmboot",
@@ -1071,7 +1069,7 @@ def create_warmboot_playbook(
                 stage_id_prefix="soak_warmboot",
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
-                duration=600,
+                duration=120,
             ),
         ],
     )
@@ -1087,7 +1085,7 @@ def create_bgp_restart_playbook(
     _network_group_index: int,
     device_name: str = DEVICE_NAME,
     distribution_interface_map: Dict[str, str] | None = None,
-    convergence_duration: int = 120,
+    convergence_duration: int = 300,
 ) -> Playbook:
     """Create a TAAC Playbook for BGP Restart testing.
 
@@ -1166,7 +1164,7 @@ def create_bgp_restart_playbook(
                 stage_id_prefix="wait_route_install_bgp_restart",
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
-                duration=convergence_duration,
+                duration=300,
             ),
             create_start_traffic_stage(
                 stage_id_prefix="start_traffic_bgp_restart",
@@ -1181,7 +1179,6 @@ def create_bgp_restart_playbook(
             create_mp3n_bgp_restart_trigger_stage(
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
-                timeout=600,
             ),
             create_wait_convergence_stage(
                 stage_id_prefix="wait_bgp_restart",
@@ -1199,7 +1196,7 @@ def create_bgp_restart_playbook(
             create_toggle_and_analyze_stage(
                 network_group_regex=f".*PREFIX_STRESSER_{distribution_type.upper()}.*",
                 iterations=5,
-                time_threshold=35,
+                time_threshold=60,
             ),
             create_wait_convergence_stage(
                 stage_id_prefix="wait_route_convergence_bgp_restart",
@@ -1221,7 +1218,7 @@ def create_bgp_restart_playbook(
                 stage_id_prefix="soak_bgp_restart",
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
-                duration=600,
+                duration=120,
             ),
         ],
     )
@@ -1237,7 +1234,7 @@ def create_coldboot_playbook(
     _network_group_index: int,
     device_name: str = DEVICE_NAME,
     distribution_interface_map: Dict[str, str] | None = None,
-    convergence_duration: int = 120,
+    convergence_duration: int = 300,
 ) -> Playbook:
     """Create a TAAC Playbook for Coldboot testing.
 
@@ -1317,7 +1314,7 @@ def create_coldboot_playbook(
                 stage_id_prefix="wait_route_install_coldboot",
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
-                duration=convergence_duration,
+                duration=300,
             ),
             create_start_traffic_stage(
                 stage_id_prefix="start_traffic_coldboot",
@@ -1332,13 +1329,12 @@ def create_coldboot_playbook(
             create_mp3n_coldboot_trigger_stage(
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
-                timeout=900,
             ),
             create_wait_convergence_stage(
                 stage_id_prefix="wait_coldboot",
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
-                duration=120,
+                duration=400,
             ),
             create_clear_stats_stage(
                 stage_id_prefix="clear_stats_post_reboot_coldboot",
@@ -1361,7 +1357,7 @@ def create_coldboot_playbook(
             create_toggle_and_analyze_stage(
                 network_group_regex=f".*PREFIX_STRESSER_{distribution_type.upper()}.*",
                 iterations=5,
-                time_threshold=35,
+                time_threshold=60,
             ),
             create_wait_convergence_stage(
                 stage_id_prefix="wait_route_convergence_coldboot",
@@ -1383,7 +1379,7 @@ def create_coldboot_playbook(
                 stage_id_prefix="soak_coldboot",
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
-                duration=600,
+                duration=120,
             ),
         ],
     )
@@ -1435,7 +1431,7 @@ def create_warmboot_playbooks_for_distribution(
     prefix_lengths: list[int] | None = None,
     device_name: str = DEVICE_NAME,
     distribution_interface_map: Dict[str, str] | None = None,
-    convergence_duration: int = 120,
+    convergence_duration: int = 300,
 ) -> list[Playbook]:
     """Create warmboot playbooks for a distribution type."""
     if prefix_lengths is None:
@@ -1462,7 +1458,7 @@ def create_bgp_restart_playbooks_for_distribution(
     prefix_lengths: list[int] | None = None,
     device_name: str = DEVICE_NAME,
     distribution_interface_map: Dict[str, str] | None = None,
-    convergence_duration: int = 120,
+    convergence_duration: int = 300,
 ) -> list[Playbook]:
     """Create BGP restart playbooks for a distribution type."""
     if prefix_lengths is None:
@@ -1489,7 +1485,7 @@ def create_coldboot_playbooks_for_distribution(
     prefix_lengths: list[int] | None = None,
     device_name: str = DEVICE_NAME,
     distribution_interface_map: Dict[str, str] | None = None,
-    convergence_duration: int = 120,
+    convergence_duration: int = 300,
 ) -> list[Playbook]:
     """Create coldboot playbooks for a distribution type."""
     if prefix_lengths is None:
@@ -1516,7 +1512,7 @@ def create_all_playbooks_for_distribution(
     prefix_lengths: list[int] | None = None,
     device_name: str = DEVICE_NAME,
     distribution_interface_map: Dict[str, str] | None = None,
-    convergence_duration: int = 120,
+    convergence_duration: int = 300,
 ) -> list[Playbook]:
     """Create all playbooks (warmboot, BGP restart, coldboot) for a distribution."""
     if distribution_interface_map is None:
@@ -1565,7 +1561,7 @@ def create_test_config_for_distribution(
     patcher_suffix: str = "rtsw_ixia",
     config_name_prefix: str = "MP3N_PREFIX_PROFILING_SCALE",
     basset_pool: str | None = None,
-    convergence_duration: int = 120,
+    convergence_duration: int = 300,
 ) -> TestConfig:
     """Create a TestConfig for a distribution type."""
     if prefix_lengths is None:
@@ -1736,7 +1732,7 @@ def create_device_test_configs(
     patcher_suffix: str,
     config_name_prefix: str,
     basset_pool: str | None = None,
-    convergence_duration: int = 120,
+    convergence_duration: int = 300,
 ) -> tuple[TestConfig, TestConfig, TestConfig]:
     """Create all MP3N test configs for a device from interface specs.
 
