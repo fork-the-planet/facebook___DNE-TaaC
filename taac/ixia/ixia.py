@@ -919,9 +919,18 @@ class Ixia:
             )
             return False
         if not result.get("success"):
+            blocked = result.get("blocked_reason") or ""
+            extra = ""
+            if blocked.startswith("restart_post_status_"):
+                details = result.get("details") or {}
+                extra = (
+                    f" | post={details.get('restart_post_status')}"
+                    f" url={details.get('restart_url')!r}"
+                    f" body_snippet={details.get('restart_post_body_snippet')!r}"
+                )
             self.logger.warning(
                 f"{_YELLOW}[IXIA]{_RESET} in-band recovery refused/failed: "
-                f"blocked_reason={result.get('blocked_reason')!r}"
+                f"blocked_reason={blocked!r}{extra}"
             )
             return False
         return True

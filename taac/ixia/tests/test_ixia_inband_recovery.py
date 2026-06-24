@@ -185,6 +185,40 @@ class ExternalApiDecoratorTest(_RecoveryTestBase):
         self.assertEqual(fn.call_count, 2)
 
 
+class AttemptInbandRecoveryTest(_RecoveryTestBase):
+    """`_attempt_inband_recovery` surfaces the chassis's refusal body in its
+    warning log so the everpaste shows WHY a soft-restart POST was rejected."""
+
+    def test_post_status_refusal_logs_body_snippet(self):
+        ix = self._make_ixia()
+        self.lib.restart_ixnetwork.return_value = {
+            "success": False,
+            "blocked_reason": "restart_post_status_400",
+            "details": {
+                "restart_post_status": 400,
+                "restart_url": "/chassis/api/v2/ixos/operations/restart/1",
+                "restart_post_body_snippet": "ixnetworkweb is already restarting",
+            },
+        }
+        self.assertFalse(ix._attempt_inband_recovery())
+        msg = ix.logger.warning.call_args.args[0]
+        self.assertIn("restart_post_status_400", msg)
+        self.assertIn("post=400", msg)
+        self.assertIn("body_snippet=", msg)
+        self.assertIn("ixnetworkweb is already restarting", msg)
+
+    def test_non_post_refusal_omits_body_snippet_suffix(self):
+        ix = self._make_ixia()
+        self.lib.restart_ixnetwork.return_value = {
+            "success": False,
+            "blocked_reason": "cooldown",
+        }
+        self.assertFalse(ix._attempt_inband_recovery())
+        msg = ix.logger.warning.call_args.args[0]
+        self.assertIn("cooldown", msg)
+        self.assertNotIn("body_snippet=", msg)
+
+
 class EnsureIxiaAliveTest(_RecoveryTestBase):
     """Cross-playbook gate: probe + recover only on Jetty-wedge classifications."""
 
