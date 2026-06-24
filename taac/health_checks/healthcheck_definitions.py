@@ -257,6 +257,7 @@ def create_bgp_rib_fib_consistency_check(
 def create_bgp_convergence_check(
     convergence_threshold: t.Optional[int] = None,
     fail_on_eor_expired: t.Optional[bool] = None,
+    validate_sequence: t.Optional[bool] = None,
     extra_json_params: t.Optional[t.Dict[str, t.Any]] = None,
     check_id: t.Optional[str] = None,
 ) -> PointInTimeHealthCheck:
@@ -267,12 +268,19 @@ def create_bgp_convergence_check(
     preserving inline-construction byte equivalence at sites that omit them.
     `extra_json_params` covers custom variants (e.g. ``{"start_event": "3",
     "end_event": "4"}``) and is merged after the named kwargs.
+
+    `validate_sequence` opts into asserting the BGP++ initialization events
+    occurred in the canonical order (terminal INITIALIZED reached, no present
+    event out of timestamp order). Default (None) = off — byte-identical to
+    today for callers that omit it.
     """
     json_payload: t.Dict[str, t.Any] = {}
     if convergence_threshold is not None:
         json_payload["convergence_threshold"] = convergence_threshold
     if fail_on_eor_expired is not None:
         json_payload["fail_on_eor_expired"] = fail_on_eor_expired
+    if validate_sequence is not None:
+        json_payload["validate_sequence"] = validate_sequence
     if extra_json_params is not None:
         json_payload.update(extra_json_params)
     if not json_payload and check_id is None:
