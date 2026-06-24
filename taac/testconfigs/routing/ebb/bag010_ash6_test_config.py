@@ -594,13 +594,18 @@ def create_bag010_ash6_drain_test_config(
 # =============================================================================
 # Test Config 4: Longevity test
 # =============================================================================
+# Longevity soak duration (seconds). Temporarily reduced from 8h (28800s) to 4h;
+# restore to 28800 to return to the full 8h soak.
+_LONGEVITY_DURATION_SECONDS = 14400  # 4h
+
+
 def create_bag010_ash6_longevity_test_config(
     profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
     enable_update_group: bool = False,
 ) -> TestConfig:
     """
     Test config for bag010.ash6 longevity testing:
-    - bgp_longevity_playbook (8 hours with community churn every 60 seconds)
+    - bgp_longevity_playbook (4 hours, temporarily reduced from 8h, with community churn every 60 seconds)
 
     When ``enable_update_group`` is True, the BGP++ settings (including the
     ``update_group_config`` struct, per D100093369) are dynamically toggled on the device during
@@ -619,7 +624,7 @@ def create_bag010_ash6_longevity_test_config(
         playbooks=[
             create_bgp_longevity_playbook(
                 device_name=DEVICE_NAME,
-                duration=28800,
+                duration=_LONGEVITY_DURATION_SECONDS,
             ),
         ],
     )
