@@ -776,6 +776,113 @@ def create_bgp_update_group_check(
     )
 
 
+def create_bgp_peer_route_set_equality_check(
+    baseline_peer_addr: str,
+    tested_peer_addrs: t.List[str],
+    anchor_route_count: t.Optional[int] = None,
+    count_tolerance: int = 0,
+    allow_extra_in_tested: bool = False,
+    address_family: str = "ipv6",
+    check_id: t.Optional[str] = None,
+) -> PointInTimeHealthCheck:
+    """Create a check that tested peers receive the same postfilter route SET
+    as a baseline peer.
+
+    Backed by BGP++ thrift ``getPostfilterAdvertisedNetworks`` (one call
+    per peer -- DUT-side mirror of what each peer should be receiving after
+    egress policy) with EOS CLI fallback (``show bgp ipv6 unicast neighbors
+    <peer> advertised-routes | json``); the arista path delegates back to
+    thrift on "BGP inactive". Used as the spec gate for BGP++ UG 2.4.1
+    (resilience under mid-sync UG-member churn) and 2.4.2 (mid-sync
+    withdrawal). See the HC module docstring for the BGP++ UG limitation
+    (T271301144) and the counter-based workaround used in the bag012
+    testconfig stacked diff.
+
+    Args:
+        baseline_peer_addr: IP of the ground-truth peer.
+        tested_peer_addrs: IPs of peers whose received-route sets must equal
+            the baseline's.
+        anchor_route_count: If set, additionally asserts each peer's received
+            count equals this value (catches "all peers wrong with the same
+            count" failure mode).
+        count_tolerance: Permitted deviation when ``anchor_route_count`` is
+            set.
+        allow_extra_in_tested: When True, tested peers may have a strict
+            superset of baseline's prefixes (no missing, extra allowed).
+            Default False = strict equality.
+        address_family: "ipv4" or "ipv6" (arista CLI path only).
+        check_id: Optional unique identifier.
+
+    Returns:
+        A ``PointInTimeHealthCheck`` named ``BGP_PEER_ROUTE_SET_EQUALITY_CHECK``.
+    """
+    params: t.Dict[str, t.Any] = {
+        "baseline_peer_addr": baseline_peer_addr,
+        "tested_peer_addrs": tested_peer_addrs,
+        "count_tolerance": count_tolerance,
+        "allow_extra_in_tested": allow_extra_in_tested,
+        "address_family": address_family,
+    }
+    if anchor_route_count is not None:
+        params["anchor_route_count"] = anchor_route_count
+    return PointInTimeHealthCheck(
+        name=hc_types.CheckName.BGP_PEER_ROUTE_SET_EQUALITY_CHECK,
+        check_params=Params(json_params=json.dumps(params)),
+        check_id=check_id,
+    )
+
+
+def create_bgp_received_route_community_check(
+    baseline_peer_addr: str,
+    tested_peer_addrs: t.List[str],
+    anchor_community: t.Optional[str] = None,
+    forbidden_communities: t.Optional[t.List[str]] = None,
+    address_family: str = "ipv6",
+    check_id: t.Optional[str] = None,
+) -> PointInTimeHealthCheck:
+    """Create a check that tested peers receive the same per-prefix community
+    lists as a baseline peer, optionally anchored on an expected community
+    and forbidding stale communities.
+
+    Backed by BGP++ thrift ``getPostfilterAdvertisedNetworks`` (each TBgpPath
+    carries ``community_list`` -- DUT-side mirror of what each peer should
+    be receiving) with EOS CLI fallback. Spec gate for BGP++ UG 2.4.3 --
+    after a mid-sync community mutation on the sender, every UG member must
+    have the NEW community, not the stale one. KNOWN LIMITATION: the
+    underlying thrift returns 0 prefixes under BGP++ UG (T271301144), making
+    this check vacuous-OK today. See the HC module docstring for details.
+
+    Args:
+        baseline_peer_addr: IP of the ground-truth peer.
+        tested_peer_addrs: IPs of peers whose per-prefix communities must
+            match baseline.
+        anchor_community: If set (e.g. ``"0:665"``), asserted present on
+            every route on every checked peer.
+        forbidden_communities: If set (e.g. ``["65529:39744"]``), asserted
+            absent on every route on every checked peer (catches stale
+            community survival).
+        address_family: "ipv4" or "ipv6" (arista CLI path only).
+        check_id: Optional unique identifier.
+
+    Returns:
+        A ``PointInTimeHealthCheck`` named ``BGP_RECEIVED_ROUTE_COMMUNITY_CHECK``.
+    """
+    params: t.Dict[str, t.Any] = {
+        "baseline_peer_addr": baseline_peer_addr,
+        "tested_peer_addrs": tested_peer_addrs,
+        "address_family": address_family,
+    }
+    if anchor_community is not None:
+        params["anchor_community"] = anchor_community
+    if forbidden_communities:
+        params["forbidden_communities"] = forbidden_communities
+    return PointInTimeHealthCheck(
+        name=hc_types.CheckName.BGP_RECEIVED_ROUTE_COMMUNITY_CHECK,
+        check_params=Params(json_params=json.dumps(params)),
+        check_id=check_id,
+    )
+
+
 def create_hardware_capacity_check(
     fec_threshold: t.Optional[t.Any] = None,
     ecmp_threshold: t.Optional[t.Any] = None,

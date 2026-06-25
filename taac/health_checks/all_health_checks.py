@@ -32,6 +32,12 @@ from taac.health_checks.device_health_checks.bgp_multipath_next_hop_count_health
 from taac.health_checks.device_health_checks.bgp_non_best_route_health_check import (
     BgpNonBestRouteHealthCheck,
 )
+from taac.health_checks.device_health_checks.bgp_peer_route_set_equality_health_check import (
+    BgpPeerRouteSetEqualityHealthCheck,
+)
+from taac.health_checks.device_health_checks.bgp_received_route_community_health_check import (
+    BgpReceivedRouteCommunityHealthCheck,
+)
 from taac.health_checks.device_health_checks.bgp_route_count_verification_health_check import (
     BgpRouteCountVerificationHealthCheck,
 )
@@ -250,6 +256,8 @@ OSS_HEALTH_CHECKS: t.List[HealthCheck] = [
     PortSpeedSnapshotHealthCheck,
     # UcmpTrafficDistributionHealthCheck,  # ODS-dependent (taac.internal), excluded in OSS
     BgpRouteCountVerificationHealthCheck,
+    BgpPeerRouteSetEqualityHealthCheck,
+    BgpReceivedRouteCommunityHealthCheck,
     BgpMultipathNextHopCountHealthCheck,
     RouteConvergenceTimeHealthCheck,
     DlbResourceStickinessHealthCheck,
