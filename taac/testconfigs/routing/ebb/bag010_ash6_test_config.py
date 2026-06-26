@@ -70,7 +70,6 @@ from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.c
     BGP_MON_PEER_COUNT,
     BGP_MON_REMOTE_AS,
     DEFAULT_PROFILE,
-    DRAIN_POOL_PEER_COUNT,
     EBGP_PEER_COUNT_V4,
     EBGP_PEER_COUNT_V6,
     EBGP_PEER_TO_DRAIN,
@@ -166,18 +165,6 @@ TOTAL_SESSION_COUNT = (
 # avoids spurious flakes while preserving the iBGP/eBGP establishment signal
 # that actually matters.
 EXPECTED_ESTABLISHED_SESSION_COUNT = TOTAL_SESSION_COUNT - BGP_MON_PEER_COUNT
-
-# Drain-variant expectation. When `drain=True` is plumbed through
-# `_build_test_config`, `create_ebb_scale_basic_port_configs` carves out an
-# extra `DRAIN_POOL_PEER_COUNT` peers into dedicated DRAIN device groups
-# (eBGP V4/V6 + iBGP DC V4/V6 per plane). These peers start in
-# `TBgpPeerState.IDLE` by design — the FAUU / Plane drain stages activate
-# them mid-test. The pre-test `BGP_SESSION_ESTABLISH_CHECK` must therefore
-# subtract them, otherwise it asserts the drain pool is up at startup and
-# fails with a 24-peer mismatch on every healthy run (see paste P2391197932).
-EXPECTED_ESTABLISHED_SESSION_COUNT_DRAIN = (
-    EXPECTED_ESTABLISHED_SESSION_COUNT - DRAIN_POOL_PEER_COUNT
-)
 
 
 def _get_setup_tasks(
@@ -565,13 +552,17 @@ def create_bag010_ash6_drain_test_config(
         name=name,
         profile=profile,
         enable_update_group=enable_update_group,
-        drain=True,
+        # Soft-drain (origin/local-pref attribute drain/undrain in the stages)
+        # runs on the full peer set; the carved session-drain pool (drain=True)
+        # is unused by these playbooks, so keep all peers established and verify
+        # the full session count pre- and post-test.
+        drain=False,
         playbooks=[
             create_bgp_fauu_drain_undrain_playbook(
                 device_name=DEVICE_NAME,
                 peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
                 peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
-                expected_established_sessions=EXPECTED_ESTABLISHED_SESSION_COUNT_DRAIN,
+                expected_established_sessions=EXPECTED_ESTABLISHED_SESSION_COUNT,
                 profile=profile,
                 tcp_dump_capture_interface_ebgp=IXIA_INTERFACE_MIMIC_EBGP,
                 tcp_dump_capture_interface_bgpmon=IXIA_INTERFACE_MIMIC_BGP_MON,
@@ -581,7 +572,7 @@ def create_bag010_ash6_drain_test_config(
                 device_name=DEVICE_NAME,
                 peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
                 peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
-                expected_established_sessions=EXPECTED_ESTABLISHED_SESSION_COUNT_DRAIN,
+                expected_established_sessions=EXPECTED_ESTABLISHED_SESSION_COUNT,
                 profile=profile,
                 tcp_dump_capture_interface_ebgp=IXIA_INTERFACE_MIMIC_EBGP,
                 tcp_dump_capture_interface_bgpmon=IXIA_INTERFACE_MIMIC_BGP_MON,
