@@ -1,0 +1,167 @@
+# (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
+
+# pyre-unsafe
+
+"""TC52: Restart HostReachTracker (HRT) on the BE node, expect clean recovery.
+
+Restarts the HRT service (``systemctl restart metalos.wds.hostreachtracker``) on
+the GPU/BE host (rtptest1544 — our observed BE node), waits 2 minutes for HRT to
+re-subscribe to FSDB on all 8 GTSWs and rebuild its 32 sessions, then asserts the
+FULL stable-state contract (identical pre/post health checks — no relaxations).
+A second, no-churn longevity playbook then confirms the recovered state stays
+clean.
+
+HRT runs on the rtptest host, NOT on a FBOSS switch, so the restart goes through
+the host-SSH path (lab-ssh as root), the same transport used by the ib-traffic /
+NIC-flap host steps — see ``fpf_restart_hrt`` in custom_step.py.
+
+Two-playbook structure (both full stable-state v2 — same as fpf_stress_test_config):
+  1. Disrupt playbook: inject + stabilize, restart HRT on the BE node, settle
+     120s, then the full stable-state contract (pre == post expectations).
+  2. Longevity playbook: stable-state soak (no churn) — confirms the recovered
+     state holds.
+
+Usage:
+  TAAC_SSH_VIA_LAB_SSH=1 buck2 run neteng/netcastle:netcastle_taac -- \\
+    --team taac --test-config fpf_tc52_hrt_restart \\
+    --dev --skip-basset-reservation --skip-testbed-isolation \\
+    --debug --continue-on-precheck-failure --skip-fboss-rsyslog
+"""
+
+from taac.libs.fpf.fpf_prod_prefix_map import get_prefix
+from taac.playbooks.playbook_definitions import (
+    create_fpf_hardening_playbook_v2,
+)
+from taac.steps.step_definitions import (
+    create_fpf_restart_hrt_step,
+    create_longevity_step,
+)
+from taac.task_definitions import (
+    create_fpf_start_collectors_task,
+    create_fpf_stop_collectors_task,
+)
+from taac.testconfigs.fpf.fpf_hardening_common import (
+    ALLOW_BASELINE_FAILURES,
+    create_fpf_endpoints,
+    DEFAULT_COMMUNITY_LIST,
+    DEFAULT_SUBNET_PREFIX,
+    EXPECTED_FSDB_SESSION_COUNT,
+    fpf_clean_slate_setup_task,
+    fpf_ib_traffic_tasks,
+    FSDB_COLLECTOR_MODE,
+    GPU_HOSTS,
+    HRT_MEMORY_HOSTS,
+    OBSERVER_GTSWS,
+    skip_ssh_dependencies,
+    SPRAY_HOSTS,
+    TRIGGER_STSWS,
+)
+from taac.test_as_a_config.types import TestConfig
+
+PREFIX_COUNT = 1000
+STABILIZATION_DELAY_SEC = 120
+# HRT re-subscribes to FSDB on all 8 GTSWs and rebuilds its 32 sessions after a
+# restart — wait 2 min before the postchecks judge the recovered state.
+POST_RESTART_SETTLE_SEC = 120
+LONGEVITY_SEC = 300
+
+# HRT runs on the BE node we observe (rtptest1544 = GPU_HOSTS[0]).
+HRT_RESTART_HOSTS = [GPU_HOSTS[0]]
+
+PROD_PREFIX_HOST = GPU_HOSTS[0]
+PROD_PREFIX_DEVICE_ID = 0
+PROD_PREFIXES = [get_prefix(PROD_PREFIX_HOST, PROD_PREFIX_DEVICE_ID)]
+
+
+def create_fpf_tc52_test_config() -> TestConfig:
+    skip_ssh = skip_ssh_dependencies()
+    ib_setup, ib_teardown = fpf_ib_traffic_tasks(skip_ssh)
+    spray = None if skip_ssh else SPRAY_HOSTS
+
+    # Playbook 1: full stable-state v2 contract with the HRT restart + 2-min
+    # settle as the disruption steps (pre == post expectations, no relaxations).
+    disrupt_playbook = create_fpf_hardening_playbook_v2(
+        gtsws=OBSERVER_GTSWS,
+        hosts=GPU_HOSTS,
+        trigger_stsws=TRIGGER_STSWS,
+        soak_duration_sec=0,
+        stabilization_delay_sec=STABILIZATION_DELAY_SEC,
+        prefix_count=PREFIX_COUNT,
+        community_list=DEFAULT_COMMUNITY_LIST,
+        prod_prefixes=PROD_PREFIXES,
+        skip_ssh_dependent_checks=skip_ssh,
+        fsdb_expected_total=EXPECTED_FSDB_SESSION_COUNT,
+        hrt_memory_hosts=HRT_MEMORY_HOSTS,
+        hrt_driver_hosts=HRT_MEMORY_HOSTS,
+        spray_hosts=spray,
+        disruption_steps=[
+            create_fpf_restart_hrt_step(
+                hosts=HRT_RESTART_HOSTS,
+                description=(
+                    f"Restart HostReachTracker on {HRT_RESTART_HOSTS} "
+                    f"(systemctl restart metalos.wds.hostreachtracker)"
+                ),
+            ),
+            create_longevity_step(
+                duration=POST_RESTART_SETTLE_SEC,
+                description=(
+                    f"Settle {POST_RESTART_SETTLE_SEC}s for HRT to re-subscribe "
+                    f"and rebuild its 32 FSDB sessions"
+                ),
+            ),
+        ],
+        playbook_name="fpf_tc52_hrt_restart_disrupt",
+    )
+
+    # Playbook 2: no-churn stable-state soak — confirms the recovered state holds.
+    longevity_playbook = create_fpf_hardening_playbook_v2(
+        gtsws=OBSERVER_GTSWS,
+        hosts=GPU_HOSTS,
+        trigger_stsws=TRIGGER_STSWS,
+        soak_duration_sec=LONGEVITY_SEC,
+        stabilization_delay_sec=STABILIZATION_DELAY_SEC,
+        prefix_count=PREFIX_COUNT,
+        community_list=DEFAULT_COMMUNITY_LIST,
+        playbook_name="fpf_tc52_hrt_restart_longevity",
+        prod_prefixes=PROD_PREFIXES,
+        skip_ssh_dependent_checks=skip_ssh,
+        fsdb_expected_total=EXPECTED_FSDB_SESSION_COUNT,
+        hrt_memory_hosts=HRT_MEMORY_HOSTS,
+        hrt_driver_hosts=HRT_MEMORY_HOSTS,
+        spray_hosts=spray,
+    )
+
+    return TestConfig(
+        name="fpf_tc52_hrt_restart",
+        endpoints=create_fpf_endpoints(),
+        setup_tasks=[
+            fpf_clean_slate_setup_task(),
+            *ib_setup,
+            create_fpf_start_collectors_task(
+                gtsws=OBSERVER_GTSWS,
+                hosts=GPU_HOSTS,
+                subnet_prefix=DEFAULT_SUBNET_PREFIX,
+                prod_prefixes=PROD_PREFIXES,
+                prod_prefix_host=PROD_PREFIX_HOST,
+                prod_prefix_device_id=PROD_PREFIX_DEVICE_ID,
+                fsdb_mode=FSDB_COLLECTOR_MODE,
+                allow_baseline_failures=ALLOW_BASELINE_FAILURES,
+                enable_fsdb_session_collector=True,
+                fsdb_session_host=GPU_HOSTS[0],
+                fsdb_session_expected=EXPECTED_FSDB_SESSION_COUNT,
+            ),
+        ],
+        teardown_tasks=[
+            create_fpf_stop_collectors_task(
+                trigger_stsws=TRIGGER_STSWS,
+                prefix_count=PREFIX_COUNT,
+                community_list=DEFAULT_COMMUNITY_LIST,
+            ),
+            *ib_teardown,
+        ],
+        playbooks=[disrupt_playbook, longevity_playbook],
+        tags=["fpf"],
+    )
+
+
+TEST_CONFIG = create_fpf_tc52_test_config()
