@@ -145,6 +145,7 @@ class FpfHostSprayHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCheck
         *,
         host_lanes: t.Dict[str, t.Dict[str, float]],
         baseline_beths: t.Set[str],
+        excluded_by_host: t.Dict[str, t.List[str]],
         impacted_by_host: t.Dict[str, t.List[str]],
         impacted_max_gbps: float,
         min_egress_gbps: float,
@@ -161,9 +162,15 @@ class FpfHostSprayHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCheck
         """
         for host in sorted(host_lanes):
             host_impacted = set(impacted_by_host.get(host, []))
+            host_excluded = set(excluded_by_host.get(host, []))
             unimpacted_vals: t.List[float] = []
             for lane in sorted(host_lanes[host]):
-                if lane in baseline_beths:
+                # Excluded lanes are dropped from EVERY signal (floor, spread, and
+                # the impacted-drain assertion) — used for a lane whose egress is
+                # immaterial to the verdict (e.g. the lane facing a deliberately
+                # disrupted GTSW during a disrupt window). Unlike impacted lanes,
+                # no assertion of any kind is made on them.
+                if lane in baseline_beths or lane in host_excluded:
                     continue
                 val = host_lanes[host][lane]
                 if lane in host_impacted:
@@ -292,6 +299,13 @@ class FpfHostSprayHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCheck
             check_params.get("impacted_lanes_by_host", {}) or {}
         )
         impacted_max_gbps = float(check_params.get("impacted_max_gbps", 10.0))
+        # Excluded lanes (beth labels) per host: dropped from EVERY signal — no
+        # floor, no spread, no drained-assertion. Used when a lane's egress is
+        # immaterial to the verdict (e.g. the lane facing a deliberately disrupted
+        # GTSW during a disrupt window).
+        excluded_by_host: t.Dict[str, t.List[str]] = (
+            check_params.get("excluded_lanes_by_host", {}) or {}
+        )
         if impacted_by_host:
             _skip = disruption_inconclusive_skip()
             if _skip:
@@ -397,6 +411,7 @@ class FpfHostSprayHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCheck
             self._eval_snapshot(
                 host_lanes=snapshot,
                 baseline_beths=baseline_beths,
+                excluded_by_host=excluded_by_host,
                 impacted_by_host=impacted_by_host,
                 impacted_max_gbps=impacted_max_gbps,
                 min_egress_gbps=min_egress_gbps,

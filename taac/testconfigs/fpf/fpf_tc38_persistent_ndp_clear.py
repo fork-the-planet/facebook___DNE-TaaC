@@ -11,25 +11,27 @@ failure. The disruption is a 120s loop of ``fboss2 clear ndp`` (every 1s) on the
 observer GTSW, followed by a 120s longevity, then a stable-state v2 longevity
 playbook whose health checks anchor at LONGEVITY START.
 
-PROVISIONAL EXPECTATIONS (documented):
-  Per the test owner, the steady-state behavior under a persistent NDP clear is
-  UNCERTAIN — it is not yet known whether continuous NDP flushing measurably
-  perturbs HRT/prefix convergence once ports stay up. So ALL health checks use
-  STABLE-STATE expectations for now (the standard ``create_fpf_hardening_
-  playbook_v2`` postchecks, which assert the converged steady state), anchored
-  at longevity start via the two-playbook pattern: the disruption-only playbook
-  carries NO checks (so nothing measures across the noisy clear window), and the
-  runner stamps a fresh ``test_case_start_time`` at the start of the stable-state
-  longevity playbook, so its checks naturally measure only the post-clear
-  steady state. These expectations are PROVISIONAL and should be tightened (e.g.
-  to a churn/transition contract on the impacted lane) once the real behavior is
-  characterized on hardware.
+CHARACTERIZED EXPECTATIONS (per the test owner):
+  A persistent NDP clear DOES perturb the DATA plane on the cleared GTSW's lane
+  (gtsw001 = lane 0): the neighbor cache is wiped continuously, so lane 0 black-
+  holes until each re-resolve and in_dst_null / in_discard discards spike, while
+  congestion discards stay 0. Lane 0's own egress is immaterial during the
+  disrupt window, so it is IGNORED there (not asserted); only beth1-3 are held to
+  the spray floor. The CONTROL-plane HRT/TAAC collectors must NOT be disrupted at
+  all — they hold to the full strict stable-state contract (all samples).
 
-Shape:
-  playbooks = [
-    disruption-only:  ndp-clear loop (120s) + longevity (120s)   # NO checks
-    stable-state v2:  inject + stabilize + longevity              # all stable HCs
-  ]
+  Realized via the two-playbook pattern:
+    1. disrupt-window: ndp-clear loop (120s) + settle (120s), with the
+       data-plane-impact postchecks (lane0 ignored; beth1-3 spray; in_dst_null /
+       in_discard captured informational; congestion == 0).
+    2. stable-state v2: full strict stable-state HCs, anchored at longevity start
+       (the runner stamps a fresh test_case_start_time), so the HRT/prefix
+       collectors assert no disruption once the cache is re-resolved — and lane 0
+       is verified recovered here.
+
+  NOTE: the disrupt-window postchecks here are BUILD-validated only and not yet
+  run on hardware; the discard thresholds should be confirmed and tuned on the
+  first hardware run.
 
 Usage:
   TAAC_FPF_SKIP_SSH_DEPS=1 buck2 run neteng/netcastle:netcastle_taac -- \\
@@ -38,13 +40,18 @@ Usage:
     --debug --continue-on-precheck-failure --skip-fboss-rsyslog
 """
 
+from taac.health_checks.healthcheck_definitions import (
+    create_fpf_host_spray_check,
+    create_fpf_ods_counter_check,
+)
 from taac.libs.fpf.fpf_prod_prefix_map import get_prefix
 from taac.playbooks.playbook_definitions import (
-    create_fpf_disruption_only_playbook,
+    create_fpf_disrupt_window_playbook,
     create_fpf_hardening_playbook_v2,
 )
 from taac.steps.step_definitions import (
     create_fpf_ndp_clear_loop_step,
+    create_fpf_record_disruption_time_step,
     create_longevity_step,
 )
 from taac.task_definitions import (
@@ -82,18 +89,111 @@ IB_TRAFFIC_SERVER = GPU_HOSTS[0]
 IB_TRAFFIC_CLIENTS = [GPU_HOSTS[1]]
 SPRAY_HOSTS = [IB_TRAFFIC_SERVER, *IB_TRAFFIC_CLIENTS]
 
+# Characterized data-plane impact of a persistent NDP clear on the DUT GTSW
+# (gtsw001 = lane 0): the neighbor cache is wiped continuously, so lane 0 (beth0)
+# is perturbed (ignored during the disrupt window) and in_dst_null / in_discard
+# discards spike, while congestion discards stay 0.
+SPRAY_FLOOR_GBPS = 75.0
+DISCARD_FLOOR = 10000
+_ODS_REDUCE = r"groupby(entity, (\S+?\.\S+?)\..*, %1),sum"
+_ODS_IN_DST_NULL_KEY = (
+    r"regex(fboss.agent.eth.*discards.sum.60),filter(.*in_dst_null.*)"
+)
+_ODS_IN_DISCARD_KEY = r"regex(fboss.agent.eth.*discards.sum.60),filter(.*in_discard.*)"
+_ODS_IN_CONGESTION_KEY = (
+    r"regex(fboss.agent.eth.*congestion.*sum.60),filter(.*in_congestion_discards.sum.*)"
+)
+_ODS_OUT_CONGESTION_KEY = r"regex(fboss.agent.eth.*congestion.*sum.60),filter(.*out_congestion_discards.sum.*)"
+
+
+def _ndp_clear_disrupt_postchecks(spray_hosts, skip_ssh):
+    """Characterized disrupt-window contract for the persistent NDP clear.
+
+    Data plane: lane 0 (beth0) is ignored on every spray host (its egress is
+    immaterial while its GTSW's neighbor cache is wiped) while beth1-3 must keep
+    spraying; in_dst_null + in_discard discards are captured (informational) and
+    congestion discards must stay 0. The HRT/TAAC control-plane collectors are
+    asserted at FULL stable-state strength in the longevity playbook (a neighbor-
+    cache wipe must not perturb HRT/prefix convergence).
+    """
+    ods_entity_desc = ",".join(OBSERVER_GTSWS)
+    checks = [
+        create_fpf_ods_counter_check(
+            entity_desc=ods_entity_desc,
+            key_desc=_ODS_IN_DST_NULL_KEY,
+            validation_expr=f">= {DISCARD_FLOOR}",
+            reduce_desc=_ODS_REDUCE,
+            aggregate="max",
+            require="any",
+            informational=True,
+            counter_name="in_dst_null discards (captured)",
+            check_id="ndp_clear_ods_in_dst_null",
+        ),
+        create_fpf_ods_counter_check(
+            entity_desc=ods_entity_desc,
+            key_desc=_ODS_IN_DISCARD_KEY,
+            validation_expr=f">= {DISCARD_FLOOR}",
+            reduce_desc=_ODS_REDUCE,
+            aggregate="max",
+            require="any",
+            informational=True,
+            counter_name="in_discard discards (captured)",
+            check_id="ndp_clear_ods_in_discard",
+        ),
+        create_fpf_ods_counter_check(
+            entity_desc=ods_entity_desc,
+            key_desc=_ODS_IN_CONGESTION_KEY,
+            validation_expr="<= 0",
+            reduce_desc=_ODS_REDUCE,
+            counter_name="in_congestion discards (must be 0)",
+            check_id="ndp_clear_ods_in_congestion",
+        ),
+        create_fpf_ods_counter_check(
+            entity_desc=ods_entity_desc,
+            key_desc=_ODS_OUT_CONGESTION_KEY,
+            validation_expr="<= 0",
+            reduce_desc=_ODS_REDUCE,
+            counter_name="out_congestion discards (must be 0)",
+            check_id="ndp_clear_ods_out_congestion",
+        ),
+    ]
+    if spray_hosts:
+        checks.append(
+            create_fpf_host_spray_check(
+                hosts=spray_hosts,
+                min_egress_gbps=SPRAY_FLOOR_GBPS,
+                # Lane 0 (beth0) faces the GTSW being NDP-cleared; its egress is
+                # immaterial during the disrupt window, so EXCLUDE it entirely
+                # (no floor/spread/drain assertion). Only beth1-3 are held to the
+                # >75G spray floor. Lane 0 is verified in the longevity playbook.
+                excluded_lanes_by_host={h: ["beth0"] for h in spray_hosts},
+                window_from_disruption_time=True,
+                window_duration_sec=NDP_CLEAR_DURATION_SEC,
+                label=(
+                    "[ndp-clear] lane0(beth0) ignored (cache wiped); "
+                    "lanes1-3 spray >75G"
+                ),
+                check_id="ndp_clear_host_spray",
+            )
+        )
+    return checks
+
 
 def create_fpf_tc38_test_config() -> TestConfig:
     skip_ssh = skip_ssh_dependencies()
     spray = None if skip_ssh else SPRAY_HOSTS
 
-    # Disruption-only playbook: sustained NDP clear on the observer GTSW, then a
-    # settle. NO checks here — the noisy clear window is excluded from all HCs.
-    disrupt_playbook = create_fpf_disruption_only_playbook(
-        gtsws=OBSERVER_GTSWS,
-        hosts=GPU_HOSTS,
-        trigger_stsws=TRIGGER_STSWS,
+    # Disrupt-window playbook: record the disruption moment, run the sustained
+    # NDP clear on the observer GTSW, settle, then assert the CHARACTERIZED
+    # data-plane-impact contract across the window (lane0 ignored + discards +
+    # congestion==0). The control-plane HRT/TAAC collectors are held to full
+    # stable-state strength in the longevity playbook below.
+    disrupt_playbook = create_fpf_disrupt_window_playbook(
+        playbook_name="fpf_tc38_persistent_ndp_clear_disrupt",
         disruption_steps=[
+            create_fpf_record_disruption_time_step(
+                description="Record NDP-clear disruption time (anchors spray window)"
+            ),
             create_fpf_ndp_clear_loop_step(
                 every_sec=NDP_CLEAR_EVERY_SEC,
                 duration_sec=NDP_CLEAR_DURATION_SEC,
@@ -112,7 +212,7 @@ def create_fpf_tc38_test_config() -> TestConfig:
                 ),
             ),
         ],
-        playbook_name="fpf_tc38_persistent_ndp_clear_disrupt",
+        postchecks=_ndp_clear_disrupt_postchecks(spray, skip_ssh),
     )
 
     # Stable-state v2 longevity: PROVISIONAL — all HCs assert the converged

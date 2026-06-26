@@ -14,9 +14,10 @@ the static TestConfig structure:
   - TC37 (NIC-side link flap): two-playbook shape, NIC-side admin flap over the
     impacted beth lane(s), and the hard-link-down HC contract (FSDB session
     flips, in_discard loss expected) like the GTSW interface-disable test.
-  - TC38 (persistent NDP clear): disruption-only playbook with the 120s
-    ndp-clear loop (every 1s) on the observer GTSW, then a stable-state v2
-    longevity playbook carrying the (provisional, stable) postchecks.
+  - TC38 (persistent NDP clear): disrupt-window playbook with the 120s ndp-clear
+    loop (every 1s) on the observer GTSW carrying the characterized data-plane-
+    impact postchecks (lane0 drained + discards spike + congestion 0), then a
+    stable-state v2 longevity playbook carrying the strict stable postchecks.
 """
 
 import json
@@ -305,20 +306,32 @@ class TestTc38PersistentNdpClear(unittest.TestCase):
         )
         self.assertEqual(TC38.playbooks[1].name, "fpf_tc38_persistent_ndp_clear_stable")
 
-    def test_disruption_only_first_playbook(self):
-        # First playbook is disruption-only: no checks at all.
-        _disrupt_playbook_has_no_checks(TC38, self)
-        # Second (stable) playbook carries the provisional stable-state checks.
+    def test_disrupt_playbook_characterized_checks(self):
+        # First playbook now carries the CHARACTERIZED data-plane-impact
+        # postchecks (lane0 drains + discards spike + congestion stays 0), not
+        # "no checks". The strict stable-state HRT/prefix contract still lives in
+        # the second (stable) playbook.
+        disrupt_ids = _check_ids(TC38.playbooks[0])
+        # ODS discard/congestion checks are always present (not SSH-gated).
+        self.assertIn("ndp_clear_ods_in_dst_null", disrupt_ids)
+        self.assertIn("ndp_clear_ods_in_discard", disrupt_ids)
+        self.assertIn("ndp_clear_ods_in_congestion", disrupt_ids)
+        self.assertIn("ndp_clear_ods_out_congestion", disrupt_ids)
+        # Second (stable) playbook carries the stable-state checks.
         self.assertTrue(TC38.playbooks[1].postchecks)
 
     def test_ndp_clear_loop_120s_then_settle(self):
         steps = _steps(TC38.playbooks[0])
-        # ndp-clear loop -> settle longevity.
-        self.assertEqual(len(steps), 2)
-        loop = steps[0]
-        self.assertEqual(loop.name, StepName.CUSTOM_STEP)
+        # record-disruption-time -> ndp-clear loop -> settle longevity.
+        self.assertEqual(len(steps), 3)
+        # Locate the ndp-clear loop step (robust to step ordering).
+        loop = next(
+            s
+            for s in steps
+            if s.name == StepName.CUSTOM_STEP
+            and _params(s).get("custom_step_name") == "fpf_ndp_clear_loop"
+        )
         loop_params = _params(loop)
-        self.assertEqual(loop_params["custom_step_name"], "fpf_ndp_clear_loop")
         self.assertEqual(loop_params["every_sec"], NDP_CLEAR_EVERY_SEC)
         self.assertEqual(loop_params["duration_sec"], NDP_CLEAR_DURATION_SEC)
         self.assertEqual(NDP_CLEAR_DURATION_SEC, 120)
@@ -331,7 +344,8 @@ class TestTc38PersistentNdpClear(unittest.TestCase):
 
         self.assertEqual(list(loop.device_regexes or []), [OBSERVER_GTSWS[0]])
 
-        settle = steps[1]
+        # Settle longevity is the final step.
+        settle = steps[-1]
         self.assertEqual(settle.name, StepName.LONGEVITY_STEP)
         self.assertEqual(_params(settle)["duration"], SETTLE_AFTER_CLEAR_SEC)
 
