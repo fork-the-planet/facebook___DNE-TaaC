@@ -129,8 +129,15 @@ OBSERVER_GTSWS = [
     "gtsw002.l1002.c087.mwg2",
 ]
 
+# All 8 GTSWs in the l1002.c087.mwg2 pod a GPU host connects to (one lane each,
+# gtsw001->lane0 ... gtsw008->lane7). Used by the multi-GTSW rapid-flap configs
+# (flap every GTSW facing a chosen GPU host in parallel) and the dual-device
+# drain configs. The flap/drain custom steps build each GTSW's driver directly
+# (async_get_device_driver), so these do NOT all need to be in endpoints.
+ALL_GTSWS = [f"gtsw00{i}.l1002.c087.mwg2" for i in range(1, 9)]
+
 GPU_HOSTS = [
-    "rtptest1555.mwg2",
+    "rtptest1544.mwg2",
     "rtptest1575.mwg2",
 ]
 
@@ -143,7 +150,23 @@ IB_TRAFFIC_CLIENTS = [GPU_HOSTS[1]]
 SPRAY_HOSTS = [IB_TRAFFIC_SERVER, *IB_TRAFFIC_CLIENTS]
 
 # RTP hosts whose HRT service system-memory is monitored (ODS-based check).
-HRT_MEMORY_HOSTS = ["rtptest1555.mwg2", "rtptest1575.mwg2"]
+HRT_MEMORY_HOSTS = ["rtptest1544.mwg2", "rtptest1575.mwg2"]
+
+
+def fpf_clean_slate_setup_task():
+    """Return the clean-slate setup task: withdraw leftover 5000:dd test prefixes.
+
+    Place this FIRST in a config's ``setup_tasks`` (before the collectors task
+    and before the playbooks' injection steps) so injection always starts from a
+    clean ``5000:dd`` baseline — even if the PREVIOUS run was killed mid-flight
+    and never ran its teardown withdraw. Idempotent (no-op when nothing is
+    present). Imported lazily to avoid an import cycle with task_definitions.
+    """
+    from taac.task_definitions import (
+        create_fpf_withdraw_stale_prefixes_task,
+    )
+
+    return create_fpf_withdraw_stale_prefixes_task(trigger_stsws=TRIGGER_STSWS)
 
 
 def fpf_ib_traffic_tasks(skip_ssh: bool):
