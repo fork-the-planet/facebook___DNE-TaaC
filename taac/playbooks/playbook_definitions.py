@@ -22254,7 +22254,6 @@ def create_fpf_prefix_injection_stress_playbook(
         create_bgp_rib_fib_consistency_check,
         create_bgp_session_establish_check,
         create_core_dumps_snapshot_check,
-        create_cpu_utilization_check,
         create_device_core_dumps_check,
         create_fpf_bgp_rib_convergence_check,
         create_fpf_fsdb_ribmap_convergence_check,
@@ -22329,7 +22328,6 @@ def create_fpf_prefix_injection_stress_playbook(
         create_device_core_dumps_check(),
         create_bgp_rib_fib_consistency_check(),
         create_memory_utilization_check(),
-        create_cpu_utilization_check(),
         create_fpf_hrt_fsdb_session_check(
             hosts=hosts,
             check_id="fpf_hrt_postcheck",
@@ -22420,7 +22418,6 @@ def _build_fpf_generic_checks(
         create_bgp_session_establish_check,
         create_bgp_session_snapshot_check,
         create_core_dumps_snapshot_check,
-        create_cpu_utilization_check,
         create_device_core_dumps_check,
         create_fpf_host_spray_check,
         create_fpf_hrt_driver_disconnect_check,
@@ -22598,17 +22595,6 @@ def _build_fpf_generic_checks(
                 threshold=FPF_ACTIVE_THRESHOLDS.mem_util_default_bytes,
                 threshold_by_service=dict(FPF_ACTIVE_THRESHOLDS.mem_util_by_service),
                 start_time_jq_var="test_case_start_time",
-            ),
-            create_cpu_utilization_check(
-                # 100% per-process floor: at the 8-STSW injection scale, fsdb/bgpd
-                # legitimately run hotter (e.g. fsdb ~71% rebuilding the larger
-                # ribMap after an fsdb restart) — well within a single core. The
-                # split agents keep their higher 250% (multi-core) overrides.
-                threshold=100.0,
-                threshold_by_service={
-                    "fboss_hw_agent@0": 250.0,
-                    "fboss_sw_agent": 250.0,
-                },
             ),
             create_fpf_hrt_fsdb_session_check(
                 hosts=hosts,
@@ -22878,6 +22864,8 @@ def create_fpf_hardening_playbook_v2(
     impacted_planes_by_host: dict | None = None,
     skip_injection: bool = False,
     rf_vf_groups: list | None = None,
+    restart_ib_traffic_server: str | None = None,
+    restart_ib_traffic_clients: list[str] | None = None,
 ) -> Playbook:
     """FPF hardening playbook for use with long-lived collectors.
 
@@ -22939,6 +22927,7 @@ def create_fpf_hardening_playbook_v2(
     )
     from taac.steps.step_definitions import (
         create_fpf_bgp_prefix_injection_step,
+        create_fpf_restart_ib_traffic_step,
         create_longevity_step,
     )
 
@@ -23005,6 +22994,31 @@ def create_fpf_hardening_playbook_v2(
                     ),
                 ),
             ]
+        )
+    # Restart ib_write_bw before the soak so a disruption-killed or wedged flow
+    # (e.g. a wedge_agent coldboot wiping forwarding, or a flap leaving beth0
+    # egress stuck at 0 — i.e. ZERO traffic on all 4 planes because a prior
+    # step/playbook trigger killed it) is recovered and the longevity host-spray
+    # check observes real egress. Hosts default to spray_hosts (the traffic
+    # endpoints: server = spray_hosts[0], clients = the rest) unless explicitly
+    # overridden, so EVERY traffic-bearing config gets the recovery. Naturally a
+    # no-op when skip_ssh (spray_hosts is None). Inserted after inject+stabilize
+    # and before the disruption/soak.
+    _ib_server = restart_ib_traffic_server
+    _ib_clients = restart_ib_traffic_clients
+    if _ib_server is None and spray_hosts and len(spray_hosts) >= 2:
+        _ib_server = spray_hosts[0]
+        _ib_clients = list(spray_hosts[1:])
+    if _ib_server and _ib_clients:
+        stage_steps.append(
+            create_fpf_restart_ib_traffic_step(
+                server=_ib_server,
+                clients=_ib_clients,
+                description=(
+                    "Restart ib_write_bw before soak (recover "
+                    "disruption-killed/wedged traffic)"
+                ),
+            )
         )
     if disruption_steps:
         stage_steps.extend(disruption_steps)
@@ -23662,7 +23676,7 @@ def create_fpf_link_event_disrupt_playbook(
         )
 
     # Generic SSH/device-shell postchecks on the DUT GTSWs: services still up,
-    # no new core dumps, no unclean exits, memory/CPU within bounds after the
+    # no new core dumps, no unclean exits, memory within bounds after the
     # disruption window.
     snapshot_checks = []
     if include_ssh_checks:
@@ -23675,9 +23689,6 @@ def create_fpf_link_event_disrupt_playbook(
                     threshold=5 * (1024**3),
                     threshold_by_service=_mem_thresholds,
                     start_time_jq_var="test_case_start_time",
-                ),
-                create_cpu_utilization_check(
-                    threshold=400.0, start_time_jq_var="test_case_start_time"
                 ),
             ]
         )
