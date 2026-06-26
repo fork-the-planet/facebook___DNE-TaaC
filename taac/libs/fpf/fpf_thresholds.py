@@ -129,12 +129,12 @@ EXPECTED: FpfThresholds = FpfThresholds(
 
 # Relaxed thresholds used while known gaps are being worked. Differences vs
 # EXPECTED:
-#   * HRT system memory: 16 GiB (no fix yet; expected is 8 GiB).
+#   * HRT system memory: 9 GiB (relaxed working ceiling; expected is 8 GiB).
 #   * Convergence signal 1 (e2e): 5 min; signal 2 (propagation): 4 min.
 #   * Host spray min per-lane egress: 75 Gbps (expected is 90 Gbps).
 # Everything else mirrors EXPECTED.
 TEMPORARY: FpfThresholds = FpfThresholds(
-    hrt_system_memory_max_gib=16.0,
+    hrt_system_memory_max_gib=9.0,
     convergence_signal1_e2e_max_sec=300.0,  # 5 min
     convergence_signal2_local_max_sec=240.0,  # 4 min
     convergence_signal3_stability_duration_sec=60.0,
