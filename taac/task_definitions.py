@@ -3444,3 +3444,33 @@ def create_fpf_withdraw_vf_groups_task(
             )
         ),
     )
+
+
+def create_fpf_withdraw_stale_prefixes_task(
+    trigger_stsws: t.List[str],
+    prefix_count: int = 70000,
+    prefix_base: str = "5000:dd::/64",
+    increment_step: str = "0:0:1::",
+) -> Task:
+    """Create a SETUP task that clears leftover synthetic test prefixes.
+
+    Place this FIRST in ``setup_tasks`` (before ``create_fpf_start_collectors_task``
+    and before any playbook injection step) to guarantee a clean ``5000:dd``
+    baseline regardless of how the previous run ended. Withdraws a superset
+    (default 70000 — ≥ the max any FPF config injects, incl. the v1 hardening
+    configs) of ``prefix_base`` on the trigger STSWs. Idempotent (no-op when
+    nothing is present).
+    """
+    return Task(
+        task_name="fpf_withdraw_stale_prefixes",
+        params=Params(
+            json_params=json.dumps(
+                {
+                    "trigger_stsws": trigger_stsws,
+                    "prefix_count": prefix_count,
+                    "prefix_base": prefix_base,
+                    "increment_step": increment_step,
+                }
+            )
+        ),
+    )

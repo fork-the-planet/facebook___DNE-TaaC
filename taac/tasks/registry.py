@@ -69,6 +69,7 @@ if t.TYPE_CHECKING or not TAAC_OSS:
     from taac.tasks.fpf_collector_tasks import (
         FpfStartCollectorsTask,
         FpfStopCollectorsTask,
+        FpfWithdrawStalePrefixesTask,
     )
     from taac.tasks.fpf_ib_traffic_task import (
         FpfStartIbTrafficTask,
@@ -210,6 +211,7 @@ if not TAAC_OSS:
             GetEnforceFirstAsRejectsTask,
             FpfStartCollectorsTask,
             FpfStopCollectorsTask,
+            FpfWithdrawStalePrefixesTask,
             FpfInjectBgpPrefixesTask,
             FpfRestartServiceTask,
             DeployExaBGPTask,

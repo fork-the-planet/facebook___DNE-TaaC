@@ -377,3 +377,49 @@ class FpfStopCollectorsTask(BaseTask):
         for category, label, url in artifacts:
             lines.append(f"{category:<12}  {label:<48}  {url}")
         return "\n".join(lines)
+
+
+class FpfWithdrawStalePrefixesTask(BaseTask):
+    """Setup task: withdraw any leftover synthetic test prefixes before injection.
+
+    Runs ONCE at the head of ``setup_tasks`` (before collectors and before the
+    playbooks' injection steps) to guarantee a clean ``5000:dd`` baseline. The
+    pollution it clears comes from a PRIOR run whose teardown never executed —
+    most commonly a run killed mid-flight — leaving its injected prefixes in the
+    STSW BGP RIB. Those leftovers fail ``FPF_STALE_PREFIX_CHECK`` and skew the
+    exact-count convergence checks (notably the scale tests).
+
+    Withdraws a SUPERSET (``prefix_count`` defaults to 70000 — ≥ the max any FPF
+    config injects, incl. the 70000-prefix v1 hardening configs; same scale the
+    teardown ``fpf_stop_collectors`` already withdraws) of ``prefix_base`` on
+    every trigger STSW, so it clears residue from prior scale/hardening runs too.
+    Idempotent: withdrawing prefixes that are not present is a no-op
+    (``delNetworks`` on absent prefixes).
+    """
+
+    NAME = "fpf_withdraw_stale_prefixes"
+
+    async def run(self, params: t.Dict[str, t.Any]) -> None:
+        trigger_stsws: t.List[str] = params["trigger_stsws"]
+        prefix_count: int = params.get("prefix_count", 70000)
+        prefix_base: str = params.get("prefix_base", "5000:dd::/64")
+        increment_step: str = params.get("increment_step", "0:0:1::")
+
+        prefix_strs = expand_prefix_range(prefix_base, prefix_count, increment_step)
+        tip_prefixes = [build_tip_prefix(p) for p in prefix_strs]
+
+        logger.info(
+            f"[FpfWithdrawStalePrefixes] clean-slate: withdrawing up to "
+            f"{prefix_count} {prefix_base} prefixes from {len(trigger_stsws)} "
+            f"STSW device(s) before injection"
+        )
+
+        async def _withdraw_on_device(device: str) -> None:
+            driver = FbossSwitchInternal(hostname=device, logger=self.logger)
+            await withdraw_prefixes(driver, tip_prefixes)
+
+        await asyncio.gather(*[_withdraw_on_device(d) for d in trigger_stsws])
+        logger.info(
+            "[FpfWithdrawStalePrefixes] clean-slate withdraw complete on "
+            f"{trigger_stsws}"
+        )
