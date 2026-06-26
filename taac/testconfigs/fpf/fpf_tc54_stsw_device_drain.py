@@ -14,14 +14,16 @@ drain (tc34):
     precheck``, no gtsw convergence settle). Every control-plane / HRT collector
     is held to the FULL stable-state contract.
   - The ONLY expected deviation from stable state is on the DATA plane: the
-    lane-0 plane that stsw001.s001 serves drains, so on BOTH GPU hosts the last
-    samples of lane 0 (beth0) egress should read ~0 (not taking traffic). That
-    is asserted via the plane-status DRAIN contract on lane 0
-    (``impacted_planes_by_host``); everything else stays strictly stable.
+    lane-0 plane that stsw001.s001 serves drains (confirmed on hardware — the
+    traffic does NOT reroute), so on BOTH GPU hosts lane 0 (beth0) egress drops
+    to ~0. This is handled two ways: the plane-status DRAIN contract on lane 0
+    (``impacted_planes_by_host``), and EXCLUDING beth0 from the host-spray check
+    (``host_spray_excluded_lanes_by_host``) so its drained egress is not flagged
+    while beth1-3 are still held to the spray floor. Everything else stays
+    strictly stable.
 
-NOTE: this config is BUILD-validated only; it has NOT been run on hardware. The
-host-spray lane-0-drained expectation in particular should be confirmed/tuned on
-the first hardware run.
+NOTE: this config is BUILD-validated only; it has NOT been run end-to-end on
+hardware.
 
 Usage:
   buck2 run neteng/netcastle:netcastle_taac -- \\
@@ -111,8 +113,9 @@ def create_fpf_tc54_test_config() -> TestConfig:
 
     # STRICT stable-state longevity: the GTSW BGP is untouched, so unlike tc34 we
     # do NOT pass use_bgp_snapshot / skip_fsdb_session_precheck. Only lane 0's
-    # DATA plane is allowed to be drained (plane_status DRAIN contract); every
-    # other signal is held to the full stable-state contract.
+    # DATA plane is allowed to be drained (plane_status DRAIN contract + host-spray
+    # beth0 exclusion); every other signal is held to the full stable-state
+    # contract.
     longevity_playbook = create_fpf_hardening_playbook_v2(
         gtsws=OBSERVER_GTSWS,
         hosts=GPU_HOSTS,
@@ -128,12 +131,17 @@ def create_fpf_tc54_test_config() -> TestConfig:
         hrt_memory_hosts=HRT_MEMORY_HOSTS,
         hrt_driver_hosts=HRT_MEMORY_HOSTS,
         spray_hosts=spray,
-        # Lane 0's data plane drains; assert it DRAINED on the GPU hrtctl
-        # plane-status while every other plane stays UP.
+        # Lane 0's data plane drains: assert it DRAINED on the GPU hrtctl
+        # plane-status, and EXCLUDE beth0 from the host-spray check on both hosts
+        # (its egress legitimately drops to ~0 when stsw001.s001 — the lane-0
+        # spine — is drained); beth1-3 still held to the spray floor.
         plane_status_check=True,
         prod_prefix_recovery=True,
         local_prod_prefixes=PROD_PREFIXES,
         impacted_planes_by_host=IMPACTED_PLANES_BY_HOST,
+        host_spray_excluded_lanes_by_host=(
+            {h: ["beth0"] for h in spray} if spray else None
+        ),
     )
 
     return TestConfig(

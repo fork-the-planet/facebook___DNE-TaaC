@@ -22393,6 +22393,7 @@ def _build_fpf_generic_checks(
     skip_fsdb_session_precheck: bool = False,
     ods_discard_informational: bool = False,
     host_spray_label: str = "",
+    host_spray_excluded_lanes_by_host: dict[str, list[str]] | None = None,
 ) -> tuple[list, list, list]:
     """Build the generic (non-convergence) FPF check lists shared by the
     hardening / service-restart playbooks.
@@ -22567,6 +22568,7 @@ def _build_fpf_generic_checks(
                 hosts=spray_hosts,
                 min_egress_gbps=FPF_ACTIVE_THRESHOLDS.host_spray_min_egress_gbps,
                 max_spread_gbps=FPF_ACTIVE_THRESHOLDS.host_spray_max_spread_gbps,
+                excluded_lanes_by_host=host_spray_excluded_lanes_by_host,
                 label=host_spray_label or None,
                 check_id="fpf_host_spray",
             )
@@ -22864,6 +22866,7 @@ def create_fpf_hardening_playbook_v2(
     hrt_driver_hosts: list[str] | None = None,
     spray_hosts: list[str] | None = None,
     host_spray_label: str = "",
+    host_spray_excluded_lanes_by_host: dict[str, list[str]] | None = None,
     plane_status_check: bool = False,
     prod_prefix_recovery: bool = False,
     local_prod_prefixes: list[str] | None = None,
@@ -22911,6 +22914,13 @@ def create_fpf_hardening_playbook_v2(
     generic host-spray postcheck so a results-table row can be self-describing
     (e.g. "[longevity] all 4 lanes >75Gbps"). Empty means no prefix — no change
     for existing callers.
+
+    ``host_spray_excluded_lanes_by_host`` (default None) drops the given beth
+    lanes (per host) from the generic host-spray postcheck entirely — no floor,
+    no spread, no drain assertion on them. Used when a lane is legitimately
+    drained in the steady state under test (e.g. an STSW-plane drain that takes
+    the lane-0 spine down), so only the surviving lanes are held to the floor.
+    None means no exclusion — no change for existing callers.
 
     Assumes collectors are already running (via FpfStartCollectorsTask in
     setup_tasks). This playbook:
@@ -22975,6 +22985,7 @@ def create_fpf_hardening_playbook_v2(
         use_bgp_snapshot=use_bgp_snapshot,
         skip_fsdb_session_precheck=skip_fsdb_session_precheck,
         host_spray_label=host_spray_label,
+        host_spray_excluded_lanes_by_host=host_spray_excluded_lanes_by_host,
     )
 
     # Stage steps: inject → stabilize → disruption (or soak). When
