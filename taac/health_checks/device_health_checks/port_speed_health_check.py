@@ -14,6 +14,10 @@ from taac.health_check.health_check import types as hc_types
 
 class PortSpeedHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCheckIn]):
     CHECK_NAME: hc_types.CheckName = hc_types.CheckName.PORT_SPEED_CHECK
+    # Static check: configured/negotiated port speed vs expected is fixed, so a
+    # real FAIL will not change on retry (transient data-fetch failures are
+    # still retried).
+    RETRY_ON_FAIL: bool = False
 
     async def _run(
         self,

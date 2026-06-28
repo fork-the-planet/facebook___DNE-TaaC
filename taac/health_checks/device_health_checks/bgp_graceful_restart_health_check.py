@@ -25,6 +25,9 @@ class BgpGracefulRestartHealthCheck(
     """
 
     CHECK_NAME = hc_types.CheckName.BGP_GRACEFUL_RESTART_CHECK
+    # Static check: reads fixed BGP graceful-restart config, so a real FAIL will
+    # not change on retry (transient data-fetch failures are still retried).
+    RETRY_ON_FAIL = False
     OPERATING_SYSTEMS = [
         # "FBOSS",
         "EOS",

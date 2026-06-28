@@ -260,6 +260,9 @@ def create_bgp_convergence_check(
     validate_sequence: t.Optional[bool] = None,
     extra_json_params: t.Optional[t.Dict[str, t.Any]] = None,
     check_id: t.Optional[str] = None,
+    retry_count: t.Optional[int] = None,
+    retry_delay_seconds: t.Optional[float] = None,
+    retry_delay_multiplier: t.Optional[float] = None,
 ) -> PointInTimeHealthCheck:
     """BGP_CONVERGENCE_CHECK — verifies BGP convergence.
 
@@ -273,6 +276,15 @@ def create_bgp_convergence_check(
     occurred in the canonical order (terminal INITIALIZED reached, no present
     event out of timestamp order). Default (None) = off — byte-identical to
     today for callers that omit it.
+
+    Args:
+        retry_count: Number of retries after the initial attempt. 0 (or None,
+            the default) = single-shot. The retry wraps the full data-fetch +
+            validation cycle in ``AbstractPointInTimeHealthCheck.run()``.
+        retry_delay_seconds: Base delay before the first retry (run() default
+            5.0 when unset). Subsequent delays grow by ``retry_delay_multiplier``.
+        retry_delay_multiplier: Exponential backoff multiplier (run() default
+            1.5 when unset).
     """
     json_payload: t.Dict[str, t.Any] = {}
     if convergence_threshold is not None:
@@ -283,6 +295,12 @@ def create_bgp_convergence_check(
         json_payload["validate_sequence"] = validate_sequence
     if extra_json_params is not None:
         json_payload.update(extra_json_params)
+    if retry_count is not None:
+        json_payload["retry_count"] = retry_count
+    if retry_delay_seconds is not None:
+        json_payload["retry_delay_seconds"] = retry_delay_seconds
+    if retry_delay_multiplier is not None:
+        json_payload["retry_delay_multiplier"] = retry_delay_multiplier
     if not json_payload and check_id is None:
         return PointInTimeHealthCheck(name=hc_types.CheckName.BGP_CONVERGENCE_CHECK)
     return PointInTimeHealthCheck(

@@ -200,8 +200,9 @@ class TestHealthCheckRetry(unittest.IsolatedAsyncioTestCase):
         "neteng.test_infra.dne.taac.health_checks.abstract_health_check.asyncio.sleep",
         new_callable=AsyncMock,
     )
-    async def test_no_retry_on_error(self, mock_sleep):
-        """Exception in _run → ERROR status, no retry."""
+    async def test_transient_exception_is_retried_then_error(self, mock_sleep):
+        """A raised exception (transient data-fetch failure) is retried for
+        every check, and surfaces as ERROR after retries are exhausted."""
         self.health_check._run = AsyncMock(side_effect=RuntimeError("driver failure"))
 
         result = await self.health_check.run(
@@ -212,6 +213,70 @@ class TestHealthCheckRetry(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result.status, hc_types.HealthCheckStatus.ERROR)
+        self.assertEqual(self.health_check._run.call_count, 4)
+        self.assertEqual(mock_sleep.call_count, 3)
+
+    @patch(
+        "neteng.test_infra.dne.taac.health_checks.abstract_health_check.asyncio.sleep",
+        new_callable=AsyncMock,
+    )
+    async def test_transient_exception_then_pass_recovers(self, mock_sleep):
+        """A transient exception followed by a PASS recovers (no ERROR)."""
+        self.health_check._run = AsyncMock(
+            side_effect=[RuntimeError("driver blip"), self._make_pass_result()]
+        )
+
+        result = await self.health_check.run(
+            self.device,
+            self.input,
+            self.input,
+            {"retry_count": 3, "retry_delay_seconds": 5.0},
+        )
+
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS)
+        self.assertEqual(self.health_check._run.call_count, 2)
+        mock_sleep.assert_called_once_with(5.0)
+
+    @patch(
+        "neteng.test_infra.dne.taac.health_checks.abstract_health_check.asyncio.sleep",
+        new_callable=AsyncMock,
+    )
+    async def test_returned_error_is_not_retried(self, mock_sleep):
+        """A returned (non-raised) ERROR verdict is terminal — not retried."""
+        error_result = hc_types.HealthCheckResult(
+            status=hc_types.HealthCheckStatus.ERROR,
+            message="explicit error verdict",
+        )
+        self.health_check._run = AsyncMock(return_value=error_result)
+
+        result = await self.health_check.run(
+            self.device,
+            self.input,
+            self.input,
+            {"retry_count": 3, "retry_delay_seconds": 5.0},
+        )
+
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.ERROR)
+        self.assertEqual(self.health_check._run.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    @patch(
+        "neteng.test_infra.dne.taac.health_checks.abstract_health_check.asyncio.sleep",
+        new_callable=AsyncMock,
+    )
+    async def test_static_check_fail_not_retried(self, mock_sleep):
+        """A check with RETRY_ON_FAIL = False (static) does not retry a FAIL."""
+        self.health_check._run = AsyncMock(return_value=self._make_fail_result())
+
+        with patch.object(BgpSessionEstablishedHealthCheck, "RETRY_ON_FAIL", False):
+            result = await self.health_check.run(
+                self.device,
+                self.input,
+                self.input,
+                {"retry_count": 3, "retry_delay_seconds": 5.0},
+            )
+
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.FAIL)
         self.assertEqual(self.health_check._run.call_count, 1)
         mock_sleep.assert_not_called()
 

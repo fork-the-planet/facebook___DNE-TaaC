@@ -15,6 +15,9 @@ class FileExistsHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCheckIn
     """Health check to verify if a file exists on a device."""
 
     CHECK_NAME: hc_types.CheckName = hc_types.CheckName.FILE_EXISTS_HEALTH_CHECK
+    # Static check: file presence is fixed inventory, so a real FAIL will not
+    # change on retry (transient data-fetch failures are still retried).
+    RETRY_ON_FAIL: bool = False
     OPERATING_SYSTEMS: t.List[str] = [
         "EOS",
         "FBOSS",

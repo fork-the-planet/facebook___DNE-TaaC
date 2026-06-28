@@ -34,6 +34,17 @@ class AbstractPointInTimeHealthCheck(t.Generic[HealthCheckIn, Object], ABC):
     CHECK_SCOPE = hc_types.Scope.DEFAULT
     DEFAULT_PRIORITY = hc_types.DEFAULT_HC_PRIORITY
 
+    """Whether a FAIL verdict is retried (only meaningful when retry_count > 0).
+
+    Defaults to True: most checks evaluate dynamic device state that settles
+    after a perturbation, so a FAIL is worth re-evaluating. Static checks (those
+    reading fixed config/inventory, e.g. graceful-restart config or file
+    existence) set this to False — a real FAIL there will not change on retry.
+    A transient data-fetch failure (an exception from ``_run``) is always
+    retried regardless of this flag (see ``run``).
+    """
+    RETRY_ON_FAIL: bool = True
+
     def __init__(self, logger: ConsoleFileLogger, ixia: t.Optional[Ixia] = None):
         if self.__class__.CHECK_NAME is hc_types.CheckName.UNDEFINED:
             raise ValueError(
@@ -147,13 +158,41 @@ class AbstractPointInTimeHealthCheck(t.Generic[HealthCheckIn, Object], ABC):
                     current_delay *= retry_multiplier
 
                 self._last_attempt_diff = None
-                check_result = await run_fn(obj, input, check_params)
+                try:
+                    check_result = await run_fn(obj, input, check_params)
+                except Exception as e:
+                    # A transient data-fetch failure (dropped RPC / timeout /
+                    # empty read) is not a real verdict, so it is retried for
+                    # EVERY check until retries are exhausted, then surfaced as
+                    # ERROR. This is distinct from a FAIL verdict (below), which
+                    # only stateful checks retry.
+
+                    self.logger.warning(
+                        f"Health check {self.__class__.__name__} raised on attempt "
+                        f"{attempt + 1}/{1 + retry_count}: {type(e).__name__}: {e}"
+                    )
+                    check_result = hc_types.HealthCheckResult(
+                        status=hc_types.HealthCheckStatus.ERROR,
+                        message=(
+                            f"Exception occurred while running "
+                            f"{self.__class__.__name__}: {e}\n "
+                            f"{traceback.format_tb(e.__traceback__)}"
+                        ),
+                    )
+                    per_attempt_diff.append(self._last_attempt_diff)
+                    continue
                 per_attempt_diff.append(self._last_attempt_diff)
 
                 if check_result.status != hc_types.HealthCheckStatus.FAIL:
                     if check_result.status == hc_types.HealthCheckStatus.PASS:
                         attempts_to_pass = attempt + 1
                         elapsed_to_pass_sec = time.monotonic() - t0_monotonic
+                    break
+
+                # A FAIL verdict is retried only for stateful checks. Static
+                # checks (RETRY_ON_FAIL = False) read fixed config/inventory, so
+                # a real FAIL will not change on retry.
+                if not self.__class__.RETRY_ON_FAIL:
                     break
 
                 if attempt < retry_count:
@@ -168,6 +207,7 @@ class AbstractPointInTimeHealthCheck(t.Generic[HealthCheckIn, Object], ABC):
             if (
                 check_result.status == hc_types.HealthCheckStatus.FAIL
                 and retry_count > 0
+                and self.__class__.RETRY_ON_FAIL
             ):
                 annotated_msg = (
                     f"[Failed after {retry_count} retries] {check_result.message}"

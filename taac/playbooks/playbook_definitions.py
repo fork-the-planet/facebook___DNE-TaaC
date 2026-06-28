@@ -41,6 +41,10 @@ from taac.playbooks.dlb_platform_constants import (
     DLB_RESOURCE_PROFILES,
     DlbAsic,
 )
+from taac.routing.ebb.ebb_bgp_plus_plus_test_config.check_profile_registry import (
+    CheckProfile,
+    get_profile_checks,
+)
 from taac.health_checks.healthcheck_definitions import (
     create_bgp_convergence_check,
     create_bgp_peer_route_set_equality_check,
@@ -2879,15 +2883,11 @@ def create_bgp_plus_plus_arista_bounded_ecmp_sets_playbook(
     Returns:
         A `Playbook` named `bgp_plus_plus_arista_bounded_ecmp_sets_test`.
     """
+    profile_checks = get_profile_checks(CheckProfile.PERF_SCALING_BOUNDED_ECMP)
     return Playbook(
         name="bgp_plus_plus_arista_bounded_ecmp_sets_test",
         description="Test BGP++ performance with bounded ECMP sets",
-        snapshot_checks=[
-            create_core_dumps_snapshot_check(),
-            create_bgp_session_snapshot_check(
-                skip_flap_check=True, skip_uptime_check=True
-            ),
-        ],
+        snapshot_checks=profile_checks.snapshot_checks,
         periodic_tasks=create_standard_periodic_tasks(
             device_name=device_name,
             memory_threshold=Gigabyte.GIG_5.value,
@@ -2900,14 +2900,7 @@ def create_bgp_plus_plus_arista_bounded_ecmp_sets_playbook(
                 threshold=50,
             ),
         ],
-        postchecks=[
-            create_bgp_session_establish_check(),
-            create_bgp_rib_fib_consistency_check(),
-            create_bgp_convergence_check(
-                convergence_threshold=600,
-                check_id="postcheck_bgp_convergence_time",
-            ),
-        ],
+        postchecks=profile_checks.postchecks,
         setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
         stages=[
             create_route_oscillations_stage(
