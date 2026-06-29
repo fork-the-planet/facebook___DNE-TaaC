@@ -104,6 +104,27 @@ class DlbResourceStickinessHealthCheck(
         async with self.driver.async_agent_client as client:
             routes = await client.getRouteTable()
 
+        # Fetch the installed ECMP-group snapshot count from hardware via
+        # `fboss2 show hw-object NEXT_HOP_GROUP` so the analysis can
+        # cross-check the route-table-derived matrix total against what is
+        # actually installed in SAI. raise_exception_on_validation_mismatch
+        # mirrors every other in-tree caller (noisy parent/child mismatches
+        # are tolerated; we only need the count).
+        snapshot_count: t.Optional[int] = None
+        try:
+            ecmp_groups_snapshot = (
+                # pyrefly: ignore [missing-attribute]
+                await self.driver.async_get_ecmp_groups_snapshot(
+                    raise_exception_on_validation_mismatch=False
+                )
+            )
+            snapshot_count = len(ecmp_groups_snapshot)
+        except Exception as e:
+            self.logger.warning(
+                f"async_get_ecmp_groups_snapshot failed; skipping snapshot "
+                f"comparison block: {e}"
+            )
+
         result = analyze(
             routes,
             # pyrefly: ignore [missing-attribute]
@@ -111,6 +132,7 @@ class DlbResourceStickinessHealthCheck(
             prefix_patterns,
             expected_counts,
             expected_totals,
+            snapshot_count=snapshot_count,
         )
 
         self.logger.info(f"Total unique next hop groups: {result.total_unique_nhgs}")

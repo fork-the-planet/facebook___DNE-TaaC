@@ -66,6 +66,19 @@ class DlbAnalysisResult:
 
     ``message`` already includes the rendered table and matches the message the
     health check historically produced (so callers can surface it verbatim).
+
+    The ``total_routes_analyzed`` field counts every route observed across all
+    groups (NOT unique-NH-group count). The ``total_dlb``/``total_random``/
+    ``total_other`` fields expose the per-mode group counts that were
+    previously only embedded in ``message``. The ``snapshot_match`` field
+    is set when the caller passes ``snapshot_count`` to :func:`analyze` —
+    None means the caller didn't perform the cross-check (independent
+    `getAllEcmpDetails`-style snapshot vs the route-table-derived matrix).
+
+    Mirrors the breakdown sections from
+    ``fbcode/scripts/pavanpatil/prefix_to_dlb_resource_stickiness.py`` so
+    automated callers can produce the same per-test diagnostics that
+    Pavan's standalone binary emits.
     """
 
     passed: bool
@@ -74,6 +87,11 @@ class DlbAnalysisResult:
     total_unique_nhgs: int
     ecmp_groups: int
     single_hop_groups: int
+    total_routes_analyzed: int = 0
+    total_dlb: int = 0
+    total_random: int = 0
+    total_other: int = 0
+    snapshot_match: t.Optional[bool] = None
 
 
 def group_routes_by_nexthops(
@@ -143,10 +161,13 @@ def categorize_ecmp_mode(mode_str: str) -> str:
 
 def build_matrix(
     nexthop_groups: t.Dict[tuple, NextHopGroup], prefix_patterns: list
-) -> t.Tuple[t.Dict[str, CategoryStats], int, int]:
+) -> t.Tuple[t.Dict[str, CategoryStats], int, int, int]:
     """Count unique ECMP groups (>1 next hop) per prefix category and ECMP mode.
 
-    Returns (matrix, ecmp_groups_count, single_hop_groups_count).
+    Returns ``(matrix, ecmp_groups_count, single_hop_groups_count,
+    total_routes_analyzed)``. ``total_routes_analyzed`` counts every
+    route observed across all groups (single-hop + multi-hop) — distinct
+    from ``len(nexthop_groups)`` which dedups by NH-set.
     """
     matrix: t.Dict[str, CategoryStats] = {}
     for pattern in prefix_patterns:
@@ -156,14 +177,17 @@ def build_matrix(
 
     ecmp_groups_count = 0
     single_hop_groups_count = 0
+    total_routes_analyzed = 0
 
     for next_hops_tuple, group in nexthop_groups.items():
         if len(next_hops_tuple) <= 1:
             single_hop_groups_count += 1
+            total_routes_analyzed += len(group.prefixes)
             continue
 
         ecmp_groups_count += 1
         num_next_hops = len(next_hops_tuple)
+        total_routes_analyzed += len(group.prefixes)
 
         prefix_categories_served = set()
         for prefix in group.prefixes:
@@ -189,7 +213,7 @@ def build_matrix(
             if prefix_category != "all else":
                 matrix[prefix_category].next_hop_counts.append(num_next_hops)
 
-    return matrix, ecmp_groups_count, single_hop_groups_count
+    return matrix, ecmp_groups_count, single_hop_groups_count, total_routes_analyzed
 
 
 def generate_table(matrix: t.Dict[str, CategoryStats], prefix_patterns: list) -> str:
@@ -346,18 +370,73 @@ def validate_counts(
     return {"status": "PASS", "message": "All per-category validations passed"}
 
 
+def _format_summary_insights(
+    total_dlb: int,
+    total_random: int,
+    total_other: int,
+    total_unique: int,
+    ecmp_groups: int,
+    single_hop_groups: int,
+) -> str:
+    """Render the verbose Summary Insights block.
+
+    Mirrors the section emitted by
+    ``fbcode/scripts/pavanpatil/prefix_to_dlb_resource_stickiness.py``
+    so HC output matches Pavan's standalone-binary output verbatim.
+    """
+    return "\n".join(
+        [
+            "=== Summary Insights ===",
+            f"DLB-resource groups (Default mode): {total_dlb}",
+            f"PER_PACKET_RANDOM override groups: {total_random}",
+            f"Other ECMP-mode override groups: {total_other}",
+            f"Total unique next-hop groups: {total_unique}",
+            f"ECMP groups (>1 NH): {ecmp_groups}",
+            f"Single-next-hop groups: {single_hop_groups}",
+        ]
+    )
+
+
+def _format_snapshot_comparison(
+    snapshot_count: int, matrix_total: int
+) -> t.Tuple[str, bool]:
+    """Render the ECMP Groups Snapshot Comparison block.
+
+    Returns ``(rendered_block, match)``. Matches the section in Pavan's
+    binary — cross-validates an independent FBOSS `async_get_ecmp_groups_snapshot`
+    fetch against the route-table-derived matrix total.
+    """
+    diff = snapshot_count - matrix_total
+    match = snapshot_count == matrix_total
+    marker = "MATCH" if match else "MISMATCH"
+    lines = [
+        "=== ECMP Groups Snapshot Comparison ===",
+        f"Snapshot: {snapshot_count}  Matrix total: {matrix_total}  Difference: {diff}   {marker}",
+    ]
+    return "\n".join(lines), match
+
+
 def analyze(
     routes: t.Iterable[t.Any],
     ip_ntop: IpNtop,
     prefix_patterns: t.Optional[list] = None,
     expected_counts: t.Optional[t.Dict[str, t.Dict[str, int]]] = None,
     expected_totals: t.Optional[t.Dict[str, int]] = None,
+    snapshot_count: t.Optional[int] = None,
 ) -> DlbAnalysisResult:
     """Run the full DLB resource analysis + validation.
 
     Per-category (`expected_counts`) is validated first, then cross-category
     (`expected_totals`); the first failure wins. The returned ``message``
     includes the rendered table, matching the health check's historical output.
+
+    When ``snapshot_count`` is provided (the integer length of an
+    independent ``async_get_ecmp_groups_snapshot()`` fetch), the result's
+    ``message`` also includes an "ECMP Groups Snapshot Comparison" block
+    cross-validating the snapshot count vs the matrix-derived total. A
+    mismatch flips ``passed`` to False with a descriptive failure
+    message — mirrors Pavan's binary at
+    ``fbcode/scripts/pavanpatil/prefix_to_dlb_resource_stickiness.py``.
     """
     prefix_patterns = prefix_patterns or []
     expected_counts = expected_counts or {}
@@ -365,38 +444,77 @@ def analyze(
 
     nexthop_groups = group_routes_by_nexthops(routes, ip_ntop)
     total_unique = len(nexthop_groups)
-    matrix, ecmp_groups, single_hop_groups = build_matrix(
+    matrix, ecmp_groups, single_hop_groups, total_routes_analyzed = build_matrix(
         nexthop_groups, prefix_patterns
     )
     table = generate_table(matrix, prefix_patterns)
 
-    counts_result = validate_counts(matrix, expected_counts)
-    if counts_result["status"] == "FAIL":
+    # Cross-category aggregates (also rendered in the Summary Insights
+    # block below). Computed here so the dataclass fields stay in sync
+    # with what generate_table renders into the TOTAL row.
+    total_dlb = sum(stats.dlb_count for stats in matrix.values())
+    total_random = sum(stats.per_packet_random_count for stats in matrix.values())
+    total_other = sum(stats.other_modes_count for stats in matrix.values())
+
+    summary_block = _format_summary_insights(
+        total_dlb,
+        total_random,
+        total_other,
+        total_unique,
+        ecmp_groups,
+        single_hop_groups,
+    )
+
+    snapshot_block = ""
+    snapshot_match: t.Optional[bool] = None
+    if snapshot_count is not None:
+        snapshot_block, snapshot_match = _format_snapshot_comparison(
+            snapshot_count, ecmp_groups
+        )
+
+    header = (
+        f"Total routes analyzed: {total_routes_analyzed}\n"
+        f"Total unique next hop groups: {total_unique}\n"
+        f"ECMP groups (>1 next hop): {ecmp_groups}\n"
+        f"Single next hop groups (excluded): {single_hop_groups}"
+    )
+
+    def _make_result(passed: bool, body: str) -> DlbAnalysisResult:
+        # Compose: validation/result body → table → snapshot → summary.
+        # snapshot_block is empty unless caller passed snapshot_count.
+        sections = [body, table]
+        if snapshot_block:
+            sections.append(snapshot_block)
+        sections.append(summary_block)
+        full_message = f"{header}\n\n" + "\n\n".join(sections)
         return DlbAnalysisResult(
-            passed=False,
-            message=f"{counts_result['message']}\n\n{table}",
+            passed=passed,
+            message=full_message,
             table=table,
             total_unique_nhgs=total_unique,
             ecmp_groups=ecmp_groups,
             single_hop_groups=single_hop_groups,
+            total_routes_analyzed=total_routes_analyzed,
+            total_dlb=total_dlb,
+            total_random=total_random,
+            total_other=total_other,
+            snapshot_match=snapshot_match,
         )
+
+    counts_result = validate_counts(matrix, expected_counts)
+    if counts_result["status"] == "FAIL":
+        return _make_result(False, counts_result["message"])
 
     totals_result = validate_totals(matrix, expected_totals)
     if totals_result["status"] == "FAIL":
-        return DlbAnalysisResult(
-            passed=False,
-            message=f"{totals_result['message']}\n\n{table}",
-            table=table,
-            total_unique_nhgs=total_unique,
-            ecmp_groups=ecmp_groups,
-            single_hop_groups=single_hop_groups,
+        return _make_result(False, totals_result["message"])
+
+    # Snapshot-mismatch is a soft fail surfaced in the result body.
+    if snapshot_count is not None and snapshot_match is False:
+        return _make_result(
+            False,
+            f"Snapshot mismatch: ECMP-snapshot={snapshot_count} vs "
+            f"matrix-total={ecmp_groups} (diff={snapshot_count - ecmp_groups})",
         )
 
-    return DlbAnalysisResult(
-        passed=True,
-        message=f"DLB Resource Analysis:\n{table}",
-        table=table,
-        total_unique_nhgs=total_unique,
-        ecmp_groups=ecmp_groups,
-        single_hop_groups=single_hop_groups,
-    )
+    return _make_result(True, "DLB Resource Analysis:")

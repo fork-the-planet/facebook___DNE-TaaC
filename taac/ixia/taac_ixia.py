@@ -617,3 +617,180 @@ class TaacIxia(Ixia, Thread):
         except Exception as e:
             self.logger.error(f"Error getting traffic item views: {e}")
             raise e
+
+    # ------------------------------------------------------------------
+    # DLB hardening helpers — used by INVOKE_IXIA_API_STEP from the DLB
+    # hardening + longevity testconfigs. Mirror the logic in
+    # `testconfigs/npi/dlb_csvs/ixia_csv_inject.py` (the standalone
+    # binary used for live debug) but reuse the per-test IxNetwork
+    # session that TaacIxia already owns instead of opening a new one.
+    #
+    # Geometry recipe (verified live on session 220 / gtsw001 2026-06-25):
+    #   pool.NumberOfAddresses = 1
+    #   NG.Multiplier          = N*W  (total rows in CSV)
+    #   NetworkAddress.ValueList = row-major repeated [p0*W, p1*W, ...]
+    #   Ipv6NextHop.ValueList    = CSV's NH column (N*W entries)
+    #   EnableAddPath = True; MvNextHopCount = W; AddPathId = 1..N*W
+    #   EnableFlapping = False  (defensive — stale UI flap = shrinking PR)
+    #
+    # Mutation sequence (BOTH stops required — DG-stop alone leaves NG
+    # "started" and NG.Multiplier mutation errors):
+    #   dg.Stop() -> ng.Stop() -> mutate -> ng.Start() -> dg.Start()
+    # ------------------------------------------------------------------
+
+    def _find_dlb_ng_dg(self, pool_name: str):
+        """Locate the named NetworkGroup, its parent DeviceGroup, its
+        single Ipv6PrefixPool, and its BgpV6IPRouteProperty in the
+        IxNetwork session.
+
+        Returns (parent_dg, parent_ng, parent_pool, route_prop) or
+        raises RuntimeError if no matching NG is found.
+        """
+        for topo in self.ixnetwork.Topology.find():
+            for dg in topo.DeviceGroup.find():
+                for ng in dg.NetworkGroup.find():
+                    if ng.Name != pool_name:
+                        continue
+                    pool = next(iter(ng.Ipv6PrefixPools.find()), None)
+                    if pool is None:
+                        raise RuntimeError(f"NG {pool_name!r} has no Ipv6PrefixPools")
+                    rp = next(iter(pool.BgpV6IPRouteProperty.find()), None)
+                    if rp is None:
+                        raise RuntimeError(
+                            f"pool in NG {pool_name!r} has no BgpV6IPRouteProperty"
+                        )
+                    return dg, ng, pool, rp
+        raise RuntimeError(f"No NetworkGroup named {pool_name!r} found")
+
+    def mutate_dlb_pool_from_csv(  # noqa: C901
+        self, csv_path: str, pool_name: str = "DLB_GOLD_PREFIX_POOL"
+    ) -> None:
+        """Mutate the named DLB prefix pool to advertise the (prefix, NH)
+        rows from the 2-column CSV at ``csv_path``.
+
+        CSV format: header line, then ``Address,Ipv6 Next Hop`` rows.
+        Idempotent — safe to re-invoke per playbook with a different
+        CSV; previous advertisements are replaced by the new geometry.
+        """
+        import csv as _csv
+        import os as _os
+
+        # Parse CSV: collect prefixes (with repetition) + NHs in order.
+        prefixes_in_order: t.List[str] = []
+        nhs_in_order: t.List[str] = []
+        with open(csv_path) as f:
+            reader = _csv.reader(f)
+            next(reader, None)  # skip header
+            for row in reader:
+                if len(row) < 2:
+                    continue
+                prefixes_in_order.append(row[0])
+                nhs_in_order.append(row[1])
+        total_rows = len(prefixes_in_order)
+        if total_rows == 0:
+            raise ValueError(f"CSV {csv_path} has no data rows")
+        distinct_prefixes = len(dict.fromkeys(prefixes_in_order))
+        w = total_rows // distinct_prefixes if distinct_prefixes else 0
+        self.logger.info(
+            f"[mutate_dlb_pool_from_csv] {csv_path}: rows={total_rows} "
+            f"distinct_prefixes={distinct_prefixes} width={w}"
+        )
+
+        # Write per-column files for the IxNetwork ValueList API (it
+        # reads from single-column files, not nested data).
+        scratch_dir = "/tmp/taac_dlb_inject"
+        _os.makedirs(scratch_dir, exist_ok=True)
+        prefix_col = _os.path.join(scratch_dir, f"_pfx_{pool_name}.csv")
+        nh_col = _os.path.join(scratch_dir, f"_nh_{pool_name}.csv")
+        with open(prefix_col, "w") as f:
+            f.write("\n".join(prefixes_in_order) + "\n")
+        with open(nh_col, "w") as f:
+            f.write("\n".join(nhs_in_order) + "\n")
+
+        # Locate target nodes in the IxNetwork tree.
+        dg, ng, pool, route_prop = self._find_dlb_ng_dg(pool_name)
+        self.logger.info(
+            f"[mutate_dlb_pool_from_csv] target dg={dg.Name} ng={ng.Name} "
+            f"pool={pool.Name}"
+        )
+
+        # dg.Stop + ng.Stop both required before NG.Multiplier mutation.
+        try:
+            dg.Stop()
+        except Exception as e:
+            self.logger.warning(f"dg.Stop() failed (continuing): {e}")
+        try:
+            ng.Stop()
+        except Exception as e:
+            self.logger.warning(f"ng.Stop() failed (continuing): {e}")
+
+        # FLAT (Pavan) geometry: NG.Mult=N*W, NumberOfAddresses=1.
+        ng.Multiplier = total_rows
+        pool.NumberOfAddresses = 1
+        pool.PrefixLength.Single(64)
+        pool.NetworkAddress.ValueList(prefix_col)
+        route_prop.Ipv6NextHop.ValueList(nh_col)
+        route_prop.EnableAddPath.Single(True)
+        route_prop.MvNextHopCount.Single(w)
+        route_prop.AddPathId.ValueList([str(i + 1) for i in range(total_rows)])
+        # Defensive: clear any stale flap regime (UI experimentation can
+        # leave EnableFlapping=True, causing shrinking PR over time).
+        for attr_name in ("EnableFlap", "EnableFlapping", "RouteFlap"):
+            attr = getattr(route_prop, attr_name, None)
+            if attr is None:
+                continue
+            try:
+                attr.Single(False)
+                break
+            except Exception:
+                pass
+
+        # Restart inner-to-outer to commit + reform the BGP session.
+        try:
+            ng.Start()
+        except Exception as e:
+            self.logger.warning(f"ng.Start() failed (continuing): {e}")
+        try:
+            dg.Start()
+        except Exception as e:
+            self.logger.warning(f"dg.Start() failed (continuing): {e}")
+        try:
+            self.ixnetwork.StartAllProtocols(Arg1="sync")
+        except Exception as e:
+            self.logger.warning(f"StartAllProtocols failed (continuing): {e}")
+        self.logger.info(
+            f"[mutate_dlb_pool_from_csv] {pool_name} committed: "
+            f"NG.Multiplier={ng.Multiplier} pool.NumberOfAddresses={pool.NumberOfAddresses}"
+        )
+
+    def toggle_dlb_pool_enabled(self, pool_name: str, enabled: bool) -> None:
+        """Toggle the parent DeviceGroup's start/stop state for the
+        named NetworkGroup. Used by case_15 (rollback) and case_19
+        (continuous switching) to enable/disable Silver advertisement
+        without touching the Gold session.
+
+        Empirical caveat (to be verified at first use): dg.Stop tears
+        down the per-DG BGP session. Gold session is on a SEPARATE DG
+        so toggling Silver should NOT affect Gold. Confirm with a
+        BGP-summary probe in the playbook postcheck.
+        """
+        dg, ng, _pool, _rp = self._find_dlb_ng_dg(pool_name)
+        if enabled:
+            try:
+                ng.Start()
+            except Exception as e:
+                self.logger.warning(f"ng.Start() failed: {e}")
+            try:
+                dg.Start()
+            except Exception as e:
+                self.logger.warning(f"dg.Start() failed: {e}")
+        else:
+            try:
+                dg.Stop()
+            except Exception as e:
+                self.logger.warning(f"dg.Stop() failed: {e}")
+            try:
+                ng.Stop()
+            except Exception as e:
+                self.logger.warning(f"ng.Stop() failed: {e}")
+        self.logger.info(f"[toggle_dlb_pool_enabled] {pool_name} → enabled={enabled}")
