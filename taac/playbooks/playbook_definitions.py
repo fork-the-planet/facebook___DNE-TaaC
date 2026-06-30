@@ -9469,29 +9469,28 @@ def create_bgp_igp_instability_pnh_metric_oscillation_playbook(
     if postcheck_thresholds is None:
         postcheck_thresholds = get_postcheck_thresholds()
 
-    return Playbook(
-        name="bgp_igp_instability_pnh_metric_oscillation_playbook",
-        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
-        prechecks=create_standard_prechecks(
+    igp_checks = get_profile_checks(
+        CheckProfile.IGP_INSTABILITY,
+        ProfileContext(
             peergroup_ibgp_v6=peergroup_ibgp_v6,
             peergroup_ibgp_v4=peergroup_ibgp_v4,
             precheck_thresholds=precheck_thresholds,
+            postcheck_thresholds=postcheck_thresholds,
             expected_established_sessions=expected_established_sessions,
             cpu_baseline=cpu_baseline,
             check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
-        postchecks=create_standard_postchecks(
-            postcheck_thresholds=postcheck_thresholds,
-            expected_message_types=["KEEPALIVE"],
-            unexpected_message_types=["NOTIFICATION", "OPEN"],
-            check_bgp_convergence=False,
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
-        snapshot_checks=create_standard_snapshot_checks(
             expected_peer_identity=expected_peer_identity,
             exclude_bgp_mon=exclude_bgp_mon,
+            tcpdump_expected_message_types=["KEEPALIVE"],
+            tcpdump_unexpected_message_types=["NOTIFICATION", "OPEN"],
         ),
+    )
+    return Playbook(
+        name="bgp_igp_instability_pnh_metric_oscillation_playbook",
+        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
+        prechecks=igp_checks.prechecks,
+        postchecks=igp_checks.postchecks,
+        snapshot_checks=igp_checks.snapshot_checks,
         periodic_tasks=create_standard_periodic_tasks(
             device_name=device_name,
             memory_threshold=memory_threshold,
@@ -9610,35 +9609,29 @@ def create_bgp_igp_instability_unresolvable_pnhs_playbook(
     if postcheck_thresholds is None:
         postcheck_thresholds = get_postcheck_thresholds()
 
-    return Playbook(
-        name="bgp_igp_instability_unresolvable_pnhs_playbook",
-        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
-        prechecks=create_standard_prechecks(
+    igp_checks = get_profile_checks(
+        CheckProfile.IGP_INSTABILITY,
+        ProfileContext(
             peergroup_ibgp_v6=peergroup_ibgp_v6,
             peergroup_ibgp_v4=peergroup_ibgp_v4,
             precheck_thresholds=precheck_thresholds,
+            postcheck_thresholds=postcheck_thresholds,
             expected_established_sessions=expected_established_sessions,
             cpu_baseline=cpu_baseline,
             check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
-        postchecks=create_standard_postchecks(
-            postcheck_thresholds=postcheck_thresholds,
-            check_bgp_convergence=False,
-            exclude_bgp_mon=exclude_bgp_mon,
-        )
-        + [
-            create_bgp_tcpdump_check(
-                expected_message_types=["UPDATE"],
-                unexpected_message_types=[],
-                cleanup_capture_file=False,
-                expected_last_mod_time=1740,  # 29 minutes
-            ),
-        ],
-        snapshot_checks=create_standard_snapshot_checks(
             expected_peer_identity=expected_peer_identity,
             exclude_bgp_mon=exclude_bgp_mon,
+            tcpdump_expected_message_types=["UPDATE"],
+            tcpdump_unexpected_message_types=[],
+            tcpdump_expected_last_mod_time=1740,  # 29 minutes
         ),
+    )
+    return Playbook(
+        name="bgp_igp_instability_unresolvable_pnhs_playbook",
+        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
+        prechecks=igp_checks.prechecks,
+        postchecks=igp_checks.postchecks,
+        snapshot_checks=igp_checks.snapshot_checks,
         periodic_tasks=create_standard_periodic_tasks(
             device_name=device_name,
             memory_threshold=memory_threshold,

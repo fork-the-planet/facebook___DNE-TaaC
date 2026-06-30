@@ -46,6 +46,7 @@ from taac.health_checks.healthcheck_definitions import (
     create_bgp_rib_fib_consistency_check,
     create_bgp_session_establish_check,
     create_bgp_session_snapshot_check,
+    create_bgp_tcpdump_check,
     create_core_dumps_snapshot_check,
 )
 from taac.health_checks.retry_policy import get_retry_kwargs
@@ -79,6 +80,10 @@ class CheckProfile(enum.Enum):
     # expected established-session count enforced, optional RIB-FIB route-storm
     # invariants, and a core-dumps-ONLY snapshot (sessions churn throughout).
     CHURN_STORM = "churn_storm"
+    # IGP instability (PNH-metric oscillation / unresolvable PNHs): convergence
+    # OFF, standard snapshot, plus a BGP tcpdump check whose message-types and
+    # last-mod-time window come from the context.
+    IGP_INSTABILITY = "igp_instability"
 
     # Minimal-shape (accept the context for a uniform API, but ignore it):
     # bag012 perf-scaling, bounded-ECMP-sets (case9).
@@ -124,6 +129,12 @@ class ProfileContext:
     # Churn-storm: extra RIB-FIB consistency json_params (route-storm invariants
     # such as expected AS-path length / pool size); None = standard RIB-FIB check.
     rib_fib_json_params: t.Optional[t.Dict[str, t.Any]] = None
+    # IGP-instability: parameters for the appended BGP tcpdump check. message
+    # types that must / must not appear in the capture, and an optional window
+    # (seconds) the capture's last-mod time must fall within.
+    tcpdump_expected_message_types: t.Optional[t.List[str]] = None
+    tcpdump_unexpected_message_types: t.Optional[t.List[str]] = None
+    tcpdump_expected_last_mod_time: t.Optional[int] = None
 
 
 class ProfileChecks(t.NamedTuple):
@@ -271,6 +282,42 @@ def _churn_storm(ctx: ProfileContext) -> ProfileChecks:
     )
 
 
+def _igp_instability(ctx: ProfileContext) -> ProfileChecks:
+    """IGP instability (PNH-metric oscillation / unresolvable PNHs): standard
+    prechecks, postchecks with convergence OFF plus a BGP tcpdump check appended
+    last (message-types + optional last-mod window from the context), and a
+    standard snapshot. The tcpdump's ``cleanup_capture_file`` stays at the factory
+    default (False), which both call sites use.
+    """
+    return ProfileChecks(
+        prechecks=create_standard_prechecks(
+            peergroup_ibgp_v6=ctx.peergroup_ibgp_v6,
+            peergroup_ibgp_v4=ctx.peergroup_ibgp_v4,
+            precheck_thresholds=ctx.precheck_thresholds,
+            expected_established_sessions=ctx.expected_established_sessions,
+            cpu_baseline=ctx.cpu_baseline,
+            check_ibgp_pnh=ctx.check_ibgp_pnh,
+            exclude_bgp_mon=ctx.exclude_bgp_mon,
+        ),
+        postchecks=create_standard_postchecks(
+            postcheck_thresholds=ctx.postcheck_thresholds,
+            check_bgp_convergence=False,
+            exclude_bgp_mon=ctx.exclude_bgp_mon,
+        )
+        + [
+            create_bgp_tcpdump_check(
+                expected_message_types=ctx.tcpdump_expected_message_types,
+                unexpected_message_types=ctx.tcpdump_unexpected_message_types,
+                expected_last_mod_time=ctx.tcpdump_expected_last_mod_time,
+            ),
+        ],
+        snapshot_checks=create_standard_snapshot_checks(
+            expected_peer_identity=ctx.expected_peer_identity,
+            exclude_bgp_mon=ctx.exclude_bgp_mon,
+        ),
+    )
+
+
 def _perf_scaling_bounded_ecmp(ctx: ProfileContext) -> ProfileChecks:
     """Profile for the bag012 bounded-ECMP-sets (case9) playbook.
 
@@ -318,6 +365,7 @@ _PROFILE_BUILDERS: t.Dict[CheckProfile, t.Callable[[ProfileContext], ProfileChec
     CheckProfile.OSCILLATION: _oscillation,
     CheckProfile.DRAIN_UNDRAIN: _drain_undrain,
     CheckProfile.CHURN_STORM: _churn_storm,
+    CheckProfile.IGP_INSTABILITY: _igp_instability,
     CheckProfile.PERF_SCALING_BOUNDED_ECMP: _perf_scaling_bounded_ecmp,
 }
 
