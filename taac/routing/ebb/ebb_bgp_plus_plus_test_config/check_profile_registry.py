@@ -84,6 +84,10 @@ class CheckProfile(enum.Enum):
     # OFF, standard snapshot, plus a BGP tcpdump check whose message-types and
     # last-mod-time window come from the context.
     IGP_INSTABILITY = "igp_instability"
+    # No-precheck stress (nexthop-group-count threshold / longevity soak): NO
+    # prechecks, standard postchecks (convergence toggled by context), and a
+    # snapshot that skips flap + uptime (sessions churn during the workload).
+    SOAK_NO_PRECHECK = "soak_no_precheck"
 
     # Minimal-shape (accept the context for a uniform API, but ignore it):
     # bag012 perf-scaling, bounded-ECMP-sets (case9).
@@ -135,6 +139,12 @@ class ProfileContext:
     tcpdump_expected_message_types: t.Optional[t.List[str]] = None
     tcpdump_unexpected_message_types: t.Optional[t.List[str]] = None
     tcpdump_expected_last_mod_time: t.Optional[int] = None
+    # No-precheck soak: whether the convergence postcheck runs (the only policy
+    # difference between the nexthop-threshold and longevity shapes), and an
+    # optional convergence threshold threaded only when set (so the factory keeps
+    # the single source of truth for the default).
+    check_bgp_convergence: bool = True
+    convergence_threshold: t.Optional[int] = None
 
 
 class ProfileChecks(t.NamedTuple):
@@ -318,6 +328,31 @@ def _igp_instability(ctx: ProfileContext) -> ProfileChecks:
     )
 
 
+def _soak_no_precheck(ctx: ProfileContext) -> ProfileChecks:
+    """No-precheck stress (nexthop-group-count threshold / longevity soak): NO
+    prechecks, standard postchecks with the convergence check toggled by the
+    context (and an optional threaded threshold), and a snapshot that skips flap
+    + uptime since sessions intentionally churn during the long workload.
+    """
+    postcheck_kwargs: t.Dict[str, t.Any] = {
+        "postcheck_thresholds": ctx.postcheck_thresholds,
+        "check_bgp_convergence": ctx.check_bgp_convergence,
+        "exclude_bgp_mon": ctx.exclude_bgp_mon,
+    }
+    if ctx.convergence_threshold is not None:
+        postcheck_kwargs["convergence_threshold"] = ctx.convergence_threshold
+
+    return ProfileChecks(
+        prechecks=[],
+        postchecks=create_standard_postchecks(**postcheck_kwargs),
+        snapshot_checks=create_standard_snapshot_checks(
+            skip_flap_check=True,
+            skip_uptime_check=True,
+            exclude_bgp_mon=ctx.exclude_bgp_mon,
+        ),
+    )
+
+
 def _perf_scaling_bounded_ecmp(ctx: ProfileContext) -> ProfileChecks:
     """Profile for the bag012 bounded-ECMP-sets (case9) playbook.
 
@@ -366,6 +401,7 @@ _PROFILE_BUILDERS: t.Dict[CheckProfile, t.Callable[[ProfileContext], ProfileChec
     CheckProfile.DRAIN_UNDRAIN: _drain_undrain,
     CheckProfile.CHURN_STORM: _churn_storm,
     CheckProfile.IGP_INSTABILITY: _igp_instability,
+    CheckProfile.SOAK_NO_PRECHECK: _soak_no_precheck,
     CheckProfile.PERF_SCALING_BOUNDED_ECMP: _perf_scaling_bounded_ecmp,
 }
 

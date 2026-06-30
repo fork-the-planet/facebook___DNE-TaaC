@@ -446,3 +446,59 @@ class CheckProfileRegistryTest(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_soak_no_precheck_nexthop_matches_factory(self):
+        """SOAK_NO_PRECHECK with convergence ON reproduces the nexthop-group-count
+        threshold playbook (no prechecks, convergence postcheck at the threshold,
+        snapshot skips flap + uptime)."""
+        ctx = ProfileContext(
+            check_bgp_convergence=True,
+            convergence_threshold=600,
+            exclude_bgp_mon=True,
+        )
+        checks = get_profile_checks(CheckProfile.SOAK_NO_PRECHECK, ctx)
+
+        # No prechecks — the playbook leaves the optional field unset.
+        self.assertEqual(checks.prechecks, [])
+        self.assertEqual(
+            checks.postchecks,
+            create_standard_postchecks(
+                convergence_threshold=600,
+                exclude_bgp_mon=True,
+            ),
+        )
+        self.assertEqual(
+            checks.snapshot_checks,
+            create_standard_snapshot_checks(
+                skip_flap_check=True,
+                skip_uptime_check=True,
+                exclude_bgp_mon=True,
+            ),
+        )
+
+    def test_soak_no_precheck_longevity_matches_factory(self):
+        """SOAK_NO_PRECHECK with convergence OFF reproduces the longevity-soak
+        playbook (no prechecks, no convergence postcheck, snapshot skips flap +
+        uptime)."""
+        ctx = ProfileContext(
+            check_bgp_convergence=False,
+            exclude_bgp_mon=True,
+        )
+        checks = get_profile_checks(CheckProfile.SOAK_NO_PRECHECK, ctx)
+
+        self.assertEqual(checks.prechecks, [])
+        self.assertEqual(
+            checks.postchecks,
+            create_standard_postchecks(
+                check_bgp_convergence=False,
+                exclude_bgp_mon=True,
+            ),
+        )
+        self.assertEqual(
+            checks.snapshot_checks,
+            create_standard_snapshot_checks(
+                skip_flap_check=True,
+                skip_uptime_check=True,
+                exclude_bgp_mon=True,
+            ),
+        )

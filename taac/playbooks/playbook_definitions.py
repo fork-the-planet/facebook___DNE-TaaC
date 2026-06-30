@@ -10216,16 +10216,21 @@ def create_nexthop_group_count_threshold_playbook(
     Returns:
         Playbook configured for nexthop group count threshold testing
     """
+    # SOAK_NO_PRECHECK has no prechecks (the prechecks field is left unset).
+    soak_checks = get_profile_checks(
+        CheckProfile.SOAK_NO_PRECHECK,
+        ProfileContext(
+            check_bgp_convergence=True,
+            convergence_threshold=convergence_threshold,
+            exclude_bgp_mon=exclude_bgp_mon,
+        ),
+    )
     return Playbook(
         name="nexthop_group_count_threshold_playbook",
         setup_steps=create_bgp_instability_setup_steps(
             device_name=device_name,
         ),
-        snapshot_checks=create_standard_snapshot_checks(
-            skip_flap_check=True,
-            skip_uptime_check=True,
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
+        snapshot_checks=soak_checks.snapshot_checks,
         periodic_tasks=create_standard_periodic_tasks(
             device_name=device_name,
         )
@@ -10235,10 +10240,7 @@ def create_nexthop_group_count_threshold_playbook(
                 threshold=nexthop_group_threshold,
             ),
         ],
-        postchecks=create_standard_postchecks(
-            convergence_threshold=convergence_threshold,
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
+        postchecks=soak_checks.postchecks,
         stages=[
             create_route_oscillations_stage(
                 device_name=device_name,
@@ -10369,19 +10371,20 @@ def create_bgp_longevity_playbook(
     Returns:
         Playbook configured for BGP longevity soak testing
     """
-    return Playbook(
-        name="bgp_longevity_playbook",
-        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
-        postchecks=create_standard_postchecks(
+    # SOAK_NO_PRECHECK has no prechecks (the prechecks field is left unset).
+    soak_checks = get_profile_checks(
+        CheckProfile.SOAK_NO_PRECHECK,
+        ProfileContext(
             postcheck_thresholds=postcheck_thresholds,
             check_bgp_convergence=False,
             exclude_bgp_mon=exclude_bgp_mon,
         ),
-        snapshot_checks=create_standard_snapshot_checks(
-            skip_flap_check=True,
-            skip_uptime_check=True,
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
+    )
+    return Playbook(
+        name="bgp_longevity_playbook",
+        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
+        postchecks=soak_checks.postchecks,
+        snapshot_checks=soak_checks.snapshot_checks,
         periodic_tasks=create_longevity_periodic_tasks(
             device_name=device_name,
             route_churn_frequency=route_churn_frequency,
