@@ -5,6 +5,7 @@ import json
 import unittest
 
 from taac.health_checks.healthcheck_definitions import (
+    create_bgp_route_count_verification_check,
     create_bgp_tcpdump_check,
     create_core_dumps_snapshot_check,
 )
@@ -472,6 +473,58 @@ class CheckProfileRegistryTest(unittest.TestCase):
             create_standard_snapshot_checks(
                 skip_flap_check=True,
                 skip_uptime_check=True,
+                exclude_bgp_mon=True,
+            ),
+        )
+
+    def test_runtime_update_matches_factory(self):
+        """RUNTIME_UPDATE reproduces the route-registry prefix-list runtime-update
+        playbook (standard prechecks + a route-count verification add-on,
+        postchecks convergence ON but EOR tolerated)."""
+        ctx = ProfileContext(
+            peergroup_ibgp_v6="PG_IBGP_V6",
+            peergroup_ibgp_v4="PG_IBGP_V4",
+            cpu_baseline=6.0,
+            expected_established_sessions=42,
+            check_ibgp_pnh=False,
+            exclude_bgp_mon=True,
+            route_count_expected=650,
+        )
+        checks = get_profile_checks(CheckProfile.RUNTIME_UPDATE, ctx)
+
+        self.assertEqual(
+            checks.prechecks,
+            create_standard_prechecks(
+                peergroup_ibgp_v6="PG_IBGP_V6",
+                peergroup_ibgp_v4="PG_IBGP_V4",
+                cpu_baseline=6.0,
+                expected_established_sessions=42,
+                check_ibgp_pnh=False,
+                exclude_bgp_mon=True,
+            )
+            + [
+                create_bgp_route_count_verification_check(
+                    json_params={
+                        "descriptions_to_ignore": ["IBGP"],
+                        "descriptions_to_check": ["EBGP"],
+                        "direction": "received",
+                        "expected_count": 650,
+                        "policy_type": "post_policy",
+                    },
+                    check_id="startup_bgp_session_verification",
+                ),
+            ],
+        )
+        self.assertEqual(
+            checks.postchecks,
+            create_standard_postchecks(
+                fail_on_eor_expired=False,
+                exclude_bgp_mon=True,
+            ),
+        )
+        self.assertEqual(
+            checks.snapshot_checks,
+            create_standard_snapshot_checks(
                 exclude_bgp_mon=True,
             ),
         )

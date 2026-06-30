@@ -9936,40 +9936,28 @@ def create_bgp_route_registry_prefix_list_runtime_update_playbook(
     if postcheck_thresholds is None:
         postcheck_thresholds = get_postcheck_thresholds()
 
+    runtime_update_checks = get_profile_checks(
+        CheckProfile.RUNTIME_UPDATE,
+        ProfileContext(
+            peergroup_ibgp_v6=peergroup_ibgp_v6,
+            peergroup_ibgp_v4=peergroup_ibgp_v4,
+            precheck_thresholds=precheck_thresholds,
+            postcheck_thresholds=postcheck_thresholds,
+            cpu_baseline=cpu_baseline,
+            expected_established_sessions=expected_established_sessions,
+            check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
+            exclude_bgp_mon=exclude_bgp_mon,
+            route_count_expected=expected_route_count,
+        ),
+    )
     return Playbook(
         name="bgp_route_registry_prefix_list_runtime_update_playbook",
         setup_steps=create_route_registry_prefix_list_setup_steps(
             device_name=device_name
         ),
-        prechecks=create_standard_prechecks(
-            peergroup_ibgp_v6=peergroup_ibgp_v6,
-            peergroup_ibgp_v4=peergroup_ibgp_v4,
-            precheck_thresholds=precheck_thresholds,
-            cpu_baseline=cpu_baseline,
-            expected_established_sessions=expected_established_sessions,
-            check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
-            exclude_bgp_mon=exclude_bgp_mon,
-        )
-        + [
-            create_bgp_route_count_verification_check(
-                json_params={
-                    "descriptions_to_ignore": ["IBGP"],
-                    "descriptions_to_check": ["EBGP"],
-                    "direction": "received",
-                    "expected_count": expected_route_count,
-                    "policy_type": "post_policy",
-                },
-                check_id="startup_bgp_session_verification",
-            ),
-        ],
-        postchecks=create_standard_postchecks(
-            postcheck_thresholds=postcheck_thresholds,
-            fail_on_eor_expired=False,
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
-        snapshot_checks=create_standard_snapshot_checks(
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
+        prechecks=runtime_update_checks.prechecks,
+        postchecks=runtime_update_checks.postchecks,
+        snapshot_checks=runtime_update_checks.snapshot_checks,
         periodic_tasks=create_standard_periodic_tasks(
             device_name=device_name,
             memory_threshold=memory_threshold,

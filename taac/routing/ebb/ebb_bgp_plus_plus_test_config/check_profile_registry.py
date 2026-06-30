@@ -44,6 +44,7 @@ import typing as t
 from taac.health_checks.healthcheck_definitions import (
     create_bgp_convergence_check,
     create_bgp_rib_fib_consistency_check,
+    create_bgp_route_count_verification_check,
     create_bgp_session_establish_check,
     create_bgp_session_snapshot_check,
     create_bgp_tcpdump_check,
@@ -88,6 +89,10 @@ class CheckProfile(enum.Enum):
     # prechecks, standard postchecks (convergence toggled by context), and a
     # snapshot that skips flap + uptime (sessions churn during the workload).
     SOAK_NO_PRECHECK = "soak_no_precheck"
+    # Route-registry prefix-list runtime update: standard prechecks plus a
+    # route-count verification add-on, postchecks with convergence ON but EOR
+    # expiry tolerated (a runtime prefix-list update is not a restart).
+    RUNTIME_UPDATE = "runtime_update"
 
     # Minimal-shape (accept the context for a uniform API, but ignore it):
     # bag012 perf-scaling, bounded-ECMP-sets (case9).
@@ -145,6 +150,9 @@ class ProfileContext:
     # the single source of truth for the default).
     check_bgp_convergence: bool = True
     convergence_threshold: t.Optional[int] = None
+    # Runtime-update: expected baseline eBGP route count for the route-count
+    # verification precheck add-on (the only per-call variable in its params).
+    route_count_expected: t.Optional[int] = None
 
 
 class ProfileChecks(t.NamedTuple):
@@ -353,6 +361,45 @@ def _soak_no_precheck(ctx: ProfileContext) -> ProfileChecks:
     )
 
 
+def _runtime_update(ctx: ProfileContext) -> ProfileChecks:
+    """Route-registry prefix-list runtime update: standard prechecks plus a
+    route-count verification add-on (eBGP received post-policy routes vs the
+    expected baseline), postchecks with convergence ON but EOR expiry tolerated
+    (a runtime prefix-list update is not a restart), and a standard snapshot.
+    """
+    return ProfileChecks(
+        prechecks=create_standard_prechecks(
+            peergroup_ibgp_v6=ctx.peergroup_ibgp_v6,
+            peergroup_ibgp_v4=ctx.peergroup_ibgp_v4,
+            precheck_thresholds=ctx.precheck_thresholds,
+            cpu_baseline=ctx.cpu_baseline,
+            expected_established_sessions=ctx.expected_established_sessions,
+            check_ibgp_pnh=ctx.check_ibgp_pnh,
+            exclude_bgp_mon=ctx.exclude_bgp_mon,
+        )
+        + [
+            create_bgp_route_count_verification_check(
+                json_params={
+                    "descriptions_to_ignore": ["IBGP"],
+                    "descriptions_to_check": ["EBGP"],
+                    "direction": "received",
+                    "expected_count": ctx.route_count_expected,
+                    "policy_type": "post_policy",
+                },
+                check_id="startup_bgp_session_verification",
+            ),
+        ],
+        postchecks=create_standard_postchecks(
+            postcheck_thresholds=ctx.postcheck_thresholds,
+            fail_on_eor_expired=False,
+            exclude_bgp_mon=ctx.exclude_bgp_mon,
+        ),
+        snapshot_checks=create_standard_snapshot_checks(
+            exclude_bgp_mon=ctx.exclude_bgp_mon,
+        ),
+    )
+
+
 def _perf_scaling_bounded_ecmp(ctx: ProfileContext) -> ProfileChecks:
     """Profile for the bag012 bounded-ECMP-sets (case9) playbook.
 
@@ -402,6 +449,7 @@ _PROFILE_BUILDERS: t.Dict[CheckProfile, t.Callable[[ProfileContext], ProfileChec
     CheckProfile.CHURN_STORM: _churn_storm,
     CheckProfile.IGP_INSTABILITY: _igp_instability,
     CheckProfile.SOAK_NO_PRECHECK: _soak_no_precheck,
+    CheckProfile.RUNTIME_UPDATE: _runtime_update,
     CheckProfile.PERF_SCALING_BOUNDED_ECMP: _perf_scaling_bounded_ecmp,
 }
 
