@@ -105,6 +105,13 @@ def create_fpf_tc27_test_config() -> TestConfig:
         # Prefixes injected once by the setup task (8-STSW split-per-VF).
         skip_injection=True,
         rf_vf_groups=RF_VF_GROUPS,
+        # Coldboot fully restarts wedge_agent; assert every pre-established peer
+        # re-establishes within the (larger) coldboot SLA, DUT-scoped and anchored
+        # on wedge_agent's systemd unit.
+        assert_bgp_reconvergence=True,
+        # Full agent coldboot re-establishes all BGP sessions in ~207s on hardware
+        # (measured); 240s SLA gives headroom over the observed reconvergence.
+        reconvergence_sla_sec=240.0,
         playbook_name="fpf_tc27_agent_coldboot",
     )
     return TestConfig(

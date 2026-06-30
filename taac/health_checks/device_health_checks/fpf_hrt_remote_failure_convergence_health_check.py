@@ -65,7 +65,10 @@ class FpfHrtRemoteFailureConvergenceHealthCheck(
         # Baseline exclusion: for the "stable" (unimpacted-lane) assertion, drop
         # lanes already impaired at precheck when the config opted in — a
         # remote-failure on a known-degraded lab lane is PRE-EXISTING.
-        if direction == "stable" and get_allow_baseline_failures():
+        if (
+            direction in ("stable", "stable_last_sample")
+            and get_allow_baseline_failures()
+        ):
             baseline = baseline_impaired_lane_union()
             kept = [lane for lane in lanes if lane not in baseline]
             if baseline:
@@ -122,7 +125,7 @@ class FpfHrtRemoteFailureConvergenceHealthCheck(
         # injection artifact as a drain-time regression. Falls back to tc_start
         # when no disruption time was recorded (disruption_time defaults to 0.0).
         default_start = tc_start if tc_start else window_end - lookback_sec
-        if direction == "stable":
+        if direction in ("stable", "stable_last_sample"):
             disruption_ts = get_disruption_time()
             if disruption_ts > 0:
                 default_start = disruption_ts

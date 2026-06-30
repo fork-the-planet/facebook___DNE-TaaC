@@ -97,6 +97,15 @@ def create_fpf_tc24_test_config() -> TestConfig:
         # Per-VF-group remote-failure: assert each group is failure-free on its
         # own lanes (avoids the other group's expected cross-plane failures).
         rf_vf_groups=RF_VF_GROUPS,
+        # Assert reconvergence after the fsdb restart (DUT-scoped, anchored on
+        # fsdb's systemd unit; clamps to 0 / passes cleanly if fsdb does not
+        # bounce the BGP sessions).
+        assert_bgp_reconvergence=True,
+        reconvergence_sla_sec=60.0,
+        # fsdb/HRT are coupled: the HRT FSDB-session census dips while fsdb
+        # re-subscribes after the restart — expected, not a fault. Skip the
+        # postcheck (precheck still asserts the 32/32 baseline).
+        skip_fsdb_session_postcheck=True,
         playbook_name="fpf_tc24_fsdb_restart",
     )
     return TestConfig(

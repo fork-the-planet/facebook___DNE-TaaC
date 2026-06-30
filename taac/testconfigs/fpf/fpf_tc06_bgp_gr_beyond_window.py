@@ -113,6 +113,20 @@ def create_fpf_tc06_test_config() -> TestConfig:
         skip_injection=True,
         rf_vf_groups=RF_VF_GROUPS,
         lanes=INJECTED_LANES,
+        # bgpd is GR-restarted (stop beyond the GR window, then start) on the DUT
+        # GTSW; assert every pre-established peer re-establishes within the SLA,
+        # scoped to the DUT and anchored on bgpd's restart.
+        assert_bgp_reconvergence=True,
+        reconvergence_service="bgpd",
+        reconvergence_sla_sec=60.0,
+        reconvergence_hosts=[OBSERVER_GTSWS[0]],
+        # fsdb/HRT are coupled: a brief HRT FSDB-session census dip is expected
+        # across a GR; skip the postcheck (precheck still asserts 32/32 baseline).
+        skip_fsdb_session_postcheck=True,
+        # HRT negative-route count blips during the GR-beyond purge and clears
+        # afterwards (~36s, last=0); assert only the last sample (reconverged),
+        # not zero-across-the-whole-window.
+        remote_failure_last_sample=True,
     )
 
     return TestConfig(

@@ -94,6 +94,10 @@ def create_fpf_tc23_test_config() -> TestConfig:
         # Prefixes injected once by the setup task (8-STSW split-per-VF).
         skip_injection=True,
         rf_vf_groups=RF_VF_GROUPS,
+        # Assert every pre-established peer re-establishes within the SLA after
+        # the bgpd restart (DUT-scoped, anchored on bgpd's systemd unit).
+        assert_bgp_reconvergence=True,
+        reconvergence_sla_sec=60.0,
         playbook_name="fpf_tc23_bgp_restart",
     )
     return TestConfig(

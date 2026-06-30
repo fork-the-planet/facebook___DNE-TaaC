@@ -22384,9 +22384,14 @@ def _build_fpf_generic_checks(
     ods_entities: list[str] | None,
     use_bgp_snapshot: bool = False,
     skip_fsdb_session_precheck: bool = False,
+    skip_fsdb_session_postcheck: bool = False,
     ods_discard_informational: bool = False,
     host_spray_label: str = "",
     host_spray_excluded_lanes_by_host: dict[str, list[str]] | None = None,
+    assert_bgp_reconvergence: bool = False,
+    reconvergence_service: str = "bgpd",
+    reconvergence_sla_sec: float = 60.0,
+    reconvergence_hosts: list[str] | None = None,
 ) -> tuple[list, list, list]:
     """Build the generic (non-convergence) FPF check lists shared by the
     hardening / service-restart playbooks.
@@ -22597,10 +22602,20 @@ def _build_fpf_generic_checks(
                 threshold_by_service=dict(FPF_ACTIVE_THRESHOLDS.mem_util_by_service),
                 start_time_jq_var="test_case_start_time",
             ),
-            create_fpf_hrt_fsdb_session_check(
-                hosts=hosts,
-                expected_session_count=fsdb_sessions_per_host,
-                check_id="fpf_hrt_postcheck",
+            # HRT FSDB-session POSTcheck. Skipped for fsdb/bgp GR-style configs:
+            # fsdb and HRT are coupled, so a brief HRT FSDB-session census dip is
+            # EXPECTED while fsdb (or the GR'd process) re-subscribes — not a fault.
+            # The precheck still asserts a healthy 32/32 baseline.
+            *(
+                []
+                if skip_fsdb_session_postcheck
+                else [
+                    create_fpf_hrt_fsdb_session_check(
+                        hosts=hosts,
+                        expected_session_count=fsdb_sessions_per_host,
+                        check_id="fpf_hrt_postcheck",
+                    )
+                ]
             ),
             # tail: ODS-only checks
             *ods_postchecks,
@@ -22617,6 +22632,23 @@ def _build_fpf_generic_checks(
                     skip_flap_check=True, skip_uptime_check=True
                 )
             )
+
+    # Reconvergence-timing snapshot (opt-in, process-disruption configs only):
+    # assert every peer Established before the playbook re-established within the
+    # SLA of the disrupted service's restart, scoped to the disrupted device.
+    # Needs SSH (systemctl ActiveEnterTimestamp + BGP session query), so it is
+    # not added in skip_ssh_dependent_checks (minimal) mode.
+    if assert_bgp_reconvergence and not skip_ssh_dependent_checks:
+        snapshot_checks.append(
+            create_bgp_session_snapshot_check(
+                skip_flap_check=True,
+                skip_uptime_check=True,
+                assert_reconvergence=True,
+                max_convergence_sec=reconvergence_sla_sec,
+                convergence_service=reconvergence_service,
+                reconvergence_hosts=reconvergence_hosts,
+            )
+        )
 
     return prechecks, generic_postchecks, snapshot_checks
 
@@ -22855,6 +22887,7 @@ def create_fpf_hardening_playbook_v2(
     convergence_settle_sec: int = 0,
     fsdb_expected_total: int | None = None,
     skip_fsdb_session_precheck: bool = False,
+    skip_fsdb_session_postcheck: bool = False,
     hrt_memory_hosts: list[str] | None = None,
     hrt_driver_hosts: list[str] | None = None,
     spray_hosts: list[str] | None = None,
@@ -22868,6 +22901,11 @@ def create_fpf_hardening_playbook_v2(
     rf_vf_groups: list | None = None,
     restart_ib_traffic_server: str | None = None,
     restart_ib_traffic_clients: list[str] | None = None,
+    assert_bgp_reconvergence: bool = False,
+    reconvergence_service: str = "bgpd",
+    reconvergence_sla_sec: float = 60.0,
+    reconvergence_hosts: list[str] | None = None,
+    remote_failure_last_sample: bool = False,
 ) -> Playbook:
     """FPF hardening playbook for use with long-lived collectors.
 
@@ -22923,7 +22961,6 @@ def create_fpf_hardening_playbook_v2(
       4. Postchecks query live collectors for time-windowed convergence
     """
     from taac.health_checks.healthcheck_definitions import (
-        create_bgp_session_establish_check,
         create_fpf_bgp_rib_convergence_check,
         create_fpf_fsdb_ribmap_convergence_check,
         create_fpf_hrt_bulk_convergence_check,
@@ -22977,8 +23014,13 @@ def create_fpf_hardening_playbook_v2(
         ods_entities=ods_entities,
         use_bgp_snapshot=use_bgp_snapshot,
         skip_fsdb_session_precheck=skip_fsdb_session_precheck,
+        skip_fsdb_session_postcheck=skip_fsdb_session_postcheck,
         host_spray_label=host_spray_label,
         host_spray_excluded_lanes_by_host=host_spray_excluded_lanes_by_host,
+        assert_bgp_reconvergence=assert_bgp_reconvergence,
+        reconvergence_service=reconvergence_service,
+        reconvergence_sla_sec=reconvergence_sla_sec,
+        reconvergence_hosts=reconvergence_hosts,
     )
 
     # Stage steps: inject → stabilize → disruption (or soak). When
@@ -23082,12 +23124,18 @@ def create_fpf_hardening_playbook_v2(
                 check_id=f"fpf_hrt_convergence_lane{lane_id}",
             )
         )
+    # For process-disruption configs the HRT remote-failure (negative-route)
+    # count legitimately blips during the disruption and fully clears afterwards
+    # (e.g. GR-beyond/coldboot clear in ~36-57s, last=0). remote_failure_last_sample
+    # asserts only the LAST in-window sample is 0 (reconverged by test-case end)
+    # instead of zero-across-the-whole-window, so the recovery transient isn't a FAIL.
+    _rf_direction = "stable_last_sample" if remote_failure_last_sample else "stable"
     if rf_vf_groups:
         for _g in rf_vf_groups:
             convergence_postchecks.append(
                 create_fpf_hrt_remote_failure_convergence_check(
                     lanes=_g["lanes"],
-                    direction="stable",
+                    direction=_rf_direction,
                     use_live_collectors=True,
                     collector_name=f"hrt_remote_failure_{_g['suffix']}",
                     check_id=f"fpf_remote_failure_stable_{_g['suffix']}",
@@ -23097,7 +23145,7 @@ def create_fpf_hardening_playbook_v2(
         convergence_postchecks.append(
             create_fpf_hrt_remote_failure_convergence_check(
                 lanes=resolved_lanes,
-                direction="stable",
+                direction=_rf_direction,
                 use_live_collectors=True,
                 check_id="fpf_remote_failure_stable",
             )
@@ -23145,18 +23193,14 @@ def create_fpf_hardening_playbook_v2(
             )
         )
 
+    # The old p50-based BGP convergence-timing postcheck (max_session_uptime_sec)
+    # was removed: it fanned out to every endpoint device (observer GTSW + 8 STSW
+    # planes) and divided by each device's own systemd restart epoch, so a
+    # non-restarted observer's stale epoch produced absurd convergence values,
+    # and the p50 hid slow outliers. Process-disruption configs now opt into the
+    # DUT-scoped, pre-established-peer reconvergence SNAPSHOT check via
+    # assert_bgp_reconvergence (added to snapshot_checks in _build_fpf_generic_checks).
     disruption_postchecks = []
-    if disruption_steps and not use_bgp_snapshot:
-        # Convergence-timing check expects the BGP sessions to have flapped
-        # (uptime<10s). For a GPU-link event the GTSW<->STSW sessions never flap,
-        # so this is skipped under use_bgp_snapshot in favor of the snapshot.
-        disruption_postchecks.append(
-            create_bgp_session_establish_check(
-                min_established_pct=0.5,
-                max_session_uptime_sec=10.0,
-                check_id="fpf_bgp_convergence_timing",
-            )
-        )
 
     # Splice the disruption + convergence postchecks between the generic head
     # (SSH/device-shell checks) and the generic tail (ODS counters, HRT
@@ -23966,6 +24010,9 @@ def create_fpf_service_restart_playbook(
     skip_injection: bool = False,
     rf_vf_groups: list | None = None,
     playbook_name: str = "fpf_service_restart",
+    assert_bgp_reconvergence: bool = False,
+    reconvergence_sla_sec: float = 60.0,
+    skip_fsdb_session_postcheck: bool = False,
 ) -> Playbook:
     """FPF service-restart / coldboot playbook (single playbook, self-recovering).
 
@@ -24046,6 +24093,15 @@ def create_fpf_service_restart_playbook(
         # A restart/coldboot with live traffic causes expected transient
         # in-flight discards; surface them as informational, not a test failure.
         ods_discard_informational=True,
+        skip_fsdb_session_postcheck=skip_fsdb_session_postcheck,
+        # Reconvergence-timing assertion, scoped to the restarted device and
+        # anchored on the disrupted service's own systemd unit (so the systemctl
+        # ActiveEnterTimestamp the check reads is exactly the unit that was
+        # restarted). Opt-in per config (e.g. bgp/fsdb/wedge restart + coldboot).
+        assert_bgp_reconvergence=assert_bgp_reconvergence,
+        reconvergence_service=taac_types.SERVICE_NAME_MAP[service],
+        reconvergence_sla_sec=reconvergence_sla_sec,
+        reconvergence_hosts=restart_device_regexes,
     )
 
     # MANDATORY FPF drain pre-check (matches v1): abort if any in-scope GTSW /

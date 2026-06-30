@@ -95,6 +95,10 @@ def create_fpf_tc25_test_config() -> TestConfig:
         # Prefixes injected once by the setup task (8-STSW split-per-VF).
         skip_injection=True,
         rf_vf_groups=RF_VF_GROUPS,
+        # Assert reconvergence after the wedge_agent restart (DUT-scoped, anchored
+        # on wedge_agent's systemd unit).
+        assert_bgp_reconvergence=True,
+        reconvergence_sla_sec=90.0,
         playbook_name="fpf_tc25_wedge_agent_restart",
     )
     return TestConfig(

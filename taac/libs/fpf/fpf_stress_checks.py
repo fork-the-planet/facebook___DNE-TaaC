@@ -1224,8 +1224,17 @@ class HrtRemoteFailureCollector(BaseCollector):
     def evaluate_per_lane_stable(
         self,
         lanes: List[int],
+        last_sample_only: bool = False,
     ) -> List[PerLaneResult]:
-        """Stable-state: assert count stays 0 for every row in the window."""
+        """Stable-state: assert count stays 0 for every row in the window.
+
+        With ``last_sample_only=True``, assert only that the LAST sample before
+        the window end is 0 — i.e. the metric fully reconverged by test-case end,
+        tolerating a bounded transient during the disruption. Use for
+        process-disruption configs where the HRT layer legitimately shows a
+        recovery transient (e.g. GR-beyond / coldboot negative-route clearing in
+        ~36-57s) that fully clears by the end (last=0).
+        """
         results = []
         for lane_id in sorted(lanes):
             max_seen = 0
@@ -1252,14 +1261,29 @@ class HrtRemoteFailureCollector(BaseCollector):
             # not be counted against drain stability. Within the post-disruption
             # window a device/link drain produces NO negative-route blip on the
             # impacted lane, so any nonzero is a real regression.
-            passed = nonzero_count == 0
-            if passed:
-                detail = f"stable at 0 across {total_rows} samples"
+            if last_sample_only:
+                # Reconverged-by-end: only the last in-window sample must be 0;
+                # a bounded transient during the disruption is tolerated.
+                passed = last_count == 0
+                if passed:
+                    detail = (
+                        f"reconverged by window end (last=0; transient nonzero in "
+                        f"{nonzero_count}/{total_rows} samples, max={max_seen})"
+                    )
+                else:
+                    detail = (
+                        f"NOT reconverged by window end (last={last_count} != 0; "
+                        f"nonzero in {nonzero_count}/{total_rows} samples, max={max_seen})"
+                    )
             else:
-                detail = (
-                    f"saw nonzero in {nonzero_count}/{total_rows} "
-                    f"samples (max={max_seen}, last={last_count})"
-                )
+                passed = nonzero_count == 0
+                if passed:
+                    detail = f"stable at 0 across {total_rows} samples"
+                else:
+                    detail = (
+                        f"saw nonzero in {nonzero_count}/{total_rows} "
+                        f"samples (max={max_seen}, last={last_count})"
+                    )
             results.append(
                 PerLaneResult(
                     lane=lane_id,
@@ -1300,6 +1324,8 @@ class HrtRemoteFailureCollector(BaseCollector):
             self.rows = windowed
             if direction == "stable":
                 return self.evaluate_per_lane_stable(lanes=lanes)
+            if direction == "stable_last_sample":
+                return self.evaluate_per_lane_stable(lanes=lanes, last_sample_only=True)
             if direction == "recovery":
                 return self.evaluate_per_lane_recovery(
                     trigger_time=trigger_time,

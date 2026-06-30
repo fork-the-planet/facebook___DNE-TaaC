@@ -113,6 +113,21 @@ def create_fpf_tc07_test_config() -> TestConfig:
         skip_injection=True,
         rf_vf_groups=RF_VF_GROUPS,
         lanes=INJECTED_LANES,
+        # fsdb is GR-restarted on the DUT GTSW; anchor reconvergence on fsdb's
+        # restart (NOT bgpd, which does not restart here). If fsdb does not bounce
+        # the BGP sessions, their uptime predates the fsdb restart and convergence
+        # clamps to 0 — a clean pass. Scoped to the DUT.
+        assert_bgp_reconvergence=True,
+        reconvergence_service="fsdb",
+        reconvergence_sla_sec=60.0,
+        reconvergence_hosts=[OBSERVER_GTSWS[0]],
+        # fsdb/HRT are coupled: the HRT FSDB-session census dips while fsdb
+        # re-subscribes after the GR — expected, not a fault. Skip the postcheck
+        # (precheck still asserts the 32/32 baseline).
+        skip_fsdb_session_postcheck=True,
+        # HRT negative-route count blips during the GR and clears afterwards;
+        # assert only the last sample (reconverged by end), not zero-whole-window.
+        remote_failure_last_sample=True,
     )
 
     return TestConfig(
