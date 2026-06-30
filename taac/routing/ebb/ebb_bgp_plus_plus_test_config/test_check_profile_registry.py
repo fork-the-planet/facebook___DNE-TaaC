@@ -4,6 +4,9 @@
 import json
 import unittest
 
+from taac.health_checks.healthcheck_definitions import (
+    create_core_dumps_snapshot_check,
+)
 from taac.health_checks.retry_policy import DEFAULT_RETRY_SPEC
 from taac.routing.ebb.ebb_bgp_plus_plus_test_config.check_profile_registry import (
     CheckProfile,
@@ -292,4 +295,73 @@ class CheckProfileRegistryTest(unittest.TestCase):
                 skip_flap_check=True,
                 exclude_bgp_mon=True,
             ),
+        )
+
+    def test_churn_storm_attribute_matches_factory(self):
+        """CHURN_STORM with no rib_fib_json_params reproduces the bag010
+        attribute-churn playbook (convergence OFF, expected session count
+        enforced, core-dumps-ONLY snapshot)."""
+        ctx = ProfileContext(
+            peergroup_ibgp_v6="PG_IBGP_V6",
+            peergroup_ibgp_v4="PG_IBGP_V4",
+            expected_established_sessions=42,
+            check_ibgp_pnh=True,
+            exclude_bgp_mon=True,
+        )
+        checks = get_profile_checks(CheckProfile.CHURN_STORM, ctx)
+
+        self.assertEqual(
+            checks.prechecks,
+            create_standard_prechecks(
+                peergroup_ibgp_v6="PG_IBGP_V6",
+                peergroup_ibgp_v4="PG_IBGP_V4",
+                expected_established_sessions=42,
+                check_ibgp_pnh=True,
+                exclude_bgp_mon=True,
+            ),
+        )
+        self.assertEqual(
+            checks.postchecks,
+            create_standard_postchecks(
+                check_bgp_convergence=False,
+                expected_established_session_count=42,
+                exclude_bgp_mon=True,
+            ),
+        )
+        # Core-dumps ONLY — no bgp-session snapshot for this profile.
+        self.assertEqual(
+            checks.snapshot_checks,
+            [create_core_dumps_snapshot_check()],
+        )
+
+    def test_churn_storm_route_storm_matches_factory(self):
+        """CHURN_STORM with rib_fib_json_params reproduces the bag010 route-storm
+        playbook (route-storm RIB-FIB invariants threaded into the postcheck)."""
+        rib_fib_params = {
+            "debug_route_attributes": True,
+            "expected_as_path_length": 255,
+            "expected_pool_size": 10,
+        }
+        ctx = ProfileContext(
+            peergroup_ibgp_v6="PG_IBGP_V6",
+            peergroup_ibgp_v4="PG_IBGP_V4",
+            expected_established_sessions=42,
+            check_ibgp_pnh=True,
+            exclude_bgp_mon=True,
+            rib_fib_json_params=rib_fib_params,
+        )
+        checks = get_profile_checks(CheckProfile.CHURN_STORM, ctx)
+
+        self.assertEqual(
+            checks.postchecks,
+            create_standard_postchecks(
+                check_bgp_convergence=False,
+                expected_established_session_count=42,
+                rib_fib_json_params=rib_fib_params,
+                exclude_bgp_mon=True,
+            ),
+        )
+        self.assertEqual(
+            checks.snapshot_checks,
+            [create_core_dumps_snapshot_check()],
         )

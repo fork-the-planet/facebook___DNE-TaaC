@@ -75,6 +75,10 @@ class CheckProfile(enum.Enum):
     # FA/plane drain-undrain: convergence OFF, iBGP-PNH precheck off, snapshot
     # skips flap only (uptime still checked).
     DRAIN_UNDRAIN = "drain_undrain"
+    # bag010 BGP instability (attribute-churn / route-storm): convergence OFF,
+    # expected established-session count enforced, optional RIB-FIB route-storm
+    # invariants, and a core-dumps-ONLY snapshot (sessions churn throughout).
+    CHURN_STORM = "churn_storm"
 
     # Minimal-shape (accept the context for a uniform API, but ignore it):
     # bag012 perf-scaling, bounded-ECMP-sets (case9).
@@ -117,6 +121,9 @@ class ProfileContext:
     expected_established_sessions: int = 0
     snapshot_skip_flap: bool = False
     snapshot_skip_uptime: bool = False
+    # Churn-storm: extra RIB-FIB consistency json_params (route-storm invariants
+    # such as expected AS-path length / pool size); None = standard RIB-FIB check.
+    rib_fib_json_params: t.Optional[t.Dict[str, t.Any]] = None
 
 
 class ProfileChecks(t.NamedTuple):
@@ -237,6 +244,33 @@ def _drain_undrain(ctx: ProfileContext) -> ProfileChecks:
     )
 
 
+def _churn_storm(ctx: ProfileContext) -> ProfileChecks:
+    """bag010 BGP instability (attribute-churn / route-storm): standard prechecks,
+    postchecks with convergence OFF (attributes/routes intentionally churn) and the
+    expected established-session count enforced, plus optional RIB-FIB route-storm
+    invariants from the context. The snapshot is core-dumps ONLY — no bgp-session
+    snapshot, since sessions are deliberately disrupted throughout the test.
+    """
+    return ProfileChecks(
+        prechecks=create_standard_prechecks(
+            peergroup_ibgp_v6=ctx.peergroup_ibgp_v6,
+            peergroup_ibgp_v4=ctx.peergroup_ibgp_v4,
+            expected_established_sessions=ctx.expected_established_sessions,
+            check_ibgp_pnh=ctx.check_ibgp_pnh,
+            exclude_bgp_mon=ctx.exclude_bgp_mon,
+        ),
+        postchecks=create_standard_postchecks(
+            check_bgp_convergence=False,
+            expected_established_session_count=ctx.expected_established_sessions,
+            rib_fib_json_params=ctx.rib_fib_json_params,
+            exclude_bgp_mon=ctx.exclude_bgp_mon,
+        ),
+        snapshot_checks=[
+            create_core_dumps_snapshot_check(),
+        ],
+    )
+
+
 def _perf_scaling_bounded_ecmp(ctx: ProfileContext) -> ProfileChecks:
     """Profile for the bag012 bounded-ECMP-sets (case9) playbook.
 
@@ -283,6 +317,7 @@ _PROFILE_BUILDERS: t.Dict[CheckProfile, t.Callable[[ProfileContext], ProfileChec
     CheckProfile.COLD_START: _cold_start,
     CheckProfile.OSCILLATION: _oscillation,
     CheckProfile.DRAIN_UNDRAIN: _drain_undrain,
+    CheckProfile.CHURN_STORM: _churn_storm,
     CheckProfile.PERF_SCALING_BOUNDED_ECMP: _perf_scaling_bounded_ecmp,
 }
 

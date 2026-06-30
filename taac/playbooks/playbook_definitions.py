@@ -257,34 +257,28 @@ def create_bag010_ash6_bgp_instability_attribute_churn_playbook(
         BgpPlusPlusProfile,
         Gigabyte,
     )
-    from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_health_checks import (
-        create_standard_postchecks,
-        create_standard_prechecks,
-    )
     from taac.stages.stage_definitions import (
         create_attribute_churn_stage,
     )
 
-    return Playbook(
-        name="bgp_instability_attribute_churn",
-        setup_steps=create_bgp_instability_setup_steps(
-            device_name=device_name,
-        ),
-        prechecks=create_standard_prechecks(
+    instability_checks = get_profile_checks(
+        CheckProfile.CHURN_STORM,
+        ProfileContext(
             peergroup_ibgp_v6=peergroup_ibgp_v6,
             peergroup_ibgp_v4=peergroup_ibgp_v4,
             expected_established_sessions=total_session_count,
             check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
             exclude_bgp_mon=exclude_bgp_mon,
         ),
-        postchecks=create_standard_postchecks(
-            check_bgp_convergence=False,
-            expected_established_session_count=total_session_count,
-            exclude_bgp_mon=exclude_bgp_mon,
+    )
+    return Playbook(
+        name="bgp_instability_attribute_churn",
+        setup_steps=create_bgp_instability_setup_steps(
+            device_name=device_name,
         ),
-        snapshot_checks=[
-            create_core_dumps_snapshot_check(),
-        ],
+        prechecks=instability_checks.prechecks,
+        postchecks=instability_checks.postchecks,
+        snapshot_checks=instability_checks.snapshot_checks,
         periodic_tasks=create_standard_periodic_tasks(
             device_name=device_name,
             memory_threshold=Gigabyte.GIG_9.value,
@@ -349,40 +343,34 @@ def create_bag010_ash6_bgp_instability_route_storm_playbook(
         BgpPlusPlusProfile,
         Gigabyte,
     )
-    from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_health_checks import (
-        create_standard_postchecks,
-        create_standard_prechecks,
-    )
     from taac.stages.stage_definitions import (
         create_revert_route_storm_stage,
         create_route_storm_stage,
     )
 
-    return Playbook(
-        name="bgp_instability_route_storm",
-        setup_steps=create_bgp_instability_setup_steps(
-            device_name=device_name,
-        ),
-        prechecks=create_standard_prechecks(
+    instability_checks = get_profile_checks(
+        CheckProfile.CHURN_STORM,
+        ProfileContext(
             peergroup_ibgp_v6=peergroup_ibgp_v6,
             peergroup_ibgp_v4=peergroup_ibgp_v4,
             expected_established_sessions=total_session_count,
             check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
             exclude_bgp_mon=exclude_bgp_mon,
-        ),
-        postchecks=create_standard_postchecks(
-            check_bgp_convergence=False,
-            expected_established_session_count=total_session_count,
             rib_fib_json_params={
                 "debug_route_attributes": True,
                 "expected_as_path_length": 255,
                 "expected_pool_size": 10,
             },
-            exclude_bgp_mon=exclude_bgp_mon,
         ),
-        snapshot_checks=[
-            create_core_dumps_snapshot_check(),
-        ],
+    )
+    return Playbook(
+        name="bgp_instability_route_storm",
+        setup_steps=create_bgp_instability_setup_steps(
+            device_name=device_name,
+        ),
+        prechecks=instability_checks.prechecks,
+        postchecks=instability_checks.postchecks,
+        snapshot_checks=instability_checks.snapshot_checks,
         periodic_tasks=create_standard_periodic_tasks(
             device_name=device_name,
             memory_threshold=Gigabyte.GIG_10.value,
