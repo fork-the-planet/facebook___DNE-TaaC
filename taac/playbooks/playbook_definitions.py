@@ -44,6 +44,7 @@ from taac.playbooks.dlb_platform_constants import (
 from taac.routing.ebb.ebb_bgp_plus_plus_test_config.check_profile_registry import (
     CheckProfile,
     get_profile_checks,
+    ProfileContext,
 )
 from taac.health_checks.healthcheck_definitions import (
     create_bgp_convergence_check,
@@ -2883,7 +2884,9 @@ def create_bgp_plus_plus_arista_bounded_ecmp_sets_playbook(
     Returns:
         A `Playbook` named `bgp_plus_plus_arista_bounded_ecmp_sets_test`.
     """
-    profile_checks = get_profile_checks(CheckProfile.PERF_SCALING_BOUNDED_ECMP)
+    profile_checks = get_profile_checks(
+        CheckProfile.PERF_SCALING_BOUNDED_ECMP, ProfileContext()
+    )
     return Playbook(
         name="bgp_plus_plus_arista_bounded_ecmp_sets_test",
         description="Test BGP++ performance with bounded ECMP sets",
@@ -9086,29 +9089,26 @@ def create_bgp_daemon_restart_playbook(
     if postcheck_thresholds is None:
         postcheck_thresholds = get_postcheck_thresholds()
 
-    return Playbook(
-        name="bgp_daemon_restart_test_playbook",
-        setup_steps=create_bgp_restart_setup_steps(device_name=device_name),
-        prechecks=create_standard_prechecks(
+    restart_checks = get_profile_checks(
+        CheckProfile.DAEMON_RESTART,
+        ProfileContext(
             peergroup_ibgp_v6=peergroup_ibgp_v6,
             peergroup_ibgp_v4=peergroup_ibgp_v4,
             precheck_thresholds=precheck_thresholds,
+            postcheck_thresholds=postcheck_thresholds,
             cpu_baseline=cpu_baseline,
             check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
-        postchecks=create_standard_postchecks(
-            postcheck_thresholds=postcheck_thresholds,
-            expected_restarted_services=["Bgp"],
-            restart_start_time_jq_var="daemon_restart_time",
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
-        snapshot_checks=create_standard_snapshot_checks(
-            skip_uptime_check=True,
             expected_peer_identity=expected_peer_identity,
             parent_prefixes_to_ignore=parent_prefixes_to_ignore,
             exclude_bgp_mon=exclude_bgp_mon,
         ),
+    )
+    return Playbook(
+        name="bgp_daemon_restart_test_playbook",
+        setup_steps=create_bgp_restart_setup_steps(device_name=device_name),
+        prechecks=restart_checks.prechecks,
+        postchecks=restart_checks.postchecks,
+        snapshot_checks=restart_checks.snapshot_checks,
         periodic_tasks=create_standard_periodic_tasks(
             device_name=device_name,
             memory_threshold=memory_threshold,
@@ -9375,28 +9375,26 @@ def create_bgp_cold_start_playbook(
     if postcheck_thresholds is None:
         postcheck_thresholds = get_postcheck_thresholds()
 
-    return Playbook(
-        name="bgp_cold_start_test_playbook",
-        setup_steps=create_bgp_restart_setup_steps(device_name=device_name),
-        prechecks=create_standard_prechecks(
+    cold_start_checks = get_profile_checks(
+        CheckProfile.COLD_START,
+        ProfileContext(
             peergroup_ibgp_v6=peergroup_ibgp_v6,
             peergroup_ibgp_v4=peergroup_ibgp_v4,
             precheck_thresholds=precheck_thresholds,
+            postcheck_thresholds=postcheck_thresholds,
             cpu_baseline=cpu_baseline,
             check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
-        postchecks=create_standard_postchecks(
-            postcheck_thresholds=postcheck_thresholds,
-            fail_on_eor_expired=fail_on_eor_expired,
-            expected_restarted_services=["Bgp"],
-            restart_start_time_jq_var="daemon_restart_time",
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
-        snapshot_checks=create_standard_snapshot_checks(
             expected_peer_identity=expected_peer_identity,
             exclude_bgp_mon=exclude_bgp_mon,
+            fail_on_eor_expired=fail_on_eor_expired,
         ),
+    )
+    return Playbook(
+        name="bgp_cold_start_test_playbook",
+        setup_steps=create_bgp_restart_setup_steps(device_name=device_name),
+        prechecks=cold_start_checks.prechecks,
+        postchecks=cold_start_checks.postchecks,
+        snapshot_checks=cold_start_checks.snapshot_checks,
         periodic_tasks=create_standard_periodic_tasks(
             device_name=device_name,
             memory_threshold=memory_threshold,
