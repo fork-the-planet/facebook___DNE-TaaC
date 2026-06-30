@@ -23,6 +23,24 @@ TAAC_OSS = os.environ.get("TAAC_OSS", "").lower() in ("1", "true", "yes")
 
 if not TAAC_OSS:
     from configerator.client import ConfigeratorClient
+else:
+    # OSS mode: no Meta config service. Stub the client to a no-op so the
+    # rest of Ixia.__init__ doesn't fail with NameError on cfgr_client
+    # construction. Methods that would actually use cfgr_client gate
+    # themselves separately on TAAC_OSS.
+    class ConfigeratorClient:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __getattr__(self, name):
+            # Construction is a no-op in OSS, but any actual use of the
+            # client is a bug (a code path that forgot to gate on
+            # TAAC_OSS). Fail loudly here instead of silently.
+            raise NotImplementedError(
+                f"ConfigeratorClient.{name} is unavailable in OSS mode (TAAC_OSS); "
+                "this code path must be gated on TAAC_OSS."
+            )
+
 
 from ixia.ixia import types as ixia_types
 from ixnetwork_restpy.assistants.sessions.sessionassistant import (
@@ -721,9 +739,18 @@ class Ixia:
             )
 
         except ValueError:
-            raise InvalidInputError(
-                f"Invalid IXIA API Server IP address {ixia_server_ip}. Please check!"
-            )
+            # Not a literal IPv4/IPv6 address — treat as a hostname.
+            # ixnetwork_restpy's SessionAssistant resolves DNS itself, so
+            # passing the hostname through is sufficient. No IPv6 escaping
+            # needed for hostnames. Still reject obviously-invalid values
+            # (empty/whitespace) so garbage fails here rather than as an
+            # opaque IxNetwork session error downstream.
+            if not ixia_server_ip or any(c.isspace() for c in ixia_server_ip):
+                raise InvalidInputError(
+                    f"Invalid IXIA API Server IP address or hostname "
+                    f"{ixia_server_ip!r}. Please check!"
+                )
+            return ixia_server_ip
 
     @staticmethod
     def get_port_identifier(port_name: str) -> str:
@@ -5591,6 +5618,18 @@ class Ixia:
         """
         Configure Ixia chassis with primary chassis as master and others in daisy chain topology.
         """
+        # Single-chassis test (typical OSS case where the IxNetwork
+        # API server is a separate Linux box not on a chassis IP):
+        # daisy-chain configuration is meaningless. The existing
+        # fall-through below would try to add primary_chassis_ip as
+        # a chassis, which hangs forever in "polling" state when
+        # primary_chassis_ip is just the API server.
+        chassis_ips_in_use = {
+            port_config.phy_port_config.chassis_ip
+            for port_config in none_throws(self.ixia_config).port_configs
+        }
+        if len(chassis_ips_in_use) <= 1:
+            return
         primary_chassis_ip = ipaddress.ip_address(self.primary_chassis_ip)
         vport = None
         if not any(
@@ -5611,15 +5650,6 @@ class Ixia:
                 Name="DO_NOT_USE",
             )
             portmap_assistant.Connect(ForceOwnership=False)
-        elif all(
-            ipaddress.ip_address(port_config.phy_port_config.chassis_ip)
-            == primary_chassis_ip
-            for port_config in none_throws(self.ixia_config).port_configs
-        ):
-            self.logger.info(
-                "All ports from the Ixia configuration are associated with the primary chassis. Skipping the chassis configuration"
-            )
-            return
         all_chassis = self.ixnetwork.AvailableHardware.Chassis.find()
         primary_chassis = next(
             (
@@ -5708,10 +5738,18 @@ class Ixia:
 
     @require_traffic_item
     def apply_traffic(self) -> None:
-        try:
-            self.ixnetwork.Traffic.Apply()
-        except Exception as e:
-            self.logger.debug(f"Failed to apply traffic: {e}")
+        # IxNetwork's Traffic.Apply() returns HTTP 400 BadRequestError
+        # ("Error in L2/L3 Traffic Apply") when invoked with all traffic
+        # items disabled — the per-item .Enabled=False setter has already
+        # committed the disable state, so Apply() has nothing to roll up.
+        # Skip the call in that case rather than swallowing a broad
+        # Exception, so any future real failure of Apply() propagates.
+        if not any(ti.Enabled for ti in self.ixnetwork.Traffic.TrafficItem.find()):
+            self.logger.debug(
+                "apply_traffic: no enabled traffic items — skipping Traffic.Apply()"
+            )
+            return
+        self.ixnetwork.Traffic.Apply()
 
     def has_traffic_items(self) -> bool:
         try:

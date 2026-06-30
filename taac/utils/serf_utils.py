@@ -110,6 +110,8 @@ async def _async_get_ip_from_hostname_oss(hostname: str) -> str:
     Returns:
         IP address string (empty string if not found)
     """
+    import socket
+
     from taac.oss_topology_info.device_info_loader import (
         get_ip_from_hostname_oss,
     )
@@ -120,9 +122,18 @@ async def _async_get_ip_from_hostname_oss(hostname: str) -> str:
     if ip:
         return ip
 
-    # Fallback to DNS resolution
+    # Fallback to DNS — try IPv6 first, then IPv4. Some chassis-side
+    # API servers only carry A records (no AAAA), so without the IPv4
+    # fallback the runner silently sees an empty IP and fails ~90s
+    # into the connect retry loop.
     dns_result = get_ipv6_for_host(hostname)
-    return dns_result if dns_result else ""
+    if dns_result:
+        return dns_result
+
+    try:
+        return socket.gethostbyname(hostname)  # @nolint PATTERNLINT(python-dns-deps)
+    except socket.gaierror:
+        return ""
 
 
 async def _async_get_hostname_from_ip_oss(ip_addr: str) -> str:
@@ -150,7 +161,7 @@ async def _async_get_hostname_from_ip_oss(ip_addr: str) -> str:
 
     # Fallback to reverse DNS lookup
     try:
-        hostname, _, _ = socket.gethostbyaddr(ip_addr)
+        hostname, _, _ = socket.gethostbyaddr(ip_addr) # @nolint PATTERNLINT(python-dns-deps)
         return hostname
     except socket.herror:
         # Return empty string if reverse DNS fails (matching Serf behavior)
