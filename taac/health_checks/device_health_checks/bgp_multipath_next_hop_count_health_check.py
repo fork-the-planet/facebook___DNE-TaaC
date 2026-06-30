@@ -25,21 +25,36 @@ class BgpMultipathNextHopCountHealthCheck(
     that BGP session oscillations correctly affect the multipath group size.
 
     Supports two modes:
-        1. Discovery mode (discover_baseline=True): Queries the BGP RIB and discovers
-           all prefixes that have the expected baseline next-hop count. The discovered
-           prefixes are stored in the test context for use in subsequent validation.
+        1. Discovery mode (discover_baseline=True): Walks the eBGP RIB, builds the
+           next-hop-count distribution, and stores BOTH the modal width and the
+           prefix set at that width. No exact-match selector required — the test
+           portably adapts to whatever ECMP fanout the testbed actually produces.
+           Optional sanity bounds (expected_min_baseline_width /
+           expected_max_baseline_width) can fail the discovery if the measurement
+           falls outside an expected range.
         2. Validation mode (default): Validates that prefixes have the expected
-           number of next-hops.
+           number of next-hops. With use_discovered_width=True, the expected count
+           is derived from the stored width minus peers_stopped_delta — letting
+           reduce/restore checks read the live measurement rather than recomputing
+           from external constants.
 
     Supports:
         - Exact next-hop count validation
         - Minimum next-hop count validation
         - Maximum next-hop count validation
         - Range-based validation (min and max)
+        - Width-relative validation (derived from discovered baseline width)
 
     check_params:
-        - discover_baseline: If True, discover prefixes with baseline_nexthop_count and store them
-        - baseline_nexthop_count: Expected next-hop count for baseline discovery
+        - discover_baseline: If True, measure the modal eBGP NH-count and store
+        - baseline_nexthop_count: DEPRECATED selector (exact-match filter, legacy)
+        - expected_min_baseline_width: Optional lower sanity bound for measured width
+        - expected_max_baseline_width: Optional upper sanity bound for measured width
+        - min_multipath_width: Floor for the distribution scan (default 2 — single-NH
+          prefixes are excluded because they aren't part of any multipath group)
+        - use_discovered_width: If True, validation derives expected_nexthop_count
+          from the stored baseline width minus peers_stopped_delta
+        - peers_stopped_delta: Number of peers currently stopped (default 0 / restore)
         - prefix_subnets: Optional list of prefix subnets to check (e.g., ["10.0.0.0/8", "2001:db8::/32"])
         - parent_prefixes_to_ignore: Optional list of parent prefixes to ignore
         - expected_nexthop_count: Optional exact number of next-hops expected
@@ -53,9 +68,11 @@ class BgpMultipathNextHopCountHealthCheck(
     CHECK_NAME = hc_types.CheckName.NEXT_HOP_COUNT_CHECK
     OPERATING_SYSTEMS = ["EOS"]
 
-    # Class-level storage for discovered baseline prefixes
-    # This allows sharing discovered prefixes across health check instances
+    # Class-level storage for the discovered baseline prefixes + measured width.
+    # Both are written by discovery mode and read by validation mode in the same
+    # stage; sharing via class attributes is consistent with the prior design.
     _discovered_baseline_prefixes: t.ClassVar[t.Set[str]] = set()
+    _discovered_baseline_width: t.ClassVar[t.Optional[int]] = None
 
     async def _run(
         self,
@@ -87,12 +104,9 @@ class BgpMultipathNextHopCountHealthCheck(
         )
 
         discover_baseline = check_params.get("discover_baseline", False)
-        baseline_nexthop_count = check_params.get("baseline_nexthop_count")
 
         if discover_baseline:
-            return await self._run_discovery_mode(
-                obj, check_params, baseline_nexthop_count
-            )
+            return await self._run_discovery_mode(obj, check_params)
         else:
             return await self._run_validation_mode(obj, check_params)
 
@@ -100,114 +114,74 @@ class BgpMultipathNextHopCountHealthCheck(
         self,
         obj: TestDevice,
         check_params: t.Dict[str, t.Any],
-        baseline_nexthop_count: int | None,
     ) -> hc_types.HealthCheckResult:
         """
-        Discovery mode: Find prefixes with the expected baseline next-hop count
-        and store them for later validation.
+        Discovery mode: Measure the eBGP RIB's next-hop-count distribution and
+        store the modal width + the prefixes at that width as the baseline.
 
-        Only considers eBGP routes (routes with non-empty AS_PATH) by default
-        to avoid including iBGP or self-originated routes.
+        Picking the mode (rather than asserting an external constant) lets the
+        same playbook port across testbeds with different ECMP fanouts.
+        Optional sanity bounds catch the case where the measurement is wildly
+        outside what the testbed should produce.
         """
-        if baseline_nexthop_count is None:
-            return hc_types.HealthCheckResult(
-                status=hc_types.HealthCheckStatus.ERROR,
-                message="baseline_nexthop_count is required when discover_baseline=True",
-            )
-
-        parent_prefixes_to_ignore = check_params.get("parent_prefixes_to_ignore", [])
-        # Default to True for discovery mode - only consider eBGP routes
-        ebgp_only = check_params.get("ebgp_only", True)
+        min_multipath_width = check_params.get("min_multipath_width", 2)
 
         try:
-            # Get BGP++ RIB entries
-            # pyrefly: ignore [missing-attribute]
-            bgp_rib_entries = await self.driver.async_get_bgp_rib_entries()
-            self.logger.debug(f"Retrieved {len(bgp_rib_entries)} BGP++ RIB entries")
+            (
+                distribution,
+                skipped_ibgp_count,
+                skipped_originated_count,
+            ) = await self._measure_nexthop_distribution(check_params)
 
-            # Get self-originated prefixes to exclude
-            # pyrefly: ignore [missing-attribute]
-            bgp_originated_routes = await self.driver.async_get_bgp_originated_routes()
-            bgp_originated_prefixes = {
-                f"{ip_ntop(originated_route.prefix.prefix_bin)}/{originated_route.prefix.num_bits}"
-                for originated_route in bgp_originated_routes
+            distribution_summary = {
+                width: len(prefixes) for width, prefixes in sorted(distribution.items())
             }
-
-            # Find prefixes with the baseline next-hop count
-            discovered_prefixes = set()
-            skipped_ibgp_count = 0
-            skipped_originated_count = 0
-            nexthop_count_distribution: t.Dict[int, int] = {}
-            sample_entries_logged = 0
-            path_structure_logged = False
-
-            for entry in bgp_rib_entries:
-                ip_str = ip_ntop(entry.prefix.prefix_bin)
-                prefix_str = f"{ip_str}/{entry.prefix.num_bits}"
-
-                # Skip self-originated prefixes
-                if prefix_str in bgp_originated_prefixes:
-                    skipped_originated_count += 1
-                    continue
-
-                # Skip parent prefixes to ignore
-                if any(
-                    is_parent_prefix(ip_str, parent_prefix)
-                    for parent_prefix in parent_prefixes_to_ignore
-                ):
-                    continue
-
-                # Log the path structure once for debugging
-                if not path_structure_logged:
-                    self._log_path_structure_for_debugging(entry)
-                    path_structure_logged = True
-
-                # If ebgp_only is True, skip routes without AS_PATH (iBGP or local routes)
-                if ebgp_only and not self._is_ebgp_route(entry):
-                    skipped_ibgp_count += 1
-                    continue
-
-                # Count next-hops from best group
-                nexthop_count = self._count_nexthops(entry)
-
-                # Track next-hop count distribution for debugging
-                nexthop_count_distribution[nexthop_count] = (
-                    nexthop_count_distribution.get(nexthop_count, 0) + 1
-                )
-
-                # Log a few sample entries for debugging
-                if sample_entries_logged < 5:
-                    self.logger.debug(
-                        f"Sample eBGP prefix: {prefix_str}, nexthop_count={nexthop_count}"
-                    )
-                    sample_entries_logged += 1
-
-                # If this prefix has the baseline next-hop count, add it
-                if nexthop_count == baseline_nexthop_count:
-                    discovered_prefixes.add(prefix_str)
-
-            # Log next-hop count distribution for debugging
             self.logger.info(
-                f"Next-hop count distribution (eBGP only={ebgp_only}): {dict(sorted(nexthop_count_distribution.items()))}"
+                f"Next-hop count distribution (eBGP only={check_params.get('ebgp_only', True)}, "
+                f"min_multipath_width={min_multipath_width}): {distribution_summary}"
             )
             self.logger.info(
                 f"Skipped: {skipped_originated_count} originated, {skipped_ibgp_count} iBGP/local routes"
             )
 
-            if not discovered_prefixes:
+            if not distribution:
                 return hc_types.HealthCheckResult(
                     status=hc_types.HealthCheckStatus.FAIL,
-                    message=f"No prefixes found with {baseline_nexthop_count} next-hops in BGP RIB (skipped {skipped_ibgp_count} iBGP/local routes)",
+                    message=(
+                        f"No multipath eBGP prefixes (>= {min_multipath_width}-way) "
+                        f"found in BGP RIB (skipped {skipped_ibgp_count} iBGP/local routes)"
+                    ),
                 )
 
-            # Store discovered prefixes for later use
+            # Mode = the width that holds the largest prefix set.
+            discovered_width, discovered_prefixes = max(
+                distribution.items(), key=lambda kv: len(kv[1])
+            )
+
+            sanity_failures = self._baseline_sanity_failures(
+                discovered_width, check_params
+            )
+            if sanity_failures:
+                return hc_types.HealthCheckResult(
+                    status=hc_types.HealthCheckStatus.FAIL,
+                    message=(
+                        f"BGP multipath baseline discovery sanity-check FAILED: "
+                        f"{'; '.join(sanity_failures)}. Distribution: {distribution_summary}"
+                    ),
+                )
+
             BgpMultipathNextHopCountHealthCheck._discovered_baseline_prefixes = (
                 discovered_prefixes
+            )
+            BgpMultipathNextHopCountHealthCheck._discovered_baseline_width = (
+                discovered_width
             )
 
             success_message = (
                 f"BGP multipath baseline discovery PASSED.\n"
-                f"  - Discovered {len(discovered_prefixes)} eBGP prefixes with {baseline_nexthop_count} next-hops\n"
+                f"  - Measured baseline width: {discovered_width}-way ECMP\n"
+                f"  - Prefixes at baseline width: {len(discovered_prefixes)}\n"
+                f"  - Distribution: {distribution_summary}\n"
                 f"  - Skipped {skipped_ibgp_count} iBGP/local routes\n"
                 f"  - Sample prefixes: {list(discovered_prefixes)[:5]}"
             )
@@ -225,6 +199,113 @@ class BgpMultipathNextHopCountHealthCheck(
                 message=error_message,
             )
 
+    async def _measure_nexthop_distribution(
+        self,
+        check_params: t.Dict[str, t.Any],
+    ) -> t.Tuple[t.Dict[int, t.Set[str]], int, int]:
+        """
+        Walk the BGP RIB and build the next-hop-count distribution as
+        { width: set_of_prefixes }, restricted to multipath eBGP routes.
+
+        Returns the distribution plus the iBGP/local and self-originated skip
+        counts for diagnostic logging.
+        """
+        parent_prefixes_to_ignore = check_params.get("parent_prefixes_to_ignore", [])
+        ebgp_only = check_params.get("ebgp_only", True)
+        min_multipath_width = check_params.get("min_multipath_width", 2)
+
+        # pyrefly: ignore [missing-attribute]
+        bgp_rib_entries = await self.driver.async_get_bgp_rib_entries()
+        self.logger.debug(f"Retrieved {len(bgp_rib_entries)} BGP++ RIB entries")
+
+        # pyrefly: ignore [missing-attribute]
+        bgp_originated_routes = await self.driver.async_get_bgp_originated_routes()
+        bgp_originated_prefixes = {
+            f"{ip_ntop(originated_route.prefix.prefix_bin)}/{originated_route.prefix.num_bits}"
+            for originated_route in bgp_originated_routes
+        }
+
+        distribution: t.Dict[int, t.Set[str]] = {}
+        skipped_ibgp_count = 0
+        skipped_originated_count = 0
+        sample_entries_logged = 0
+        path_structure_logged = False
+
+        for entry in bgp_rib_entries:
+            ip_str = ip_ntop(entry.prefix.prefix_bin)
+            prefix_str = f"{ip_str}/{entry.prefix.num_bits}"
+
+            if prefix_str in bgp_originated_prefixes:
+                skipped_originated_count += 1
+                continue
+
+            if any(
+                is_parent_prefix(ip_str, parent_prefix)
+                for parent_prefix in parent_prefixes_to_ignore
+            ):
+                continue
+
+            if not path_structure_logged:
+                self._log_path_structure_for_debugging(entry)
+                path_structure_logged = True
+
+            if ebgp_only and not self._is_ebgp_route(entry):
+                skipped_ibgp_count += 1
+                continue
+
+            nexthop_count = self._count_nexthops(entry)
+            if nexthop_count < min_multipath_width:
+                continue
+
+            distribution.setdefault(nexthop_count, set()).add(prefix_str)
+
+            if sample_entries_logged < 5:
+                self.logger.debug(
+                    f"Sample eBGP prefix: {prefix_str}, nexthop_count={nexthop_count}"
+                )
+                sample_entries_logged += 1
+
+        return distribution, skipped_ibgp_count, skipped_originated_count
+
+    def _baseline_sanity_failures(
+        self,
+        discovered_width: int,
+        check_params: t.Dict[str, t.Any],
+    ) -> t.List[str]:
+        """
+        Fail loudly if the measured baseline width is implausible for the
+        testbed (e.g., a regression from 32-way to 1-way). Returns the list of
+        sanity-check failure messages (empty when the measurement is accepted).
+        """
+        expected_min_baseline_width = check_params.get("expected_min_baseline_width")
+        expected_max_baseline_width = check_params.get("expected_max_baseline_width")
+        # Legacy / sanity selector — if supplied, the measured width must match.
+        legacy_baseline = check_params.get("baseline_nexthop_count")
+
+        sanity_failures = []
+        if (
+            expected_min_baseline_width is not None
+            and discovered_width < expected_min_baseline_width
+        ):
+            sanity_failures.append(
+                f"measured width {discovered_width} < expected_min_baseline_width "
+                f"{expected_min_baseline_width}"
+            )
+        if (
+            expected_max_baseline_width is not None
+            and discovered_width > expected_max_baseline_width
+        ):
+            sanity_failures.append(
+                f"measured width {discovered_width} > expected_max_baseline_width "
+                f"{expected_max_baseline_width}"
+            )
+        if legacy_baseline is not None and discovered_width != legacy_baseline:
+            sanity_failures.append(
+                f"measured width {discovered_width} != legacy "
+                f"baseline_nexthop_count {legacy_baseline}"
+            )
+        return sanity_failures
+
     async def _run_validation_mode(
         self,
         obj: TestDevice,
@@ -241,6 +322,38 @@ class BgpMultipathNextHopCountHealthCheck(
         max_nexthop_count = check_params.get("max_nexthop_count")
         sample_size = check_params.get("sample_size", 10)
         use_discovered_prefixes = check_params.get("use_discovered_prefixes", False)
+        use_discovered_width = check_params.get("use_discovered_width", False)
+        peers_stopped_delta = check_params.get("peers_stopped_delta", 0)
+
+        # Width-relative validation: derive expected_nexthop_count from the
+        # measured baseline. Lets reduce/restore checks read the live
+        # measurement instead of recomputing from external constants.
+        if use_discovered_width:
+            discovered_width = (
+                BgpMultipathNextHopCountHealthCheck._discovered_baseline_width
+            )
+            if discovered_width is None:
+                return hc_types.HealthCheckResult(
+                    status=hc_types.HealthCheckStatus.SKIP,
+                    message=(
+                        "Skipping validation: no baseline width discovered. "
+                        "Discovery step should have reported the failure."
+                    ),
+                )
+            derived_expected = discovered_width - peers_stopped_delta
+            if derived_expected < 0:
+                return hc_types.HealthCheckResult(
+                    status=hc_types.HealthCheckStatus.ERROR,
+                    message=(
+                        f"peers_stopped_delta ({peers_stopped_delta}) exceeds "
+                        f"discovered baseline width ({discovered_width})"
+                    ),
+                )
+            expected_nexthop_count = derived_expected
+            self.logger.info(
+                f"Width-relative expected_nexthop_count = {discovered_width} "
+                f"- {peers_stopped_delta} = {derived_expected}"
+            )
 
         # Get discovered prefixes if requested
         discovered_prefixes = None
