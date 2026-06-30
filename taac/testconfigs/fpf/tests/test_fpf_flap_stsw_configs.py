@@ -74,18 +74,31 @@ _V2_STABLE_REQUIRED_IDS = {
     "fpf_bgp_convergence_lane0",
     "fpf_hrt_convergence_lane0",
     "fpf_hrt_convergence_lane1",
-    "fpf_remote_failure_stable",
     "fpf_hrt_postcheck",
 }
 
+# Remote-failure stable check IDs. The single-injection configs (tc32/tc33)
+# carry one broad "fpf_remote_failure_stable" check; the 8-STSW split-per-VF
+# injection configs (tc34/tc35, rf_vf_groups) replace it with one per VF group,
+# each scoped to that group's own lanes ("fpf_remote_failure_stable_<suffix>").
+_RF_STABLE_SINGLE_IDS = {"fpf_remote_failure_stable"}
+_RF_STABLE_VF_GROUP_IDS = {
+    "fpf_remote_failure_stable_vf1",
+    "fpf_remote_failure_stable_vf2",
+}
 
-def _longevity_carries_v2_stable_check_set(tc, test):
+
+def _longevity_carries_v2_stable_check_set(tc, test, vf_grouped=False):
     """Per-config HC contract: the longevity playbook (v2) must carry the full
-    stable-state check set (see _V2_STABLE_REQUIRED_IDS) plus EITHER the
+    stable-state check set (see _V2_STABLE_REQUIRED_IDS), the remote-failure
+    stable check(s) (per-VF-group when ``vf_grouped``), plus EITHER the
     prod-prefix stability or recovery check."""
     longevity = tc.playbooks[1]
     ids = {c.check_id for c in (longevity.postchecks or []) if c.check_id}
-    missing = _V2_STABLE_REQUIRED_IDS - ids
+    required = _V2_STABLE_REQUIRED_IDS | (
+        _RF_STABLE_VF_GROUP_IDS if vf_grouped else _RF_STABLE_SINGLE_IDS
+    )
+    missing = required - ids
     test.assertFalse(missing, f"longevity missing stable check IDs: {missing}")
     test.assertTrue(
         ("fpf_prod_hrt_prefix_stability" in ids)
@@ -169,7 +182,7 @@ class TestStswDrainReinjectConfigs(unittest.TestCase):
         self.assertEqual(len(TC34.playbooks), 2)
         _disrupt_playbook_has_no_checks(TC34, self)
         _longevity_playbook_has_checks(TC34, self)
-        _longevity_carries_v2_stable_check_set(TC34, self)
+        _longevity_carries_v2_stable_check_set(TC34, self, vf_grouped=True)
         self.assertEqual(TC34_LONGEVITY_SEC, 300)
 
         steps = _steps(TC34.playbooks[0])
@@ -191,7 +204,7 @@ class TestStswDrainReinjectConfigs(unittest.TestCase):
         self.assertEqual(len(TC35.playbooks), 2)
         _disrupt_playbook_has_no_checks(TC35, self)
         _longevity_playbook_has_checks(TC35, self)
-        _longevity_carries_v2_stable_check_set(TC35, self)
+        _longevity_carries_v2_stable_check_set(TC35, self, vf_grouped=True)
         self.assertEqual(TC35_LONGEVITY_SEC, 300)
 
         steps = _steps(TC35.playbooks[0])

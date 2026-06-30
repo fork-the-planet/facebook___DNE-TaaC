@@ -37,23 +37,27 @@ from taac.playbooks.playbook_definitions import (
     create_fpf_hardening_playbook_v2,
 )
 from taac.steps.step_definitions import (
-    create_fpf_bgp_prefix_injection_step,
     create_fpf_record_disruption_time_step,
     create_fpf_repeated_service_crash_step,
     create_longevity_step,
 )
 from taac.task_definitions import (
+    create_fpf_inject_vf_groups_task,
+    create_fpf_restart_service_task,
     create_fpf_start_collectors_task,
     create_fpf_stop_collectors_task,
+    create_fpf_withdraw_vf_groups_task,
 )
 from taac.testconfigs.fpf.fpf_hardening_common import (
+    ALL_LANES,
+    ALL_STSWS,
     ALLOW_BASELINE_FAILURES,
     create_fpf_endpoints,
     DEFAULT_COMMUNITY_LIST,
-    DEFAULT_SUBNET_PREFIX,
     EXPECTED_FSDB_SESSION_COUNT,
-    fpf_clean_slate_setup_task,
     fpf_ib_traffic_tasks,
+    fpf_rf_vf_groups,
+    fpf_vf_injection_groups,
     FSDB_COLLECTOR_MODE,
     GPU_HOSTS,
     HRT_MEMORY_HOSTS,
@@ -61,6 +65,8 @@ from taac.testconfigs.fpf.fpf_hardening_common import (
     skip_ssh_dependencies,
     SPRAY_HOSTS,
     TRIGGER_STSWS,
+    VF_COLLECTOR_SUBNET,
+    VF_GROUP_PREFIX_COUNT,
 )
 from taac.testconfigs.fpf.fpf_kill_contract import (
     build_kill_disrupt_postchecks,
@@ -68,10 +74,17 @@ from taac.testconfigs.fpf.fpf_kill_contract import (
 from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import TestConfig
 
-PREFIX_COUNT = 1000
+# 8-plane VF-group injection (VF1 5000:dd on s001-s004 = planes 0-3, VF2 5000:ee
+# on s005-s008 = planes 4-7); injected once by the setup task, withdrawn in
+# teardown, so the longevity playbook passes skip_injection=True.
+INJECTION_GROUPS = fpf_vf_injection_groups()
+RF_VF_GROUPS = fpf_rf_vf_groups()
+INJECTED_LANES = ALL_LANES
+PREFIX_COUNT = VF_GROUP_PREFIX_COUNT
+INJECT_SETTLE_SEC = 300
 STABILIZATION_DELAY_SEC = 120
 KILL_EVERY_SEC = 15  # graceful loop-kill cadence (service recovers between kills)
-KILL_DURATION_SEC = 600  # 10 min
+KILL_DURATION_SEC = 300  # 5 min (campaign-shortened)
 STABLE_AFTER_KILL_SEC = 120
 LONGEVITY_SOAK_SEC = 300
 LONGEVITY_SETTLE_SEC = 60
@@ -91,13 +104,9 @@ def create_fpf_tc50_test_config() -> TestConfig:
     ib_setup, ib_teardown = fpf_ib_traffic_tasks(skip_ssh)
     spray = None if skip_ssh else SPRAY_HOSTS
 
+    # Prefixes are injected once by the setup task (8-plane VF groups), so the
+    # disrupt window only stabilizes/records/kills/settles.
     disrupt_steps = [
-        create_fpf_bgp_prefix_injection_step(
-            devices=TRIGGER_STSWS,
-            count=PREFIX_COUNT,
-            community_list=DEFAULT_COMMUNITY_LIST,
-            description=f"Inject {PREFIX_COUNT} test prefixes on the trigger STSWs",
-        ),
         create_longevity_step(
             duration=STABILIZATION_DELAY_SEC,
             description=f"Stabilize {STABILIZATION_DELAY_SEC}s before the kill loop",
@@ -153,18 +162,21 @@ def create_fpf_tc50_test_config() -> TestConfig:
         hrt_driver_hosts=HRT_MEMORY_HOSTS,
         spray_hosts=spray,
         convergence_settle_sec=LONGEVITY_SETTLE_SEC,
+        # 8-plane: prefixes injected once by the setup task; check all 8 lanes.
+        skip_injection=True,
+        rf_vf_groups=RF_VF_GROUPS,
+        lanes=INJECTED_LANES,
     )
 
     return TestConfig(
         name="fpf_tc50_wedge_agent_kill_5s_10min",
-        endpoints=create_fpf_endpoints(),
+        endpoints=create_fpf_endpoints(stsws=ALL_STSWS),
         setup_tasks=[
-            fpf_clean_slate_setup_task(),
             *ib_setup,
             create_fpf_start_collectors_task(
                 gtsws=OBSERVER_GTSWS,
                 hosts=GPU_HOSTS,
-                subnet_prefix=DEFAULT_SUBNET_PREFIX,
+                subnet_prefix=VF_COLLECTOR_SUBNET,
                 prod_prefixes=PROD_PREFIXES,
                 prod_prefix_host=PROD_PREFIX_HOST,
                 prod_prefix_device_id=PROD_PREFIX_DEVICE_ID,
@@ -173,12 +185,19 @@ def create_fpf_tc50_test_config() -> TestConfig:
                 enable_fsdb_session_collector=True,
                 fsdb_session_host=GPU_HOSTS[0],
                 fsdb_session_expected=EXPECTED_FSDB_SESSION_COUNT,
+                rf_vf_groups=RF_VF_GROUPS,
+            ),
+            create_fpf_inject_vf_groups_task(
+                groups=INJECTION_GROUPS,
+                settle_sec=INJECT_SETTLE_SEC,
             ),
         ],
         teardown_tasks=[
+            create_fpf_withdraw_vf_groups_task(groups=INJECTION_GROUPS),
+            create_fpf_restart_service_task(devices=ALL_STSWS, service="BGP"),
             create_fpf_stop_collectors_task(
                 trigger_stsws=TRIGGER_STSWS,
-                prefix_count=PREFIX_COUNT,
+                withdraw=False,
                 community_list=DEFAULT_COMMUNITY_LIST,
             ),
             *ib_teardown,

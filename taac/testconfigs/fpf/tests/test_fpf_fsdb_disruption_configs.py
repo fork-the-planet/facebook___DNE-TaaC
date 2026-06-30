@@ -104,7 +104,9 @@ def _make_session_collector(
 
 # Stable-state hardening v2 check IDs that EVERY tc28-31 longevity playbook
 # must carry (anchored at the longevity playbook start by the runner's
-# per-playbook re-stamp of test_case_start_time).
+# per-playbook re-stamp of test_case_start_time). The remote-failure stable
+# check(s) are asserted separately (single broad check vs. per-VF-group) — see
+# below.
 _V2_STABLE_REQUIRED_IDS = {
     # FSDB ribMap + BGP RIB convergence (one per observed lane).
     "fpf_fsdb_convergence_lane0",
@@ -112,12 +114,26 @@ _V2_STABLE_REQUIRED_IDS = {
     # HRT bulk convergence on the injected lane(s).
     "fpf_hrt_convergence_lane0",
     "fpf_hrt_convergence_lane1",
-    # Steady-state remote-failure.
-    "fpf_remote_failure_stable",
     # Prod-prefix stability and per-host FSDB-session postcheck.
     "fpf_prod_hrt_prefix_stability",
     "fpf_hrt_postcheck",
 }
+
+# Remote-failure stable check IDs. tc29/tc30/tc31 (single injection) carry one
+# broad "fpf_remote_failure_stable" check; tc28 (8-STSW split-per-VF injection,
+# rf_vf_groups) replaces it with one per VF group, each scoped to that group's
+# own lanes ("fpf_remote_failure_stable_<suffix>").
+_RF_STABLE_SINGLE_IDS = {"fpf_remote_failure_stable"}
+_RF_STABLE_VF_GROUP_IDS = {
+    "fpf_remote_failure_stable_vf1",
+    "fpf_remote_failure_stable_vf2",
+}
+
+
+def _required_v2_ids(vf_grouped: bool) -> set:
+    return _V2_STABLE_REQUIRED_IDS | (
+        _RF_STABLE_VF_GROUP_IDS if vf_grouped else _RF_STABLE_SINGLE_IDS
+    )
 
 
 class TestFpfTc28FsdbKill(unittest.TestCase):
@@ -162,9 +178,11 @@ class TestFpfTc28FsdbKill(unittest.TestCase):
         and must carry the full stable-state check set (anchored at its own
         start by the runner's per-playbook test_case_start_time re-stamp)."""
         ids = set(_checks_by_id(self.cfg.playbooks[1]).keys())
+        # tc28 uses the 8-STSW split-per-VF injection (per-group RF checks).
+        required = _required_v2_ids(vf_grouped=True)
         self.assertTrue(
-            _V2_STABLE_REQUIRED_IDS.issubset(ids),
-            f"missing stable check IDs: {_V2_STABLE_REQUIRED_IDS - ids}",
+            required.issubset(ids),
+            f"missing stable check IDs: {required - ids}",
         )
 
 
@@ -220,9 +238,11 @@ class TestFpfTc29FsdbGrStop30(unittest.TestCase):
 
     def test_longevity_playbook_has_v2_stable_check_set(self):
         ids = set(_checks_by_id(self.cfg.playbooks[1]).keys())
+        # tc29/tc31 use the single broad remote-failure stable check.
+        required = _required_v2_ids(vf_grouped=False)
         self.assertTrue(
-            _V2_STABLE_REQUIRED_IDS.issubset(ids),
-            f"missing stable check IDs: {_V2_STABLE_REQUIRED_IDS - ids}",
+            required.issubset(ids),
+            f"missing stable check IDs: {required - ids}",
         )
 
 
@@ -298,9 +318,11 @@ class TestFpfTc31FsdbEnableRecover(unittest.TestCase):
 
     def test_longevity_playbook_has_v2_stable_check_set(self):
         ids = set(_checks_by_id(self.cfg.playbooks[1]).keys())
+        # tc29/tc31 use the single broad remote-failure stable check.
+        required = _required_v2_ids(vf_grouped=False)
         self.assertTrue(
-            _V2_STABLE_REQUIRED_IDS.issubset(ids),
-            f"missing stable check IDs: {_V2_STABLE_REQUIRED_IDS - ids}",
+            required.issubset(ids),
+            f"missing stable check IDs: {required - ids}",
         )
 
 

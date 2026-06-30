@@ -67,13 +67,17 @@ def _disrupt_playbook_has_no_checks(tc, test):
 
 
 # Stable-state v2 hardening check IDs that the restore/stable playbooks of
-# tc36-tc38 must carry.
+# tc36-tc38 must carry. With the 8-STSW split-per-VF injection (rf_vf_groups),
+# the single broad "fpf_remote_failure_stable" check is replaced by one per VF
+# group, each scoped to that group's own lanes
+# ("fpf_remote_failure_stable_<suffix>").
 _V2_STABLE_REQUIRED_IDS = {
     "fpf_fsdb_convergence_lane0",
     "fpf_bgp_convergence_lane0",
     "fpf_hrt_convergence_lane0",
     "fpf_hrt_convergence_lane1",
-    "fpf_remote_failure_stable",
+    "fpf_remote_failure_stable_vf1",
+    "fpf_remote_failure_stable_vf2",
     "fpf_hrt_postcheck",
 }
 

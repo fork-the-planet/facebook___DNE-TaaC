@@ -17,14 +17,23 @@ the "latest 1-minute" reading reflects the fully-drained state, not the GR-hold
 transient. Within-window behavior (stop < 120s, lane 0 keeps spraying) is the
 tc7 companion.
 
+Prefixes are injected on ALL 8 STSWs, split per VF group (VF1 5000:dd on
+s001-s004 = planes 0-3, VF2 5000:ee on s005-s008 = planes 4-7), via the
+fpf_inject_bgp_prefixes SETUP TASK so the netcastle run is self-contained. The
+fabric is VF-segregated, so each observer GTSW / lane sees only its own VF
+group's count: PREFIX_COUNT = VF_GROUP_PREFIX_COUNT. Collector subnet is 5000::/16
+to count both groups. The playbook passes skip_injection=True (no in-playbook
+inject) and checks all 8 lanes.
+
 Requires ib_write_bw traffic flowing so the per-lane beth egress is observable.
 """
 
 from taac.health_checks.healthcheck_definitions import (
     create_fpf_host_spray_check,
 )
+from taac.libs.fpf.fpf_prod_prefix_map import get_prefix
 from taac.playbooks.playbook_definitions import (
-    create_fpf_hardening_playbook,
+    create_fpf_hardening_playbook_v2,
 )
 from taac.steps.step_definitions import (
     create_fpf_record_disruption_time_step,
@@ -32,19 +41,46 @@ from taac.steps.step_definitions import (
     create_service_convergence_step,
     create_service_interruption_step,
 )
+from taac.task_definitions import (
+    create_fpf_inject_vf_groups_task,
+    create_fpf_restart_service_task,
+    create_fpf_start_collectors_task,
+    create_fpf_stop_collectors_task,
+    create_fpf_withdraw_vf_groups_task,
+)
 from taac.testconfigs.fpf.fpf_hardening_common import (
+    ALL_LANES,
+    ALL_STSWS,
+    ALLOW_BASELINE_FAILURES,
     create_fpf_endpoints,
-    fpf_clean_slate_setup_task,
+    DEFAULT_COMMUNITY_LIST,
+    EXPECTED_FSDB_SESSION_COUNT,
     fpf_ib_traffic_tasks,
+    fpf_rf_vf_groups,
+    fpf_vf_injection_groups,
+    FSDB_COLLECTOR_MODE,
     GPU_HOSTS,
-    HARDENING_PREFIX_COUNT,
+    HRT_MEMORY_HOSTS,
     OBSERVER_GTSWS,
     skip_ssh_dependencies,
     SPRAY_HOSTS,
     TRIGGER_STSWS,
+    VF_COLLECTOR_SUBNET,
+    VF_GROUP_PREFIX_COUNT,
 )
 from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import TestConfig
+
+INJECTION_GROUPS = fpf_vf_injection_groups()
+RF_VF_GROUPS = fpf_rf_vf_groups()
+PREFIX_COUNT = VF_GROUP_PREFIX_COUNT
+INJECT_SETTLE_SEC = 300
+INJECTED_LANES = ALL_LANES
+STABILIZATION_DELAY_SEC = 300
+
+PROD_PREFIX_HOST = GPU_HOSTS[0]
+PROD_PREFIX_DEVICE_ID = 0
+PROD_PREFIXES = [get_prefix(PROD_PREFIX_HOST, PROD_PREFIX_DEVICE_ID)]
 
 GR_WINDOW_SEC = 120
 # Stop >= 2 min past the 120s GR mark so lane 0 is fully drained + settled.
@@ -109,23 +145,61 @@ def create_fpf_tc08_test_config() -> TestConfig:
             )
         )
 
-    playbook = create_fpf_hardening_playbook(
+    playbook = create_fpf_hardening_playbook_v2(
         gtsws=OBSERVER_GTSWS,
         hosts=GPU_HOSTS,
         trigger_stsws=TRIGGER_STSWS,
         disruption_steps=disruption_steps,
-        disruption_duration_sec=600,
-        prefix_count=HARDENING_PREFIX_COUNT,
+        stabilization_delay_sec=STABILIZATION_DELAY_SEC,
+        prefix_count=PREFIX_COUNT,
+        community_list=DEFAULT_COMMUNITY_LIST,
         additional_postchecks=postchecks,
         playbook_name="fpf_tc08_fsdb_gr_beyond_window",
+        prod_prefixes=PROD_PREFIXES,
+        skip_ssh_dependent_checks=skip_ssh,
+        fsdb_expected_total=EXPECTED_FSDB_SESSION_COUNT,
+        hrt_memory_hosts=HRT_MEMORY_HOSTS,
+        hrt_driver_hosts=HRT_MEMORY_HOSTS,
+        spray_hosts=spray,
+        # 8-plane: prefixes injected once by the setup task; check all 8 lanes.
+        skip_injection=True,
+        rf_vf_groups=RF_VF_GROUPS,
+        lanes=INJECTED_LANES,
     )
 
     return TestConfig(
         name="fpf_tc08_fsdb_gr_beyond_window",
-        endpoints=create_fpf_endpoints(),
-        setup_tasks=[fpf_clean_slate_setup_task(), *ib_setup],
-        teardown_tasks=[*ib_teardown],
+        endpoints=create_fpf_endpoints(stsws=ALL_STSWS),
+        setup_tasks=[
+            *ib_setup,
+            create_fpf_start_collectors_task(
+                gtsws=OBSERVER_GTSWS,
+                hosts=GPU_HOSTS,
+                subnet_prefix=VF_COLLECTOR_SUBNET,
+                prod_prefixes=PROD_PREFIXES,
+                prod_prefix_host=PROD_PREFIX_HOST,
+                prod_prefix_device_id=PROD_PREFIX_DEVICE_ID,
+                fsdb_mode=FSDB_COLLECTOR_MODE,
+                allow_baseline_failures=ALLOW_BASELINE_FAILURES,
+                rf_vf_groups=RF_VF_GROUPS,
+            ),
+            create_fpf_inject_vf_groups_task(
+                groups=INJECTION_GROUPS,
+                settle_sec=INJECT_SETTLE_SEC,
+            ),
+        ],
+        teardown_tasks=[
+            create_fpf_withdraw_vf_groups_task(groups=INJECTION_GROUPS),
+            create_fpf_restart_service_task(devices=ALL_STSWS, service="BGP"),
+            create_fpf_stop_collectors_task(
+                trigger_stsws=TRIGGER_STSWS,
+                withdraw=False,
+                community_list=DEFAULT_COMMUNITY_LIST,
+            ),
+            *ib_teardown,
+        ],
         playbooks=[playbook],
+        tags=["fpf"],
     )
 
 
