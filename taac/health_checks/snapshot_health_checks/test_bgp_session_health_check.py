@@ -12,7 +12,7 @@ that skew no longer fails the check while genuine resets are still caught.
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from neteng.netcastle.logger import ConsoleFileLogger
 from taac.constants import TestDevice
@@ -103,6 +103,95 @@ class TestBgpSessionUptimeCheck(unittest.IsolatedAsyncioTestCase):
         result = await self._compare(pre, post, pre_ts=1000, post_ts=1200)
         self.assertEqual(result.status, hc_types.HealthCheckStatus.FAIL)
         self.assertIn("restarted", result.message)
+
+
+_KEY2 = BgpSessionId(my_addr="10.0.0.1", peer_addr="10.0.0.3")
+
+
+class TestBgpReconvergenceAssertion(unittest.IsolatedAsyncioTestCase):
+    """The opt-in reconvergence-timing assertion (assert_reconvergence).
+
+    convergence_sec = (post_ts - uptime) - restart_epoch; ALL pre-Established
+    peers must be within max_convergence_sec. Anchored on the disrupted service's
+    systemd ActiveEnterTimestamp, scoped to the disrupted device.
+    """
+
+    async def _compare(
+        self,
+        pre_data,
+        post_data,
+        post_ts,
+        restart_epoch="1000",
+        obj_name="gtsw001",
+        **check_params,
+    ):
+        check = _make_check()
+        check.driver = SimpleNamespace(
+            async_run_cmd_on_shell=AsyncMock(return_value=restart_epoch)
+        )
+        return await check.compare_snapshots(
+            obj=SimpleNamespace(name=obj_name),
+            input=hc_types.BaseHealthCheckIn(),
+            check_params={"assert_reconvergence": True, **check_params},
+            pre_snapshot=Snapshot(timestamp=0, data=pre_data),
+            post_snapshot=Snapshot(timestamp=post_ts, data=post_data),
+        )
+
+    async def test_all_peers_within_sla_pass(self):
+        # restart_epoch=1000, post_ts=1080; uptime 30s -> established_at=1050 ->
+        # convergence=50s <= 60s SLA for both peers -> PASS.
+        pre = {_KEY: _session(6000), _KEY2: _session(6000)}
+        post = {_KEY: _session(30), _KEY2: _session(30)}
+        result = await self._compare(pre, post, post_ts=1080, max_convergence_sec=60.0)
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS, result.message)
+
+    async def test_one_peer_exceeds_sla_fail(self):
+        # _KEY2 uptime 10s -> established_at=1070 -> convergence=70s > 60s -> FAIL.
+        pre = {_KEY: _session(6000), _KEY2: _session(6000)}
+        post = {_KEY: _session(30), _KEY2: _session(10)}
+        result = await self._compare(pre, post, post_ts=1080, max_convergence_sec=60.0)
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.FAIL, result.message)
+        self.assertIn("reconvergence SLA", result.message)
+
+    async def test_scoped_out_device_skipped(self):
+        # Even with a peer that would violate, a non-DUT device returns PASS.
+        pre = {_KEY: _session(6000)}
+        post = {_KEY: _session(10)}
+        result = await self._compare(
+            pre,
+            post,
+            post_ts=1080,
+            obj_name="gtsw002",
+            max_convergence_sec=60.0,
+            reconvergence_hosts=["gtsw001"],
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS, result.message)
+        self.assertIn("not the disrupted device", result.message)
+
+    async def test_deleted_peer_still_fails_before_timing(self):
+        # A pre-Established peer absent post -> the deleted-session check fires
+        # (peer never re-established) regardless of timing.
+        pre = {_KEY: _session(6000), _KEY2: _session(6000)}
+        post = {_KEY: _session(30)}
+        result = await self._compare(pre, post, post_ts=1080, max_convergence_sec=60.0)
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.FAIL, result.message)
+        self.assertIn("not present in post snapshot", result.message)
+
+    async def test_restart_epoch_unknown_skips(self):
+        pre = {_KEY: _session(6000)}
+        post = {_KEY: _session(10)}
+        result = await self._compare(
+            pre, post, post_ts=1080, restart_epoch="", max_convergence_sec=60.0
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS, result.message)
+        self.assertIn("skipping reconvergence", result.message)
+
+    async def test_no_pre_peers_passes(self):
+        # Only NEW peers post (none in pre) -> nothing in scope -> PASS.
+        pre = {}
+        post = {_KEY: _session(10)}
+        result = await self._compare(pre, post, post_ts=1080, max_convergence_sec=60.0)
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS, result.message)
 
 
 if __name__ == "__main__":

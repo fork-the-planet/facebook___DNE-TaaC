@@ -89,38 +89,25 @@ class BgpSessionHealthCheck(
                 ),
             )
 
+        # Reconvergence-timing assertion (opt-in). Short-circuits the steady-state
+        # flap/uptime checks below when assert_reconvergence is set (a restart test
+        # legitimately resets sessions, so those signals do not apply).
+        reconvergence_result = await self._maybe_check_reconvergence(
+            obj,
+            pre_snapshot_bgp_sessions,
+            post_snapshot_bgp_sessions,
+            post_snapshot,
+            check_params,
+        )
+        if reconvergence_result is not None:
+            return reconvergence_result
+
         issues = []
 
         if not skip_flap_check:
-            flapped_bgp_sessions = []
-            for key in post_snapshot_bgp_sessions.keys():
-                pre_snapshot_bgp_session = pre_snapshot_bgp_sessions.get(key)
-                post_snapshot_bgp_session = post_snapshot_bgp_sessions[key]
-                if not pre_snapshot_bgp_session:
-                    continue
-                if (
-                    pre_snapshot_bgp_session.details
-                    and post_snapshot_bgp_session.details
-                ):
-                    if (
-                        post_snapshot_bgp_session.details.num_of_flaps
-                        > pre_snapshot_bgp_session.details.num_of_flaps
-                    ):
-                        flapped_bgp_sessions.append(key)
-                        self.logger.debug(
-                            f"The number of flaps increased from {pre_snapshot_bgp_session.details.num_of_flaps} "
-                            f"to {post_snapshot_bgp_session.details.num_of_flaps} for {key}"
-                        )
-                else:
-                    if (
-                        post_snapshot_bgp_session.uptime
-                        < pre_snapshot_bgp_session.uptime
-                    ):
-                        flapped_bgp_sessions.append(key)
-                        self.logger.debug(
-                            f"The uptime for {key} decreased from {pre_snapshot_bgp_session.uptime} to "
-                            f"{post_snapshot_bgp_session.uptime}. This indicates a flap"
-                        )
+            flapped_bgp_sessions = self._detect_flapped_sessions(
+                pre_snapshot_bgp_sessions, post_snapshot_bgp_sessions
+            )
             if flapped_bgp_sessions:
                 flapped_sessions_str = "\n    • ".join(
                     [
@@ -186,6 +173,195 @@ class BgpSessionHealthCheck(
 
         return hc_types.HealthCheckResult(
             status=hc_types.HealthCheckStatus.PASS,
+        )
+
+    def _detect_flapped_sessions(
+        self,
+        pre_sessions: t.Dict[BgpSessionId, TBgpSession],
+        post_sessions: t.Dict[BgpSessionId, TBgpSession],
+    ) -> t.List[BgpSessionId]:
+        """Return sessions that flapped across the window.
+
+        Primary signal is the BGP++ num_of_flaps counter advancing; when that
+        detail is unavailable, a uptime decrease is the fallback flap signal.
+        """
+        flapped: t.List[BgpSessionId] = []
+        for key in post_sessions.keys():
+            pre_session = pre_sessions.get(key)
+            post_session = post_sessions[key]
+            if not pre_session:
+                continue
+            if pre_session.details and post_session.details:
+                if post_session.details.num_of_flaps > pre_session.details.num_of_flaps:
+                    flapped.append(key)
+                    self.logger.debug(
+                        f"The number of flaps increased from {pre_session.details.num_of_flaps} "
+                        f"to {post_session.details.num_of_flaps} for {key}"
+                    )
+            elif post_session.uptime < pre_session.uptime:
+                flapped.append(key)
+                self.logger.debug(
+                    f"The uptime for {key} decreased from {pre_session.uptime} to "
+                    f"{post_session.uptime}. This indicates a flap"
+                )
+        return flapped
+
+    async def _maybe_check_reconvergence(
+        self,
+        obj: TestDevice,
+        pre_sessions: t.Dict[BgpSessionId, TBgpSession],
+        post_sessions: t.Dict[BgpSessionId, TBgpSession],
+        post_snapshot: Snapshot,
+        check_params: t.Dict[str, t.Any],
+    ) -> t.Optional[hc_types.HealthCheckResult]:
+        """Opt-in reconvergence-timing dispatch.
+
+        For process-disruption tests (bgp/fsdb/wedge_agent restart, kill,
+        GR-within/beyond, warm/coldboot, reboot — graceful or not) assert that
+        every peer Established BEFORE the playbook re-established within
+        ``max_convergence_sec`` of the disrupted service's restart. The
+        deleted-session check in ``compare_snapshots`` already FAILs if a
+        pre-Established peer never came back; this adds the timing bound on the
+        ones that did. Scoped to the disrupted device via ``reconvergence_hosts``
+        so the measurement is not polluted by observer/STSW devices whose service
+        never restarted in this playbook.
+
+        Returns a result to short-circuit ``compare_snapshots``, or ``None`` to
+        continue with the steady-state flap/uptime checks.
+        """
+        if not check_params.get("assert_reconvergence"):
+            return None
+        reconvergence_hosts = check_params.get("reconvergence_hosts")
+        if reconvergence_hosts and obj.name not in reconvergence_hosts:
+            return hc_types.HealthCheckResult(
+                status=hc_types.HealthCheckStatus.PASS,
+                message=(
+                    f"{obj.name}: not the disrupted device "
+                    f"(reconvergence scoped to {reconvergence_hosts}) — skipped"
+                ),
+            )
+        return await self._check_reconvergence(
+            obj,
+            pre_sessions,
+            post_sessions,
+            post_snapshot.timestamp,
+            float(check_params.get("max_convergence_sec", 60.0)),
+            check_params.get("convergence_service", "bgpd"),
+        )
+
+    async def _get_service_restart_epoch(
+        self, hostname: str, service: str
+    ) -> t.Optional[float]:
+        """Epoch when ``service`` last entered active state (systemd), or None.
+
+        Uses ``date -d`` on the device to convert the systemd timestamp to epoch,
+        avoiding timezone parsing issues on the devserver side.
+        """
+        cmd = (
+            f"ts=$(systemctl show {service} -p ActiveEnterTimestamp --value); "
+            f'date -d "$ts" +%s 2>/dev/null || echo ""'
+        )
+        try:
+            # pyrefly: ignore [missing-attribute]
+            output = await self.driver.async_run_cmd_on_shell(cmd)
+            epoch_str = output.strip()
+            return float(epoch_str) if epoch_str else None
+        except Exception as e:
+            self.logger.warning(
+                f"{hostname}: Failed to get ActiveEnterTimestamp for {service}: {e}"
+            )
+            return None
+
+    async def _check_reconvergence(
+        self,
+        obj: TestDevice,
+        pre_sessions: t.Dict[BgpSessionId, TBgpSession],
+        post_sessions: t.Dict[BgpSessionId, TBgpSession],
+        post_timestamp: int,
+        max_convergence_sec: float,
+        convergence_service: str,
+    ) -> hc_types.HealthCheckResult:
+        """Assert every pre-Established peer re-established within the SLA.
+
+        ``convergence_sec = established_at - service_restart_epoch`` where
+        ``established_at = post_timestamp - session.uptime``. Asserts that ALL
+        (not just the median) re-established peers are within
+        ``max_convergence_sec`` of the disrupted service's restart. Only peers
+        present in the pre snapshot (Established before the playbook) are counted.
+
+        If the service never actually bounced the sessions (e.g. an fsdb kill that
+        leaves bgpd's sessions up), their uptime predates the restart epoch, the
+        convergence clamps to 0, and the check passes cleanly — so the assertion
+        is safe to apply uniformly across all process-disruption variants.
+        """
+        from statistics import median
+
+        hostname = obj.name
+        restart_epoch = await self._get_service_restart_epoch(
+            hostname, convergence_service
+        )
+        if restart_epoch is None:
+            return hc_types.HealthCheckResult(
+                status=hc_types.HealthCheckStatus.PASS,
+                message=(
+                    f"{hostname}: could not determine {convergence_service} restart "
+                    f"time — skipping reconvergence timing assertion"
+                ),
+            )
+
+        convergence_secs: t.List[t.Tuple[str, float]] = []
+        for key, session in post_sessions.items():
+            if key not in pre_sessions:
+                continue  # Established AFTER the playbook began — out of scope
+            if session.uptime is None:
+                continue
+            uptime_sec = session.uptime / 1000.0
+            established_at = post_timestamp - uptime_sec
+            convergence_secs.append(
+                (str(key.peer_addr), max(0.0, established_at - restart_epoch))
+            )
+
+        if not convergence_secs:
+            return hc_types.HealthCheckResult(
+                status=hc_types.HealthCheckStatus.PASS,
+                message=(
+                    f"{hostname}: no pre-established peers with uptime data — "
+                    f"nothing to assert for {convergence_service} reconvergence"
+                ),
+            )
+
+        times = sorted(c for _, c in convergence_secs)
+        fastest, p50, slowest = times[0], median(times), times[-1]
+        summary = (
+            f"{len(convergence_secs)} pre-established peers re-established after "
+            f"{convergence_service} restart — fastest={fastest:.1f}s, "
+            f"p50={p50:.1f}s, slowest={slowest:.1f}s "
+            f"(SLA: all ≤ {max_convergence_sec:.0f}s)"
+        )
+        self.logger.info(f"{hostname}: {summary}")
+
+        violations = [
+            f"{peer} ({c:.1f}s)"
+            for peer, c in convergence_secs
+            if c > max_convergence_sec
+        ]
+        if violations:
+            sample = violations[:10]
+            suffix = (
+                f" ... and {len(violations) - 10} more" if len(violations) > 10 else ""
+            )
+            return hc_types.HealthCheckResult(
+                status=hc_types.HealthCheckStatus.FAIL,
+                message=(
+                    f"{hostname}: {len(violations)}/{len(convergence_secs)} "
+                    f"pre-established peers exceeded the {max_convergence_sec:.0f}s "
+                    f"reconvergence SLA after {convergence_service} restart: "
+                    f"{sample}{suffix}. {summary}"
+                ),
+            )
+        return hc_types.HealthCheckResult(
+            status=hc_types.HealthCheckStatus.PASS,
+            message=f"{hostname}: {summary}",
         )
 
     async def async_get_bgp_sessions(

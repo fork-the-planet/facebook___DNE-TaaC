@@ -1505,6 +1505,10 @@ def create_bgp_session_snapshot_check(
     expected_peer_identity: t.Optional[t.Union[str, t.Dict[str, str]]] = None,
     pre_snapshot_checkpoint_id: t.Optional[str] = None,
     post_snapshot_checkpoint_id: t.Optional[str] = None,
+    assert_reconvergence: t.Optional[bool] = None,
+    max_convergence_sec: t.Optional[float] = None,
+    convergence_service: t.Optional[str] = None,
+    reconvergence_hosts: t.Optional[t.List[str]] = None,
 ) -> SnapshotHealthCheck:
     """BGP_SESSION_CHECK — snapshot variant.
 
@@ -1513,6 +1517,25 @@ def create_bgp_session_snapshot_check(
     `skip_flap_check`/`skip_uptime_check` are tri-state — `None` omits the key,
     `True`/`False` sets it explicitly (some sites encode `False` to preserve
     historical byte-equivalence).
+
+    Reconvergence-timing assertion (for process-disruption tests — bgp/fsdb/
+    wedge_agent restart, kill, GR-within/beyond, warm/coldboot, reboot):
+        assert_reconvergence: opt in. For every peer Established in the PRE
+            snapshot (before the playbook), assert it re-established within
+            `max_convergence_sec` of the disrupted service's restart. ALL such
+            peers must pass (not a median). The deleted-session check already
+            fails if a pre-Established peer never came back. Pair with
+            `skip_flap_check=True, skip_uptime_check=True` — a restart test
+            legitimately resets sessions, so those steady-state signals do not
+            apply.
+        max_convergence_sec: per-peer SLA (default 60s in the check). Set larger
+            (e.g. 180s) for coldboot/reboot.
+        convergence_service: systemd unit whose ActiveEnterTimestamp anchors the
+            measurement — must match the disrupted service (bgpd/fsdb/
+            wedge_agent). Defaults to "bgpd" in the check.
+        reconvergence_hosts: scope the assertion to the disrupted device(s) only;
+            the check returns PASS (skipped) on any other device so observer/STSW
+            sessions whose service never restarted do not pollute the signal.
     """
     json_payload: t.Dict[str, t.Any] = {}
     if parent_prefixes_to_ignore is not None:
@@ -1523,6 +1546,14 @@ def create_bgp_session_snapshot_check(
         json_payload["skip_uptime_check"] = skip_uptime_check
     if expected_peer_identity is not None:
         json_payload["expected_peer_identity"] = expected_peer_identity
+    if assert_reconvergence is not None:
+        json_payload["assert_reconvergence"] = assert_reconvergence
+    if max_convergence_sec is not None:
+        json_payload["max_convergence_sec"] = max_convergence_sec
+    if convergence_service is not None:
+        json_payload["convergence_service"] = convergence_service
+    if reconvergence_hosts is not None:
+        json_payload["reconvergence_hosts"] = reconvergence_hosts
     return SnapshotHealthCheck(
         name=hc_types.CheckName.BGP_SESSION_CHECK,
         check_params=(
