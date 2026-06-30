@@ -72,6 +72,9 @@ class CheckProfile(enum.Enum):
     # BGP route/session oscillation & multipath churn: convergence OFF; which
     # snapshot sub-checks to skip varies by sub-shape (carried in the context).
     OSCILLATION = "oscillation"
+    # FA/plane drain-undrain: convergence OFF, iBGP-PNH precheck off, snapshot
+    # skips flap only (uptime still checked).
+    DRAIN_UNDRAIN = "drain_undrain"
 
     # Minimal-shape (accept the context for a uniform API, but ignore it):
     # bag012 perf-scaling, bounded-ECMP-sets (case9).
@@ -210,6 +213,30 @@ def _oscillation(ctx: ProfileContext) -> ProfileChecks:
     )
 
 
+def _drain_undrain(ctx: ProfileContext) -> ProfileChecks:
+    """FA/plane drain-undrain: standard prechecks with the iBGP-PNH check OFF
+    (drain tests don't assert PNH metric), postchecks with convergence OFF, and
+    a snapshot that skips only the flap check (uptime is still validated).
+    """
+    return ProfileChecks(
+        prechecks=create_standard_prechecks(
+            peergroup_ibgp_v6=ctx.peergroup_ibgp_v6,
+            peergroup_ibgp_v4=ctx.peergroup_ibgp_v4,
+            expected_established_sessions=ctx.expected_established_sessions,
+            check_ibgp_pnh=False,
+            exclude_bgp_mon=ctx.exclude_bgp_mon,
+        ),
+        postchecks=create_standard_postchecks(
+            check_bgp_convergence=False,
+            exclude_bgp_mon=ctx.exclude_bgp_mon,
+        ),
+        snapshot_checks=create_standard_snapshot_checks(
+            skip_flap_check=True,
+            exclude_bgp_mon=ctx.exclude_bgp_mon,
+        ),
+    )
+
+
 def _perf_scaling_bounded_ecmp(ctx: ProfileContext) -> ProfileChecks:
     """Profile for the bag012 bounded-ECMP-sets (case9) playbook.
 
@@ -255,6 +282,7 @@ _PROFILE_BUILDERS: t.Dict[CheckProfile, t.Callable[[ProfileContext], ProfileChec
     CheckProfile.DAEMON_RESTART: _daemon_restart,
     CheckProfile.COLD_START: _cold_start,
     CheckProfile.OSCILLATION: _oscillation,
+    CheckProfile.DRAIN_UNDRAIN: _drain_undrain,
     CheckProfile.PERF_SCALING_BOUNDED_ECMP: _perf_scaling_bounded_ecmp,
 }
 

@@ -10170,24 +10170,21 @@ def create_bgp_fauu_drain_undrain_playbook(
     Returns:
         Playbook configured for BGP FAUU drain/undrain testing
     """
-    return Playbook(
-        name="bgp_fauu_drain_undrain_playbook",
-        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
-        prechecks=create_standard_prechecks(
+    drain_checks = get_profile_checks(
+        CheckProfile.DRAIN_UNDRAIN,
+        ProfileContext(
             peergroup_ibgp_v6=peergroup_ibgp_v6,
             peergroup_ibgp_v4=peergroup_ibgp_v4,
             expected_established_sessions=expected_established_sessions,
-            check_ibgp_pnh=False,
             exclude_bgp_mon=exclude_bgp_mon,
         ),
-        postchecks=create_standard_postchecks(
-            check_bgp_convergence=False,
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
-        snapshot_checks=create_standard_snapshot_checks(
-            skip_flap_check=True,
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
+    )
+    return Playbook(
+        name="bgp_fauu_drain_undrain_playbook",
+        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
+        prechecks=drain_checks.prechecks,
+        postchecks=drain_checks.postchecks,
+        snapshot_checks=drain_checks.snapshot_checks,
         periodic_tasks=create_standard_periodic_tasks(
             device_name=device_name,
             memory_threshold=memory_threshold,
@@ -10323,24 +10320,21 @@ def create_bgp_plane_drain_undrain_playbook(
     Returns:
         Playbook configured for BGP plane drain/undrain testing
     """
-    return Playbook(
-        name="bgp_plane_drain_undrain_playbook",
-        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
-        prechecks=create_standard_prechecks(
+    drain_checks = get_profile_checks(
+        CheckProfile.DRAIN_UNDRAIN,
+        ProfileContext(
             peergroup_ibgp_v6=peergroup_ibgp_v6,
             peergroup_ibgp_v4=peergroup_ibgp_v4,
             expected_established_sessions=expected_established_sessions,
-            check_ibgp_pnh=False,
             exclude_bgp_mon=exclude_bgp_mon,
         ),
-        postchecks=create_standard_postchecks(
-            check_bgp_convergence=False,
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
-        snapshot_checks=create_standard_snapshot_checks(
-            skip_flap_check=True,
-            exclude_bgp_mon=exclude_bgp_mon,
-        ),
+    )
+    return Playbook(
+        name="bgp_plane_drain_undrain_playbook",
+        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
+        prechecks=drain_checks.prechecks,
+        postchecks=drain_checks.postchecks,
+        snapshot_checks=drain_checks.snapshot_checks,
         periodic_tasks=create_standard_periodic_tasks(
             device_name=device_name,
             memory_threshold=memory_threshold,

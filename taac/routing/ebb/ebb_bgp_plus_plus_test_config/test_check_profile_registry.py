@@ -257,3 +257,39 @@ class CheckProfileRegistryTest(unittest.TestCase):
                 exclude_bgp_mon=True,
             ),
         )
+
+    def test_drain_undrain_matches_factory(self):
+        """DRAIN_UNDRAIN reproduces the fauu/plane drain playbooks' calls
+        (iBGP-PNH off, convergence OFF, snapshot skips flap only)."""
+        ctx = ProfileContext(
+            peergroup_ibgp_v6="PG_IBGP_V6",
+            peergroup_ibgp_v4="PG_IBGP_V4",
+            expected_established_sessions=12,
+            exclude_bgp_mon=True,
+        )
+        checks = get_profile_checks(CheckProfile.DRAIN_UNDRAIN, ctx)
+
+        self.assertEqual(
+            checks.prechecks,
+            create_standard_prechecks(
+                peergroup_ibgp_v6="PG_IBGP_V6",
+                peergroup_ibgp_v4="PG_IBGP_V4",
+                expected_established_sessions=12,
+                check_ibgp_pnh=False,
+                exclude_bgp_mon=True,
+            ),
+        )
+        self.assertEqual(
+            checks.postchecks,
+            create_standard_postchecks(
+                check_bgp_convergence=False,
+                exclude_bgp_mon=True,
+            ),
+        )
+        self.assertEqual(
+            checks.snapshot_checks,
+            create_standard_snapshot_checks(
+                skip_flap_check=True,
+                exclude_bgp_mon=True,
+            ),
+        )
