@@ -119,7 +119,6 @@ from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_health_checks import 
     create_standard_snapshot_checks,
 )
 from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_periodic_tasks import (
-    create_longevity_periodic_tasks,
     create_standard_periodic_tasks,
 )
 from taac.stages.stage_definitions import (
@@ -142,6 +141,7 @@ from taac.stages.stage_definitions import (
     create_port_channel_permanent_teardown_stage,
     create_port_channel_teardown_stage,
     create_route_oscillations_stage,
+    create_longevity_churn_stage,
     create_route_registry_runtime_update_stage,
     create_steps_stage,
 )
@@ -10342,32 +10342,25 @@ def create_bgp_longevity_playbook(
     device_name: str,
     duration: int = 86400,
     community_churn_frequency: int = 60,
-    route_churn_frequency: int = 0,
-    local_pref_churn_frequency: int = 0,
-    as_path_drain_frequency: int = 0,
-    origin_churn_frequency: int = 0,
-    igp_cost_frequency: int = 0,
-    restart_peers_frequency: int = 0,
     postcheck_thresholds: t.Optional[HardwareCapacityThresholds] = None,
     exclude_bgp_mon: bool = True,
 ) -> Playbook:
     """
     Create a BGP longevity soak playbook.
 
-    This playbook runs a long-duration soak test with configurable periodic
-    BGP attribute churn tasks running in the background.
+    Runs a long-duration soak with IN-STAGE community churn (add/remove every
+    ``community_churn_frequency`` seconds, each cycle returning the RIB to
+    baseline) followed by a quiesce window, after which the SOAK_NO_PRECHECK
+    post-checks run on the quiesced device. Churn is in-stage (not background
+    ``periodic_tasks``) so it ends before the post-checks rather than racing
+    them.
 
     Args:
         device_name: Target device hostname
         duration: Soak duration in seconds (default: 86400 = 24 hours)
-        community_churn_frequency: Frequency of community churn in seconds (0 to disable)
-        route_churn_frequency: Frequency of route churn in seconds (0 to disable)
-        local_pref_churn_frequency: Frequency of local_pref churn in seconds (0 to disable)
-        as_path_drain_frequency: Frequency of AS-path drain in seconds (0 to disable)
-        origin_churn_frequency: Frequency of origin churn in seconds (0 to disable)
-        igp_cost_frequency: Frequency of IGP cost churn in seconds (0 to disable)
-        restart_peers_frequency: Frequency of peer restarts in seconds (0 to disable)
+        community_churn_frequency: Seconds between community add/remove cycles
         postcheck_thresholds: Hardware capacity thresholds for postchecks
+        exclude_bgp_mon: Exclude BGP MON peers from session / snapshot checks
 
     Returns:
         Playbook configured for BGP longevity soak testing
@@ -10386,24 +10379,10 @@ def create_bgp_longevity_playbook(
         setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
         postchecks=soak_checks.postchecks,
         snapshot_checks=soak_checks.snapshot_checks,
-        periodic_tasks=create_longevity_periodic_tasks(
-            device_name=device_name,
-            route_churn_frequency=route_churn_frequency,
-            local_pref_churn_frequency=local_pref_churn_frequency,
-            as_path_drain_frequency=as_path_drain_frequency,
-            origin_churn_frequency=origin_churn_frequency,
-            community_churn_frequency=community_churn_frequency,
-            igp_cost_frequency=igp_cost_frequency,
-            restart_peers_frequency=restart_peers_frequency,
-        ),
         stages=[
-            create_steps_stage(
-                steps=[
-                    create_longevity_step(
-                        duration=duration,
-                        description=f"Longevity soak for {duration} seconds",
-                    ),
-                ]
+            create_longevity_churn_stage(
+                test_duration_seconds=duration,
+                churn_interval_seconds=community_churn_frequency,
             )
         ],
     )
