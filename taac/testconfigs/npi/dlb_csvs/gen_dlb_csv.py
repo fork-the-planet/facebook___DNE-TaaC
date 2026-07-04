@@ -165,15 +165,27 @@ def gen_fill(
     # ECMP group, which is the intended test semantic for width-cap
     # cases like TC#221 / case_12_dlb_width_max).
     skip_dedup = width >= nh_count
+    # When `groups * width <= nh_count`, we can give each group a DISJOINT
+    # contiguous slice of the NH pool. This matches silicon's expected
+    # behavior for "N different groups × W wide" tests (e.g. CASE_13:
+    # 10 groups × 128 wide from Silver pool 3072 → each group gets a
+    # 128-NH slice with zero overlap). RNG-based subsets produced ~17%
+    # inter-group NH overlap which was suspected to trigger silicon
+    # group-dedup (Phabricator T278029631 investigation). Disjoint slices
+    # eliminate the overlap as a variable.
+    use_disjoint_slices = groups * width <= nh_count
     rows, seen = [], set()
     for g in range(groups):
-        incl = _included_set(g, min(width, nh_count), nh_count)
-        if not skip_dedup:
-            bump = 0
-            while incl in seen:
-                bump += 1
-                incl = _included_set(g + bump * nh_count, width, nh_count)
-            seen.add(incl)
+        if use_disjoint_slices:
+            incl = frozenset(range(g * width, (g + 1) * width))
+        else:
+            incl = _included_set(g, min(width, nh_count), nh_count)
+            if not skip_dedup:
+                bump = 0
+                while incl in seen:
+                    bump += 1
+                    incl = _included_set(g + bump * nh_count, width, nh_count)
+                seen.add(incl)
         for i in sorted(incl):
             rows.append((prefix(g, prefix_base), nh(i, nh_network, nh_host_start)))
     return rows

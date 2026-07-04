@@ -77,7 +77,37 @@ class DlbEcmpAsicProfile:
     dlb_max_width: int  # per-group max NHs (silicon cap)
     dlb_max_members_raw: int  # DLB member-entry table (sum of widths across DLB groups)
     ecmp_max_groups_raw: int
-    ecmp_max_members_raw: int  # device-wide ECMP member-table size
+    ecmp_max_members_raw: int
+    """Effective ECMP member-table budget for test advertisements.
+
+    NOT the raw ASIC hardware cap. Per Midhun (T278221890 2026-07-02),
+    fboss_sw_agent's ``ResourceAccountant`` runs two checks against each
+    syncFib update batch:
+
+      1. **Per-route order check** at 100% of the ASIC cap. For each
+         route in the order it appears in the batch, verify it fits into
+         100% of remaining capacity (128,000 on TH6).
+      2. **Final-state usage check** at 75% of the ASIC cap. After
+         processing the whole batch, verify total occupancy is under
+         75% of the ASIC cap (128,000 × 0.75 = 96,000 on TH6).
+
+    The 25% headroom exists because syncFib processes ADDS BEFORE
+    DELETES; if a batch says "add 30, delete 20", the transient peak is
+    current + 30 before the delete lands. Reserving 25% protects
+    against that transient overshoot; without it, an add-before-delete
+    batch that has a valid steady final state can still fail during
+    intermediate processing.
+
+    Practical consequence: test advertisements must be sized against
+    the 75% cap (96K on TH6), not the 100% cap (128K), and must include
+    Gold DLB baseline + system routes. e.g. Silver budget = 96,000 −
+    Gold(~4K) = 92,000 → ``_w_for(92000, 2689, 128)`` = 34 → Silver
+    advertisement 2689 × 34 = 91,426 members → total demand ~95,426.
+
+    Set to the SILVER-ONLY budget (raw 92,000 on TH6) rather than the
+    ASIC cap so that ``_w_for`` derivations that use this value directly
+    are conservative-safe.
+    """
     ecmp_max_width: int  # per-group max NHs (silicon cap, non-DLB)
 
     @property
@@ -90,10 +120,18 @@ class DlbEcmpAsicProfile:
 
     @property
     def ecmp_max_members_usable(self) -> int:
-        # Note: N*0.75-2 formula is empirically confirmed for GROUPS (381 of 511);
-        # whether it also applies to member-entry tables is not empirically
-        # verified. We use it here for symmetry but member-cap-stress tests
-        # should treat this as conservative (real ceiling may be higher).
+        """Legacy usable-members property; see ``ecmp_max_members_raw`` docstring.
+
+        Historically applied the N*0.75-2 formula (empirical for GROUPS) here
+        for member-entry tables too. That was pre-Midhun-clarification —
+        we now know the ASIC ResourceAccountant already enforces a 75%
+        headroom (see ``ecmp_max_members_raw`` docstring for details), so
+        ``ecmp_max_members_raw`` is already sized to the effective budget.
+        Applying N*0.75-2 on top of that would double-discount.
+
+        Kept here for backwards compatibility with any caller that references
+        the property; new callers should use ``ecmp_max_members_raw`` directly.
+        """
         return usable_from_raw(self.ecmp_max_members_raw)
 
     @property
@@ -134,6 +172,28 @@ ICEPACK_SILVER_POOL: NhPool = NhPool(
 )
 
 
+# l1002 pod DUTs use `d002::` for their rogue-port /64 (vs `c002::` on l1001).
+# Same silicon pool sizes and DLB-window classification (::a001..a080 in
+# unique-NH table = Gold ARS-eligible; ::b001+ = plain ECMP for Silver).
+# Distinct `.name` so CSVs render to a separate on-disk directory and both
+# DUT families can coexist without clobbering each other's fixtures.
+ICEPACK_L1002_GOLD_POOL: NhPool = NhPool(
+    name="gold_l1002",
+    prefix_base="5000:dd::",
+    nh_network="2401:db00:206a:d002",
+    nh_host_start=0xA001,
+    size=128,
+)
+
+ICEPACK_L1002_SILVER_POOL: NhPool = NhPool(
+    name="silver_l1002",
+    prefix_base="5000:ee::",
+    nh_network="2401:db00:206a:d002",
+    nh_host_start=0xB001,
+    size=3072,
+)
+
+
 # TH6 / Tomahawk6 / IcePack silicon profile.
 #
 # Spec sheet (confirmed by Pavan 2026-06-25):
@@ -163,6 +223,21 @@ ICEPACK_TH6_PROFILE: DlbEcmpAsicProfile = DlbEcmpAsicProfile(
     dlb_max_width=128,
     dlb_max_members_raw=4096,  # 4K DLB member entries (Pavan spec)
     ecmp_max_groups_raw=4096,
-    ecmp_max_members_raw=131072,  # 128K total ECMP member entries
+    # Effective ECMP member budget = **75% of the 128K ASIC hardware cap =
+    # 96,000**. Per Midhun (T278221890 2026-07-02): fboss_sw_agent's
+    # `ResourceAccountant` runs two checks:
+    #   (1) Per-route order: 100% cap = 128,000.
+    #   (2) Final-state usage: 75% cap = 96,000. This 25% headroom exists
+    #       because syncFib processes adds-before-deletes → transient peak
+    #       = current + adds before the deletes land. 75% protects against
+    #       that transient overshoot.
+    # We must size Silver so total demand (Silver + Gold + baseline) fits
+    # under the 75% cap (96,000), not the 100% cap.
+    #
+    # Gold DLB + baseline observed on-device (2026-07-02): ~4,000 members
+    # (381 DLB × ~10 + ~200 baseline routes). Silver budget = 96,000 −
+    # 4,000 = 92,000. `_w_for(92000, 2689, 128) = min(128, 34.2) = 34` →
+    # Silver 2689 × 34 = 91,426 + Gold 4,000 ≈ 95,426 → ~574 slack.
+    ecmp_max_members_raw=92000,
     ecmp_max_width=128,
 )

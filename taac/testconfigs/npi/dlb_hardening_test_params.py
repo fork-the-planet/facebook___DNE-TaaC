@@ -36,6 +36,7 @@ Test catalog references (Pavan spreadsheet TC# / inherited DLB_NNN ID):
     case_23_cold_start_cycle        — TC#232
 """
 
+import dataclasses
 import os
 from typing import Dict, Tuple
 
@@ -123,14 +124,21 @@ def derive_test_params(
         },
         # TC#213 / DLB_017 — group spillover at cap + 1.
         # NOTE: this case targets the GROUP cap (381 → 382), not the
-        # member cap. Width stays at silicon max to isolate group dim.
-        "case_04_dlb_spillover_plus_one": {gold_pool: (g_dlb + 1, w_dlb_cap)},
+        # member cap. Width is **deliberately minimal (2)** so 382 × 2 =
+        # 764 members fits comfortably under the 4K DLB member cap and
+        # the test isolates the GROUP-cap behaviour. Width=128 (silicon
+        # cap) confounds the test because 382 × 128 = 48896 members ≈
+        # 12× the DLB member cap, which is also impossible — empirically
+        # only 1 group installed in Run 1 + Run 2 (2026-06-29 pilots).
+        # Width=1 would degrade groups to single-NH (excluded from the
+        # ECMP matrix), so 2 is the minimum "real" multipath width.
+        "case_04_dlb_spillover_plus_one": {gold_pool: (g_dlb + 1, 2)},
         # TC#214 / DLB_001 — 100% ECMP groups (DLB + non-DLB), 50% member util.
         # Gold: 381 × ~5 = ~2K (50% DLB members)
         # Silver: 2689 × ~24 = ~64K (50% ECMP members)
         "case_05_ecmp_full_50pct_mixed": {
             gold_pool: (g_dlb, w_dlb_50pct_mem),
-            silver_pool: (g_silver, w_ecmp_50pct_mem),
+            dataclasses.replace(silver_pool, size=128): (g_silver, w_ecmp_50pct_mem),
         },
         # TC#215 — 100% DLB member utilization.
         # 381 × ~10 = ~4K DLB members (= 100% of 4K cap).
@@ -140,37 +148,81 @@ def derive_test_params(
         # TC#217 — 100% non-DLB ECMP member utilization.
         # 2689 × ~48 = ~129K members ≈ 100% of 128K ECMP member cap.
         "case_08_ecmp_members_100pct": {
-            silver_pool: (g_silver, w_ecmp_100pct_mem),
+            dataclasses.replace(silver_pool, size=128): (
+                g_silver,
+                w_ecmp_100pct_mem,
+            ),
         },
-        # TC#218 — coldboot at 100% non-DLB ECMP (same shape as case_08).
-        "case_09_ecmp_coldboot": {silver_pool: (g_silver, w_ecmp_100pct_mem)},
+        # TC#218 — coldboot at 100% non-DLB ECMP. Silver pool constrained to
+        # 128 NHs to match the silicon Virtual ARS Supergroup unique-member
+        # limit (empirically observed via Midhun 2026-07-01 log evidence in
+        # T278073224: `ResourceAccountant.cpp:252 Virtual ARS supergroup
+        # unique member limit would be exceeded. Projected: 129 limit: 128`).
+        # T278029631 documents silicon collapsing prefixes with overlapping
+        # NH sets into a single virtual supergroup; that supergroup's union
+        # of NHs across 2689 CASE_09 prefixes approaches the full pool. If
+        # pool=130 → union=129-130 → over the 128 supergroup cap → syncFib
+        # batch atomically rejected. Pool=128 keeps every RNG-picked 48-of-
+        # 128 subset inside the silicon-supported supergroup boundary.
+        "case_09_ecmp_coldboot": {
+            dataclasses.replace(silver_pool, size=128): (
+                g_silver,
+                w_ecmp_100pct_mem,
+            ),
+        },
         # TC#219 — overcommit ECMP groups beyond cap (graceful reject expected).
-        # 10% past g_ecmp usable (3070 → 3377). Width at 50% mem to keep
-        # member count modest while group dimension is the overcommit.
+        # 10% past g_ecmp usable (3070 → 3377). Width MINIMUM-VIABLE = 2
+        # (min for real multi-NH group). GROUP dimension IS the overcommit;
+        # widening past 2 only inflates advertisement time without adding
+        # signal — 3377 × 2 = 6754 vs 3377 × 24 = 81048 (12× advertisement
+        # cost). Spec preserved: still exercises 10% group overcommit.
         "case_10_ecmp_group_overcommit": {
-            silver_pool: (int(g_ecmp * 1.10), w_ecmp_50pct_mem),
+            dataclasses.replace(silver_pool, size=128): (int(g_ecmp * 1.10), 2),
         },
         # TC#220 — overcommit ECMP MEMBER cap beyond 128K (graceful reject expected).
         # 25% past 128K cap = 160K target; 2689 × ~60 width ≈ 161K members.
         "case_11_ecmp_member_overcommit": {
-            silver_pool: (
+            dataclasses.replace(silver_pool, size=128): (
                 g_silver,
                 _w_for(int(m_ecmp * 1.25), g_silver, w_ecmp_cap * 2),
             ),
         },
-        # TC#221 — 10 DLB groups × max width (validates per-group DLB width cap = 128).
-        "case_12_dlb_width_max": {gold_pool: (10, w_dlb_cap)},
-        # TC#222 / DLB_009 — 10 non-DLB ECMP groups × max width.
-        "case_13_ecmp_width_max": {silver_pool: (10, w_ecmp_cap)},
-        # TC#223 / DLB_013 — width tip-over: 200 NHs > 128 cap, expect graceful reject.
-        "case_14_ecmp_width_tipover": {silver_pool: (10, 200)},
-        # TC#224 — rollback ECMP→DLB. Playbook starts mixed (case_05 shape),
-        # then SilverPoolToggleStep disables Silver. Loss-during-transition
-        # post-check verifies traffic continuity. Using 100%-util shape so
-        # the rollback exercises a meaningful transition.
+        # TC#221 — DLB max-width validation. Spec asks for 10 groups × 128
+        # wide, but that requires 10 × 128 = 1280 unique NHs while silicon's
+        # DLB unique-NH table is capped at 128 per chip on TH6. Test PARKED
+        # as (1, 128): a single DLB group programmed at silicon's per-group
+        # width cap (128 post-T277302860 fix). Physically-realizable
+        # equivalent that still exercises the width-cap boundary.
+        # Phabricator T278029631 tracks the spec ambiguity.
+        "case_12_dlb_width_max": {gold_pool: (1, w_dlb_cap)},
+        # TC#222 / DLB_009 — max ECMP width. Silicon supergroup unique-NH
+        # cap = 128, so a single group at width=128 (using every NH in the
+        # 128-NH pool) is the truest realization of "max ECMP width".
+        # Proves silicon accepts an ECMP group at ecmp_max_width without
+        # colliding with the supergroup cap.
+        "case_13_ecmp_width_max": {
+            dataclasses.replace(silver_pool, size=128): (1, w_ecmp_cap),
+        },
+        # TC#223 / DLB_013 — width tip-over: spec says silicon must
+        # "gracefully reject more than 64 members per non-DLB ECMP group"
+        # (TH6 silicon cap is actually 128 unique NHs per supergroup).
+        # Advertise a single group of width 130 (pool sized to match) →
+        # silicon supergroup unique-NH check fires (130 > 128) → syncFib
+        # rejects the batch cleanly. HC asserts 0 groups installed +
+        # agent stability post-reject.
+        "case_14_ecmp_width_tipover": {
+            dataclasses.replace(silver_pool, size=130): (1, 130),
+        },
+        # TC#224 — rollback ECMP→DLB. Playbook starts mixed, then
+        # SilverPoolToggleStep disables Silver. Loss-during-transition
+        # post-check verifies traffic continuity. Spec = "rollback
+        # mechanism works" — needs Silver PRESENT to toggle, not at scale.
+        # MINIMUM-VIABLE: 128 × 2 = 256 Silver advertisements is enough to
+        # prove rollback removes them cleanly. Gold stays at 100% to keep
+        # the DLB side realistic post-rollback.
         "case_15_rollback_ecmp_to_dlb": {
             gold_pool: (g_dlb, w_dlb_100pct_mem),
-            silver_pool: (g_silver, w_ecmp_50pct_mem),
+            dataclasses.replace(silver_pool, size=128): (128, 2),
         },
         # TC#225/226 — background-disruption wrappers, no own CSV
         # (playbook orchestrates re-mutate per inner case during the
@@ -180,17 +232,17 @@ def derive_test_params(
         # TC#227 — DLB+ECMP flap longevity at 100% util on both sides.
         "case_18_dlb_ecmp_flap_longevity": {
             gold_pool: (g_dlb, w_dlb_100pct_mem),
-            silver_pool: (g_silver, w_ecmp_100pct_mem),
+            dataclasses.replace(silver_pool, size=128): (g_silver, w_ecmp_100pct_mem),
         },
         # TC#228 — continuous DLB-only ↔ DLB+ECMP switching at 100% util.
         "case_19_switch_dlb_ecmp": {
             gold_pool: (g_dlb, w_dlb_100pct_mem),
-            silver_pool: (g_silver, w_ecmp_100pct_mem),
+            dataclasses.replace(silver_pool, size=128): (g_silver, w_ecmp_100pct_mem),
         },
         # TC#229 — flap + continuous warmboot at 100% util on both sides.
         "case_20_flap_warmboot_longevity": {
             gold_pool: (g_dlb, w_dlb_100pct_mem),
-            silver_pool: (g_silver, w_ecmp_100pct_mem),
+            dataclasses.replace(silver_pool, size=128): (g_silver, w_ecmp_100pct_mem),
         },
         # TC#230 — NDP entry flap (50%-util baseline; playbook flaps NDP DG).
         "case_21_ndp_flap": {gold_pool: (g_dlb, w_dlb_50pct_mem)},

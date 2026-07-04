@@ -24593,3 +24593,42 @@ def create_dlb_topology_smoke_playbook(
             ),
         ],
     )
+
+
+def create_dlb_hardening_playbook(
+    name: str,
+    setup_steps,
+    traffic_steps,
+    stickiness_json_params,
+    extra_postchecks=None,
+) -> Playbook:
+    """Factory for one IcePack DLB-hardening test playbook.
+
+    Used by `testconfigs/npi/dlb_hardening_test_config.py` to assemble
+    the 23 per-case playbooks (CASE_01 … CASE_23). Splits steps into a
+    setup stage (CSV-driven IXIA mutations + Silver toggle) and a
+    traffic stage (start → longevity → stop). Postcheck is the
+    `DlbResourceStickinessHealthCheck` with per-case `expected_counts`
+    derived by the testconfig's `_stickiness_expectations` helper, plus
+    any `extra_postchecks` the caller threads in (longevity playbooks
+    add CPU + MEM utilization checks here so background-disruption
+    cases catch slow leaks / runaway CPU over hours-long windows).
+
+    Kept generic to keep this factory free of the testbed-specific
+    helpers (CSV-path map, pool name lookup, expectations derivation)
+    that live in the testconfig.
+    """
+    stages = []
+    if setup_steps:
+        stages.append(create_steps_stage(stage_id=f"{name}_setup", steps=setup_steps))
+    stages.append(create_steps_stage(stage_id=f"{name}_run", steps=traffic_steps))
+    postchecks = [
+        create_dlb_resource_stickiness_check(json_params=stickiness_json_params),
+    ]
+    if extra_postchecks:
+        postchecks.extend(extra_postchecks)
+    return Playbook(
+        name=name,
+        stages=stages,
+        postchecks=postchecks,
+    )

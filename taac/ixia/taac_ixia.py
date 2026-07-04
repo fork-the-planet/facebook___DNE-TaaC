@@ -662,25 +662,28 @@ class TaacIxia(Ixia, Thread):
                     return dg, ng, pool, rp
         raise RuntimeError(f"No NetworkGroup named {pool_name!r} found")
 
-    def mutate_dlb_pool_from_csv(  # noqa: C901
-        self, csv_path: str, pool_name: str = "DLB_GOLD_PREFIX_POOL"
-    ) -> None:
-        """Mutate the named DLB prefix pool to advertise the (prefix, NH)
-        rows from the 2-column CSV at ``csv_path``.
+    def _mutate_pool_config_only(
+        self, csv_path: str, pool_name: str
+    ) -> t.Tuple[t.Any, t.Any, int, int, int]:
+        """Pure IxNetwork config mutation — NO protocol restart, NO traffic touch.
 
-        CSV format: header line, then ``Address,Ipv6 Next Hop`` rows.
-        Idempotent — safe to re-invoke per playbook with a different
-        CSV; previous advertisements are replaced by the new geometry.
+        Applies CSV -> (NG.Multiplier, NetworkAddress ValueList, Ipv6NextHop
+        ValueList, AddPath enable, MvNextHopCount, AddPathId ValueList,
+        route_prop.Active=True) after dg.Stop()+ng.Stop(). Callers MUST later
+        run ng.Start()+dg.Start() and typically StartAllProtocols(sync) via
+        ``apply_pool_mutations``.
+
+        Returns (dg, ng, total_rows, distinct_prefixes, width).
         """
         import csv as _csv
         import os as _os
+        import time as _time
 
-        # Parse CSV: collect prefixes (with repetition) + NHs in order.
         prefixes_in_order: t.List[str] = []
         nhs_in_order: t.List[str] = []
         with open(csv_path) as f:
             reader = _csv.reader(f)
-            next(reader, None)  # skip header
+            next(reader, None)
             for row in reader:
                 if len(row) < 2:
                     continue
@@ -692,12 +695,10 @@ class TaacIxia(Ixia, Thread):
         distinct_prefixes = len(dict.fromkeys(prefixes_in_order))
         w = total_rows // distinct_prefixes if distinct_prefixes else 0
         self.logger.info(
-            f"[mutate_dlb_pool_from_csv] {csv_path}: rows={total_rows} "
+            f"[_mutate_pool_config_only] {csv_path}: rows={total_rows} "
             f"distinct_prefixes={distinct_prefixes} width={w}"
         )
 
-        # Write per-column files for the IxNetwork ValueList API (it
-        # reads from single-column files, not nested data).
         scratch_dir = "/tmp/taac_dlb_inject"
         _os.makedirs(scratch_dir, exist_ok=True)
         prefix_col = _os.path.join(scratch_dir, f"_pfx_{pool_name}.csv")
@@ -707,25 +708,39 @@ class TaacIxia(Ixia, Thread):
         with open(nh_col, "w") as f:
             f.write("\n".join(nhs_in_order) + "\n")
 
-        # Locate target nodes in the IxNetwork tree.
         dg, ng, pool, route_prop = self._find_dlb_ng_dg(pool_name)
-        self.logger.info(
-            f"[mutate_dlb_pool_from_csv] target dg={dg.Name} ng={ng.Name} "
-            f"pool={pool.Name}"
-        )
+        self.logger.info(f"[_mutate_pool_config_only] target dg={dg.Name} ng={ng.Name}")
 
-        # dg.Stop + ng.Stop both required before NG.Multiplier mutation.
-        try:
-            dg.Stop()
-        except Exception as e:
-            self.logger.warning(f"dg.Stop() failed (continuing): {e}")
-        try:
-            ng.Stop()
-        except Exception as e:
-            self.logger.warning(f"ng.Stop() failed (continuing): {e}")
-
-        # FLAT (Pavan) geometry: NG.Mult=N*W, NumberOfAddresses=1.
-        ng.Multiplier = total_rows
+        MAX_STOP_RETRY = 4
+        for attempt in range(MAX_STOP_RETRY):
+            try:
+                dg.Stop()
+            except Exception as e:
+                self.logger.warning(
+                    f"dg.Stop() attempt {attempt + 1} failed (continuing): {e}"
+                )
+            try:
+                ng.Stop()
+            except Exception as e:
+                self.logger.warning(
+                    f"ng.Stop() attempt {attempt + 1} failed (continuing): {e}"
+                )
+            try:
+                ng.Multiplier = total_rows
+                break
+            except Exception as e:
+                msg = str(e)
+                if (
+                    "Changing the Multiplier in a started" in msg
+                    and attempt + 1 < MAX_STOP_RETRY
+                ):
+                    self.logger.warning(
+                        f"NG.Multiplier write rejected (NG still started); "
+                        f"retry {attempt + 1}/{MAX_STOP_RETRY} after 3s"
+                    )
+                    _time.sleep(3)
+                    continue
+                raise
         pool.NumberOfAddresses = 1
         pool.PrefixLength.Single(64)
         pool.NetworkAddress.ValueList(prefix_col)
@@ -733,8 +748,10 @@ class TaacIxia(Ixia, Thread):
         route_prop.EnableAddPath.Single(True)
         route_prop.MvNextHopCount.Single(w)
         route_prop.AddPathId.ValueList([str(i + 1) for i in range(total_rows)])
-        # Defensive: clear any stale flap regime (UI experimentation can
-        # leave EnableFlapping=True, causing shrinking PR over time).
+        try:
+            route_prop.Active.Single(True)
+        except Exception as e:
+            self.logger.warning(f"route_prop.Active.Single(True) failed: {e}")
         for attr_name in ("EnableFlap", "EnableFlapping", "RouteFlap"):
             attr = getattr(route_prop, attr_name, None)
             if attr is None:
@@ -744,24 +761,140 @@ class TaacIxia(Ixia, Thread):
                 break
             except Exception:
                 pass
+        return dg, ng, total_rows, distinct_prefixes, w
 
-        # Restart inner-to-outer to commit + reform the BGP session.
+    def apply_pool_mutations(self, pool_csvs: t.List[t.Tuple[str, str]]) -> None:
+        """Batch mutation: apply N pool CSV changes with ONE traffic
+        stop/regen/apply cycle at the end.
+
+        ``pool_csvs`` is a list of ``(csv_path, pool_name)`` tuples. For each
+        entry we do the pure-config mutation via ``_mutate_pool_config_only``
+        (dg.Stop / ng.Stop / write config), then at the end we do ONE:
+        Traffic.Stop -> per-pool ng.Start + dg.Start -> StartAllProtocols(sync)
+        -> convergence settle scaled by total rows -> Traffic.Regenerate +
+        Traffic.Apply (with retry backoff).
+
+        This replaces the per-pool ``mutate_dlb_pool_from_csv`` pattern that
+        did the entire cycle N times and caused Traffic Item corruption
+        (Run 20 CASE_05: double-StartAllProtocols left traffic in kUnapplied
+        state permanently; Run 20b: setup-time Traffic-Started state broke
+        Regenerate). One clean cycle avoids both classes.
+        """
+        import time as _time
+
+        if not pool_csvs:
+            self.logger.warning("apply_pool_mutations called with empty list")
+            return
+
         try:
-            ng.Start()
+            self.ixnetwork.Traffic.Stop()
+            _time.sleep(2)
         except Exception as e:
-            self.logger.warning(f"ng.Start() failed (continuing): {e}")
-        try:
-            dg.Start()
-        except Exception as e:
-            self.logger.warning(f"dg.Start() failed (continuing): {e}")
+            self.logger.warning(f"Traffic.Stop() at batch start failed: {e}")
+
+        mutated: t.List[t.Tuple[t.Any, t.Any, int, str]] = []
+        total_rows_sum = 0
+        for csv_path, pool_name in pool_csvs:
+            dg, ng, total_rows, _, _ = self._mutate_pool_config_only(
+                csv_path, pool_name
+            )
+            mutated.append((dg, ng, total_rows, pool_name))
+            total_rows_sum += total_rows
+
+        for dg, ng, _, pool_name in mutated:
+            try:
+                ng.Start()
+            except Exception as e:
+                self.logger.warning(f"ng.Start() {pool_name} failed (continuing): {e}")
+            try:
+                dg.Start()
+            except Exception as e:
+                self.logger.warning(f"dg.Start() {pool_name} failed (continuing): {e}")
+
         try:
             self.ixnetwork.StartAllProtocols(Arg1="sync")
         except Exception as e:
             self.logger.warning(f"StartAllProtocols failed (continuing): {e}")
+
+        settle_s = max(30, total_rows_sum // 250)
         self.logger.info(
-            f"[mutate_dlb_pool_from_csv] {pool_name} committed: "
-            f"NG.Multiplier={ng.Multiplier} pool.NumberOfAddresses={pool.NumberOfAddresses}"
+            f"[apply_pool_mutations] settling {settle_s}s "
+            f"(~{total_rows_sum} total advertised rows across {len(mutated)} pool(s))"
         )
+        _time.sleep(settle_s)
+
+        try:
+            for ti in self.ixnetwork.Traffic.TrafficItem.find():
+                try:
+                    ti.Generate()
+                except Exception as e:
+                    self.logger.warning(
+                        f"TrafficItem.Generate() failed (continuing): {e}"
+                    )
+            for attempt in range(5):
+                try:
+                    self.ixnetwork.Traffic.Apply()
+                    self.logger.info(
+                        f"[apply_pool_mutations] Traffic.Apply() OK on "
+                        f"attempt {attempt + 1}"
+                    )
+                    break
+                except Exception as e:
+                    if attempt == 4:
+                        self.logger.warning(
+                            f"Traffic.Apply() failed after 5 retries "
+                            f"(continuing anyway; start_traffic will retry): {e}"
+                        )
+                    else:
+                        _time.sleep(15)
+        except Exception as e:
+            self.logger.warning(f"Traffic re-apply block failed (continuing): {e}")
+
+        for _, ng, _, pool_name in mutated:
+            self.logger.info(
+                f"[apply_pool_mutations] {pool_name} committed: "
+                f"NG.Multiplier={ng.Multiplier}"
+            )
+
+    def mutate_dlb_pool_from_csv(
+        self, csv_path: str, pool_name: str = "DLB_GOLD_PREFIX_POOL"
+    ) -> None:
+        """Single-pool convenience wrapper around ``apply_pool_mutations``.
+
+        Kept for backward compatibility with standalone injection scripts
+        (``ixia_csv_inject.py``, ``ixia_nh_inject.py``). Testconfigs mutating
+        multiple pools should call ``apply_pool_mutations`` directly to avoid
+        the double-cycle traffic-item corruption class.
+        """
+        self.apply_pool_mutations([(csv_path, pool_name)])
+
+    def stop_all_protocols(self) -> None:
+        """Stop all emulated protocols on the IXIA chassis.
+
+        Used by ``case_23_cold_start_cycle`` to disconnect IXIA-side BGP
+        sessions cleanly (mirrors the ``StartAllProtocols`` call already
+        made at the end of ``mutate_dlb_pool_from_csv``). DUT will see all
+        peers go IDLE and withdraw routes; a later ``start_all_protocols``
+        re-establishes everything.
+        """
+        try:
+            self.ixnetwork.StopAllProtocols(Arg1="sync")
+            self.logger.info("[stop_all_protocols] StopAllProtocols OK")
+        except Exception as e:
+            self.logger.warning(f"StopAllProtocols failed (continuing): {e}")
+
+    def start_all_protocols(self) -> None:
+        """Start all emulated protocols on the IXIA chassis.
+
+        Pair to ``stop_all_protocols`` for the cold-start cycle.
+        Idempotent for protocols already started; used standalone after
+        a ``stop_all_protocols`` to re-establish BGP sessions.
+        """
+        try:
+            self.ixnetwork.StartAllProtocols(Arg1="sync")
+            self.logger.info("[start_all_protocols] StartAllProtocols OK")
+        except Exception as e:
+            self.logger.warning(f"StartAllProtocols failed (continuing): {e}")
 
     def toggle_dlb_pool_enabled(self, pool_name: str, enabled: bool) -> None:
         """Toggle the parent DeviceGroup's start/stop state for the

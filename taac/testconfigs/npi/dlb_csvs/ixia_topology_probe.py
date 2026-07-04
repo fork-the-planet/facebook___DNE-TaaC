@@ -74,9 +74,40 @@ def main() -> None:
     for topo in ixn.Topology.find():
         print(f"\n=== Topology: {topo.Name} ===")
         for dg in topo.DeviceGroup.find():
+            # Runtime status fields (vs. config-only Enabled).
+            status = getattr(dg, "Status", "?")
             print(
-                f"  Device group: {dg.Name}  Multiplier={dg.Multiplier}  Enabled={dg.Enabled}"
+                f"  Device group: {dg.Name}  Multiplier={dg.Multiplier}"
+                f"  Enabled={dg.Enabled}  Status={status}"
             )
+            # Probe Ethernet/IPv6/BGPv6 runtime state per DG (root cause
+            # hunt for Silver-not-landing 2026-06-29 — DG marked Enabled
+            # but Silver's L2/L3/BGP never come up).
+            for eth in dg.Ethernet.find():
+                eth_macs = _values_of(eth.Mac)
+                eth_status = getattr(eth, "Status", "?")
+                print(
+                    f"    Ethernet: Name={eth.Name}  Mac={eth_macs[:1]}  Status={eth_status}"
+                )
+                for ip6 in eth.Ipv6.find():
+                    ip6_addrs = _values_of(ip6.Address)
+                    ip6_status = getattr(ip6, "Status", "?")
+                    ip6_gw = _values_of(ip6.GatewayIp)
+                    print(
+                        f"      IPv6: Name={ip6.Name}  Addr={ip6_addrs[:1]}"
+                        f"  Gateway={ip6_gw[:1]}  Status={ip6_status}"
+                    )
+                    for bgp in ip6.BgpIpv6Peer.find():
+                        try:
+                            ss = bgp.SessionStatus
+                        except Exception as e:
+                            ss = f"<err: {e}>"
+                        bgp_dut = _values_of(bgp.DutIp)
+                        bgp_status = getattr(bgp, "Status", "?")
+                        print(
+                            f"        BGPv6Peer: Name={bgp.Name}  PeerAddr={bgp_dut[:1]}"
+                            f"  Status={bgp_status}  SessionStatus={ss}"
+                        )
             for ng in dg.NetworkGroup.find():
                 print(
                     f"    Network group: {ng.Name}  Multiplier={ng.Multiplier}  Enabled={ng.Enabled}"

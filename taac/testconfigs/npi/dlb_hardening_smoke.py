@@ -94,11 +94,12 @@ def main() -> None:
         params["case_02_dlb_fill_50pct"][ICEPACK_GOLD_POOL],
         (381, 5),
     )
-    # case_04: spillover at 382 groups × 128 width (group-cap test, width = silicon cap).
+    # case_04: spillover at 382 groups × 2 width (group-cap test; minimal
+    # width to isolate GROUP dim from the 4K DLB member cap).
     assert_eq(
         "case_04 gold",
         params["case_04_dlb_spillover_plus_one"][ICEPACK_GOLD_POOL],
-        (382, 128),
+        (382, 2),
     )
     # case_05: gold (381, 5) DLB 50% members + silver (2689, 24) ECMP 50% members.
     assert_eq(
@@ -219,6 +220,101 @@ def main() -> None:
     print(
         f"  [OK] CASE_02 has {len(case_02.stages)} stages + {len(case_02.postchecks)} postchecks"
     )
+
+    print("\n=== Per-case trigger-step dispatch ===")
+    from taac.testconfigs.npi.dlb_hardening_test_config import (
+        _per_case_trigger_steps,
+    )
+
+    # Cases that ARE just steady-state validations get no extra trigger.
+    fake_device = "gtsw001.l1001.c085.ash6"
+    for tid in (
+        "case_01_baseline",
+        "case_02_dlb_fill_50pct",
+        "case_03_dlb_member_overcommit",
+        "case_06_dlb_member_100pct",
+        "case_22_ar_bit_negative",
+    ):
+        steps = _per_case_trigger_steps(tid, 120, fake_device)
+        assert_eq(f"{tid} trigger step count (no trigger expected)", len(steps), 0)
+
+    # CASE_07 + CASE_09 — coldboot: 6 steps. Pre-reboot settle + SYSTEM_REBOOT_STEP
+    # + 2 × coop_apply_patchers (agent + bgpcpp) + drain/undrain + post-reboot settle.
+    # Recovery sequence mandatory — Run 3 (2026-06-29) proved without it the DUT
+    # stays DRAINED and STSW peers consume DLB pool.
+    for tid in ("case_07_dlb_coldboot", "case_09_ecmp_coldboot"):
+        steps = _per_case_trigger_steps(tid, 120, fake_device)
+        assert_eq(f"{tid} trigger step count", len(steps), 6)
+        descs = [s.description or "" for s in steps]
+        assert "pre-reboot settle" in descs[0], f"{tid} step 0: {descs[0]}"
+        assert "cold reboot trigger" in descs[1], f"{tid} step 1: {descs[1]}"
+        assert "agent patchers" in descs[2], f"{tid} step 2: {descs[2]}"
+        assert "bgpcpp patchers" in descs[3], f"{tid} step 3: {descs[3]}"
+        assert "undrain" in descs[4], f"{tid} step 4: {descs[4]}"
+        assert "post-reboot settle" in descs[5], f"{tid} step 5: {descs[5]}"
+        # Step type assertions:
+        assert "SYSTEM_REBOOT" in str(steps[1].name), (
+            f"{tid} step 1 expected SYSTEM_REBOOT_STEP, got {steps[1].name}"
+        )
+        assert "DRAIN_UNDRAIN" in str(steps[4].name), (
+            f"{tid} step 4 expected DRAIN_UNDRAIN_STEP, got {steps[4].name}"
+        )
+        for idx in (2, 3):
+            assert "RUN_TASK" in str(steps[idx].name), (
+                f"{tid} step {idx} expected RUN_TASK_STEP, got {steps[idx].name}"
+            )
+        print(
+            f"  [OK] {tid}: pre-settle + REBOOT + agent-patcher + bgpcpp-patcher + undrain + post-settle"
+        )
+
+    # CASE_15 — rollback: 2 steps (pre-longevity + Silver toggle off).
+    steps = _per_case_trigger_steps("case_15_rollback_ecmp_to_dlb", 120, fake_device)
+    assert_eq("case_15 trigger step count", len(steps), 2)
+    import json as _json
+
+    sp15 = steps[1].step_params
+    assert sp15 is not None and sp15.json_params is not None, sp15
+    silver_off_params = _json.loads(sp15.json_params)
+    assert silver_off_params["api_name"] == "toggle_dlb_pool_enabled"
+    args = _json.loads(silver_off_params["args_json"])
+    assert args == {"pool_name": "DLB_SILVER_PREFIX_POOL", "enabled": False}, args
+    print("  [OK] case_15: pre-rollback + toggle_dlb_pool_enabled(Silver=False)")
+
+    # CASE_21 — NDP flap: 4 steps (settle + NDP-off + hold + NDP-on).
+    steps = _per_case_trigger_steps("case_21_ndp_flap", 120, fake_device)
+    assert_eq("case_21 trigger step count", len(steps), 4)
+    sp21_off = steps[1].step_params
+    sp21_on = steps[3].step_params
+    assert sp21_off is not None and sp21_off.json_params is not None
+    assert sp21_on is not None and sp21_on.json_params is not None
+    ndp_off_params = _json.loads(sp21_off.json_params)
+    ndp_on_params = _json.loads(sp21_on.json_params)
+    assert ndp_off_params["api_name"] == "toggle_device_groups"
+    assert ndp_on_params["api_name"] == "toggle_device_groups"
+    off_args = _json.loads(ndp_off_params["args_json"])
+    on_args = _json.loads(ndp_on_params["args_json"])
+    assert off_args == {
+        "enable": False,
+        "device_group_name_regex": "NDP_SUPPORTING_NEXTHOP",
+    }, off_args
+    assert on_args == {
+        "enable": True,
+        "device_group_name_regex": "NDP_SUPPORTING_NEXTHOP",
+    }, on_args
+    print("  [OK] case_21: settle + NDP-off + hold + NDP-on")
+
+    # CASE_23 — cold-start cycle: 4 steps (settle + StopAll + hold + StartAll).
+    steps = _per_case_trigger_steps("case_23_cold_start_cycle", 120, fake_device)
+    assert_eq("case_23 trigger step count", len(steps), 4)
+    sp23_stop = steps[1].step_params
+    sp23_start = steps[3].step_params
+    assert sp23_stop is not None and sp23_stop.json_params is not None
+    assert sp23_start is not None and sp23_start.json_params is not None
+    stop_params = _json.loads(sp23_stop.json_params)
+    start_params = _json.loads(sp23_start.json_params)
+    assert stop_params["api_name"] == "stop_all_protocols", stop_params
+    assert start_params["api_name"] == "start_all_protocols", start_params
+    print("  [OK] case_23: settle + stop_all_protocols + hold + start_all_protocols")
 
     print("\n=== SMOKE PASS ===")
 

@@ -398,20 +398,48 @@ def _format_summary_insights(
 
 
 def _format_snapshot_comparison(
-    snapshot_count: int, matrix_total: int
+    snapshot_count: int, matrix_dlb_prefix_total: int
 ) -> t.Tuple[str, bool]:
     """Render the ECMP Groups Snapshot Comparison block.
 
-    Returns ``(rendered_block, match)``. Matches the section in Pavan's
-    binary — cross-validates an independent FBOSS `async_get_ecmp_groups_snapshot`
-    fetch against the route-table-derived matrix total.
+    Returns ``(rendered_block, match)``. Cross-validates the silicon
+    ``async_get_ecmp_groups_snapshot()`` count against the route-table-derived
+    Gold-prefix-category multi-NH total.
+
+    V12 polish 2026-06-30 (post Run 14 evidence): the silicon snapshot
+    API returns all ARS-managed groups — Default(DLB) mode AND
+    ARS-PPR-spillover mode — as long as their NHs are in the per-chip
+    DLB unique-NH pool. It does NOT see non-DLB ECMP groups (whose NHs
+    fall outside the DLB pool by design — e.g. Silver at c002::b001+
+    in our IcePack setup).
+
+    Therefore the correct route-table-side counterpart is:
+        matrix["<gold-prefix-category>"].total
+    i.e. the total multi-NH groups whose prefixes fall in the
+    DLB-eligible prefix range (Gold's ``5000:dd::`` in our setup).
+    This regardless of mode — because silicon counts Gold-DLB AND
+    Gold-PPR-spillover both.
+
+    Two previously-attempted comparisons that FAILED:
+    - V11 compared vs `total_dlb` (sum of `dlb_count` across all
+      categories). This EXCLUDED CASE_04's 1 ARS-PPR spillover prefix
+      (classified PPR by mode, but still in silicon's ARS registry) →
+      false-FAIL on CASE_04.
+    - Pre-V11 compared vs `ecmp_groups` (all multi-NH). This INCLUDED
+      Silver's non-DLB PPR groups (which silicon can't see) →
+      false-FAIL on CASE_05/08/10/11/23.
+
+    V12 uses the prefix-boundary split: silicon's ARS budget applies to
+    prefixes in the DLB pool = Gold's ``5000:dd::`` range. Anything in
+    that range regardless of mode is in silicon's registry; anything
+    outside (Silver's ``5000:ee::``) is not.
     """
-    diff = snapshot_count - matrix_total
-    match = snapshot_count == matrix_total
+    diff = snapshot_count - matrix_dlb_prefix_total
+    match = snapshot_count == matrix_dlb_prefix_total
     marker = "MATCH" if match else "MISMATCH"
     lines = [
         "=== ECMP Groups Snapshot Comparison ===",
-        f"Snapshot: {snapshot_count}  Matrix total: {matrix_total}  Difference: {diff}   {marker}",
+        f"Snapshot: {snapshot_count}  Matrix DLB-prefix total: {matrix_dlb_prefix_total}  Difference: {diff}   {marker}",
     ]
     return "\n".join(lines), match
 
@@ -423,6 +451,7 @@ def analyze(
     expected_counts: t.Optional[t.Dict[str, t.Dict[str, int]]] = None,
     expected_totals: t.Optional[t.Dict[str, int]] = None,
     snapshot_count: t.Optional[int] = None,
+    dlb_managed_prefix_pattern: str = "5000:dd::",
 ) -> DlbAnalysisResult:
     """Run the full DLB resource analysis + validation.
 
@@ -465,11 +494,23 @@ def analyze(
         single_hop_groups,
     )
 
+    # V12 polish (Run 14 CASE_04 evidence): compare snapshot vs the
+    # multi-NH group count IN THE DLB-MANAGED PREFIX CATEGORY (Gold's
+    # ``5000:dd::``). Silicon's ARS registry sees ALL Gold groups
+    # regardless of mode (DLB / ARS-PPR-spillover) because their NHs
+    # are in the DLB pool. It does NOT see Silver (NHs outside DLB
+    # pool). Route-table matrix already breaks down by prefix, so the
+    # correct counterpart is exactly ``matrix[gold_category].total`` —
+    # all Gold multi-NH groups summed across all modes. See
+    # ``_format_snapshot_comparison`` docstring for the failed-attempt
+    # history (V11 used total_dlb which missed ARS-PPR spillover).
+    dlb_managed_category = f"{dlb_managed_prefix_pattern.rstrip(':')} prefixes"
+    dlb_managed_prefix_total = matrix.get(dlb_managed_category, CategoryStats()).total
     snapshot_block = ""
     snapshot_match: t.Optional[bool] = None
     if snapshot_count is not None:
         snapshot_block, snapshot_match = _format_snapshot_comparison(
-            snapshot_count, ecmp_groups
+            snapshot_count, dlb_managed_prefix_total
         )
 
     header = (
@@ -510,11 +551,18 @@ def analyze(
         return _make_result(False, totals_result["message"])
 
     # Snapshot-mismatch is a soft fail surfaced in the result body.
+    # V12: compare against `dlb_managed_prefix_total` (matrix
+    # Gold-prefix-category multi-NH total). Silicon snapshot sees ALL
+    # groups in the DLB-managed prefix range regardless of mode. Fixed
+    # both Run 13 false-FAILs (05/08/10/11/23 — Silver present) and
+    # Run 14 false-FAIL (CASE_04 spillover — 1 ARS-PPR group under
+    # `total_dlb`).
     if snapshot_count is not None and snapshot_match is False:
         return _make_result(
             False,
             f"Snapshot mismatch: ECMP-snapshot={snapshot_count} vs "
-            f"matrix-total={ecmp_groups} (diff={snapshot_count - ecmp_groups})",
+            f"matrix-{dlb_managed_category}-total={dlb_managed_prefix_total} "
+            f"(diff={snapshot_count - dlb_managed_prefix_total})",
         )
 
     return _make_result(True, "DLB Resource Analysis:")
