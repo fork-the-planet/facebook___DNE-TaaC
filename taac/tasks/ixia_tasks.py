@@ -309,6 +309,13 @@ class IxiaModifyBgpPrefixesCommunities(BaseTask):
         prefix_pool_regex = params["prefix_pool_regex"]
         count = params["count"]
         to_add = params["to_add"]
+        # Optional value-level swap: a list of community strings in
+        # "<asn>:<value>" form. When present, peer's BgpCommunitiesList
+        # slots are written to these values after the count update — enabling
+        # true value-level mutation without chassis-wide BGP reset (still
+        # flaps the peer owning the prefix pool, which is OK).
+        community_values = params.get("community_values")
+        broadcast_to_all_slots = bool(params.get("broadcast_to_all_slots", False))
         prefix_pool_obj_list = self.ixia.get_prefix_pools_by_regexes(
             prefix_pool_regex=prefix_pool_regex
         )
@@ -317,6 +324,8 @@ class IxiaModifyBgpPrefixesCommunities(BaseTask):
                 prefix_pool_obj,
                 count,
                 to_add,
+                community_values=community_values,
+                broadcast_to_all_slots=broadcast_to_all_slots,
             )
         self.ixia.apply_changes()
 
@@ -326,18 +335,30 @@ class IxiaModifyBgpPrefixesCommunities(BaseTask):
         prefix_pool_obj,
         count: int,
         to_add: bool,
+        community_values: t.Optional[t.List[str]] = None,
+        broadcast_to_all_slots: bool = False,
     ) -> None:
         """
-        Add or remove a certain count of communities.
+        Add or remove a certain count of communities, optionally with
+        value-level swap.
 
         Args:
             prefix_pool_obj: Prefix pool object, either Ipv4PrefixPools or IPv6.
-            count: Number of communities to add/remove
-            to_add: Either to add or remove
-            prefix_start_index: Starting index (inclusive) within the network group multiplier.
-                Defaults to 0.
-            prefix_end_index: Ending index (exclusive) within the network group multiplier.
-                If None, uses the network group multiplier value (all remaining prefixes).
+            count: Number of communities to add/remove.
+            to_add: Either to add or remove.
+            community_values: Optional list of community values in canonical
+                ``"<asn>:<value>"`` form (e.g. ``["65529:1234"]``). When
+                provided, the per-slot ``AsNumber`` / ``LastTwoOctets`` fields
+                on the peer's ``BgpCommunitiesList`` are written from these
+                values starting at index 0 — enabling value-level community
+                mutation (routes get re-advertised with a NEW community).
+                When None, legacy count-only behavior preserved.
+            broadcast_to_all_slots: When True and ``community_values`` has
+                exactly one entry, replicate that value across ALL slots on
+                the peer's ``BgpCommunitiesList`` rather than only slot 0.
+                Needed when the IXIA setup seeded the initial community
+                round-robin across multiple slots per route — otherwise a
+                slot-0-only overwrite leaves stragglers in higher slots.
         """
         bgp_peer_obj = self.ixia.map_prefix_pool_to_bgp_peer(prefix_pool_obj)
         bgp_peer_obj.Stop()
@@ -362,23 +383,225 @@ class IxiaModifyBgpPrefixesCommunities(BaseTask):
 
         bgp_ip_route_property = bgp_ip_route_property_list[0]
 
-        # Set the number of communities
+        # Set the number of communities. Clamp at 0 for the remove path so
+        # callers passing count > current don't drive NoOfCommunities negative —
+        # surface the over-remove explicitly so callers don't think the full
+        # ``count`` slots were removed when fewer existed.
         if to_add:
             bgp_ip_route_property.NoOfCommunities = (
                 bgp_ip_route_property.NoOfCommunities + count
             )
         else:
-            bgp_ip_route_property.NoOfCommunities = (
-                bgp_ip_route_property.NoOfCommunities - count
-            )
+            current = bgp_ip_route_property.NoOfCommunities
+            if count > current:
+                self.logger.warning(
+                    f"remove count={count} exceeds current NoOfCommunities="
+                    f"{current} on {prefix_pool_obj.Name}; clamping at 0 "
+                    f"(only {current} slot(s) actually removed)"
+                )
+            bgp_ip_route_property.NoOfCommunities = max(0, current - count)
 
         self.logger.info(
             f"Set NoOfCommunities to {bgp_ip_route_property.NoOfCommunities} for {prefix_pool_obj.Name}"
         )
 
+        if community_values:
+            # Commit the ``NoOfCommunities`` mutation BEFORE ``find()`` so
+            # ``_write_community_value_slots`` sees the freshly-added slots.
+            # Without this, callers passing ``to_add=True, count>0,
+            # community_values=[...new values for added slots]`` would have
+            # ``BgpCommunitiesList.find()`` return the pre-bump slot count,
+            # silently dropping writes to the new slots.
+            self.ixia.apply_changes()
+            self._write_community_value_slots(
+                bgp_ip_route_property,
+                prefix_pool_obj,
+                community_values,
+                broadcast_to_all_slots=broadcast_to_all_slots,
+            )
+            # Commit the per-slot ValueList writes BEFORE the peer restarts.
+            # Without this, ``bgp_peer_obj.Start()`` below re-establishes the
+            # BGP session and IXIA re-advertises every prefix using the LAST
+            # COMMITTED ``BgpCommunitiesList`` state — which is the pre-write
+            # state — so the new community values never reach the wire. The
+            # legacy ``configure_community_pool`` works because
+            # ``restart_protocols()`` implicitly applies pending changes;
+            # the peer-scoped ``Stop()``/``Start()`` path does not.
+            self.ixia.apply_changes()
+
         bgp_peer_obj.Start()
         self.logger.info(
             f"Started BGP peer {bgp_peer_obj.Name} after modifying communities"
+        )
+
+    def _write_community_value_slots(
+        self,
+        bgp_ip_route_property,
+        prefix_pool_obj,
+        community_values: t.List[str],
+        broadcast_to_all_slots: bool = False,
+    ) -> None:
+        """Write each ``"<asn>:<value>"`` entry to a successive slot of the
+        peer's ``BgpCommunitiesList``.
+
+        ``BgpCommunitiesList.find()`` returns a list of per-slot objects (one
+        per configured community position). Per-slot writes broadcast a single
+        value across all routes in that slot via ``AsNumber.ValueList([asn])``
+        / ``LastTwoOctets.ValueList([low])`` — the canonical pattern in
+        ``ixia.py::configure_community_pool``. Calling ``Single(x)`` in a loop
+        on the SAME slot object would only retain the last scalar, so we
+        index per slot instead. Caller MUST have stopped the BGP peer first
+        (so the change takes effect on the next Start).
+
+        When ``broadcast_to_all_slots=True`` ``community_values`` MUST have
+        exactly one entry; that value is replicated across ALL slots (needed
+        when the IXIA setup seeded the initial community round-robin across
+        slots per route so slot-0-only overwrites leave stragglers). A
+        broadcast request with any other length raises ``ValueError`` — a
+        broadcast caller that supplied N values almost certainly made a
+        mistake (e.g., passed the full list twice); silently falling back to
+        per-slot writes would produce a mis-configured wire state that only
+        shows up under test.
+        """
+        bgp_community_objs = bgp_ip_route_property.BgpCommunitiesList.find()
+        if not bgp_community_objs:
+            self.logger.warning(
+                f"community_values={community_values!r} requested but "
+                f"BgpCommunitiesList is empty on {prefix_pool_obj.Name} — "
+                "ensure NoOfCommunities>0 before passing value swap"
+            )
+            return
+        effective_values = self._compute_effective_community_values(
+            community_values=community_values,
+            slot_count=len(bgp_community_objs),
+            broadcast_to_all_slots=broadcast_to_all_slots,
+            prefix_pool_obj=prefix_pool_obj,
+        )
+        if not effective_values:
+            return
+        written_slots: t.List[int] = []
+        for slot_idx, value_str in enumerate(effective_values):
+            parsed = self._parse_community_value(value_str, slot_idx)
+            if parsed is None:
+                continue
+            asn, low = parsed
+            self._write_community_slot(
+                slot_obj=bgp_community_objs[slot_idx],
+                asn=asn,
+                low=low,
+                slot_idx=slot_idx,
+                prefix_pool_obj=prefix_pool_obj,
+            )
+            written_slots.append(slot_idx)
+        if written_slots:
+            self.logger.info(
+                f"Wrote {len(written_slots)} community slot(s) "
+                f"({written_slots}) on {prefix_pool_obj.Name}"
+            )
+
+    def _compute_effective_community_values(
+        self,
+        *,
+        community_values: t.List[str],
+        slot_count: int,
+        broadcast_to_all_slots: bool,
+        prefix_pool_obj,
+    ) -> t.List[str]:
+        """Compose the final per-slot value list, truncated to ``slot_count``.
+        Raises ``ValueError`` on a broadcast request that supplied != 1 value.
+        Warns (once, at the top) when the input is longer than ``slot_count``.
+        """
+        if broadcast_to_all_slots:
+            if len(community_values) != 1:
+                raise ValueError(
+                    f"broadcast_to_all_slots=True requires exactly 1 entry in "
+                    f"community_values on {prefix_pool_obj.Name}; got "
+                    f"{len(community_values)}: {community_values!r}"
+                )
+            self.logger.info(
+                f"broadcast_to_all_slots=True: replicating "
+                f"{community_values[0]!r} across all {slot_count} slot(s) on "
+                f"{prefix_pool_obj.Name}"
+            )
+            return [community_values[0]] * slot_count
+        if len(community_values) > slot_count:
+            self.logger.warning(
+                f"community_values has {len(community_values)} entries but "
+                f"only {slot_count} slot(s) exist on {prefix_pool_obj.Name}; "
+                f"truncating to {slot_count} — increase NoOfCommunities to match"
+            )
+        return list(community_values)[:slot_count]
+
+    def _parse_community_value(
+        self, value_str: str, slot_idx: int
+    ) -> t.Optional[t.Tuple[int, int]]:
+        """Parse a ``"<asn>:<value>"`` string. Returns ``(asn, low)`` or
+        ``None`` (with a warning) on any parse / 16-bit-range failure.
+
+        BGP RFC 1997 communities are 32-bit split as ``AS(16)|value(16)``.
+        IXIA silently TRUNCATES ``ValueList`` writes to 16 bits (e.g.
+        99999 -> 99999 mod 65536 = 34463), so out-of-range values are
+        rejected here rather than landing on the wire as unexpected values.
+        """
+        if ":" not in value_str:
+            self.logger.warning(
+                f"community value {value_str!r} not in '<asn>:<value>' form; "
+                f"skipping slot {slot_idx}"
+            )
+            return None
+        asn_str, low_str = value_str.split(":", 1)
+        try:
+            asn = int(asn_str)
+            low = int(low_str)
+        except ValueError:
+            self.logger.warning(
+                f"community value {value_str!r} has non-int parts; skipping "
+                f"slot {slot_idx}"
+            )
+            return None
+        if not (0 <= asn <= 0xFFFF and 0 <= low <= 0xFFFF):
+            self.logger.warning(
+                f"community value {value_str!r} out of 16-bit range "
+                f"(asn={asn}, low={low}); IXIA would silently truncate. "
+                f"Skipping slot {slot_idx}."
+            )
+            return None
+        return asn, low
+
+    def _write_community_slot(
+        self,
+        *,
+        slot_obj,
+        asn: int,
+        low: int,
+        slot_idx: int,
+        prefix_pool_obj,
+    ) -> None:
+        """Write PER-ROW OVERRIDES on the given ``BgpCommunitiesList`` slot.
+
+        IXIA setup-time per-route community configuration installs per-row
+        overrides on ``BgpCommunitiesList[slot].AsNumber`` / ``LastTwoOctets``.
+        A scalar ``ValueList([v])`` only sets the Multivalue Pattern, which
+        per-row overrides supersede — so scalar writes silently no-op on the
+        wire. Passing a list of length equal to the current per-row count
+        (from ``AsNumber.Values``) writes the value as an override on every
+        row, which IXIA honors on re-advertise after DG/NG restart.
+        """
+        try:
+            row_count = len(list(slot_obj.AsNumber.Values))
+        except AttributeError as exc:
+            self.logger.debug(
+                f"slot {slot_idx} on {prefix_pool_obj.Name}: "
+                f"AsNumber.Values access raised {exc!r}; "
+                "falling back to scalar broadcast (row_count=1)"
+            )
+            row_count = 1
+        slot_obj.AsNumber.ValueList([asn] * row_count)
+        slot_obj.LastTwoOctets.ValueList([low] * row_count)
+        self.logger.info(
+            f"Set community slot {slot_idx} on {prefix_pool_obj.Name}: "
+            f"AsNumber={asn} LastTwoOctets={low} (per-row overrides × "
+            f"{row_count} rows)"
         )
 
 

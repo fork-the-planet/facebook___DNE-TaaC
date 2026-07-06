@@ -2299,6 +2299,7 @@ def create_configure_as_path_pool_step(
     as_path_pool: list[str],
     device_group_regex: str = ".*",
     description: str | None = None,
+    stop_protocols: bool = True,
 ) -> Step:
     """
     Create a step to configure an AS path pool on IXIA prefix pools.
@@ -2311,6 +2312,12 @@ def create_configure_as_path_pool_step(
         as_path_pool: List of AS path strings (e.g. ["65001 65002", "65003 65004"])
         device_group_regex: Regex to filter device groups by name (default: ".*")
         description: Custom step description (optional)
+        stop_protocols: Whether the IXIA wrapper should call ``stop_protocols()``
+            before the config write (default: True). Default preserves legacy
+            behavior. Set to False ONLY when the caller knows the topology can
+            absorb the config change in-place — the unconditional stop in
+            ``ixia.py::configure_as_path_pool`` can cascade-reset every BGP TCP
+            session on the chassis at scale.
 
     Returns:
         Step object for AS path pool configuration
@@ -2323,6 +2330,7 @@ def create_configure_as_path_pool_step(
             "as_path_pool": as_path_pool,
             "restart_protocols": False,
             "device_group_regex": device_group_regex,
+            "stop_protocols": stop_protocols,
         },
         description=description or "Configure AS path pool on IXIA",
     )
@@ -2334,6 +2342,7 @@ def create_configure_community_pool_step(
     community_combinations: list[list[str]],
     device_group_regex: str = ".*",
     description: str | None = None,
+    stop_protocols: bool = True,
 ) -> Step:
     """
     Create a step to configure a community pool on IXIA prefix pools.
@@ -2346,6 +2355,12 @@ def create_configure_community_pool_step(
         community_combinations: List of community lists per prefix
         device_group_regex: Regex to filter device groups by name (default: ".*")
         description: Custom step description (optional)
+        stop_protocols: Whether the IXIA wrapper should call ``stop_protocols()``
+            before the config write (default: True). Default preserves legacy
+            behavior. Set to False ONLY when the caller knows the topology can
+            absorb the config change in-place — the unconditional stop in
+            ``ixia.py::configure_community_pool`` can cascade-reset every BGP TCP
+            session on the chassis at scale.
 
     Returns:
         Step object for community pool configuration
@@ -2358,6 +2373,7 @@ def create_configure_community_pool_step(
             "community_combinations": community_combinations,
             "restart_protocols": False,
             "device_group_regex": device_group_regex,
+            "stop_protocols": stop_protocols,
         },
         description=description or "Configure community pool on IXIA",
     )
@@ -2369,6 +2385,7 @@ def create_configure_extended_community_pool_step(
     extended_community_combinations: list[list[str]],
     device_group_regex: str = ".*",
     description: str | None = None,
+    stop_protocols: bool = True,
 ) -> Step:
     """
     Create a step to configure an extended community pool on IXIA prefix pools.
@@ -2381,6 +2398,12 @@ def create_configure_extended_community_pool_step(
         extended_community_combinations: List of extended community lists per prefix
         device_group_regex: Regex to filter device groups by name (default: ".*")
         description: Custom step description (optional)
+        stop_protocols: Whether the IXIA wrapper should call ``stop_protocols()``
+            before the config write (default: True). Default preserves legacy
+            behavior. Set to False ONLY when the caller knows the topology can
+            absorb the config change in-place — the unconditional stop in
+            ``ixia.py::configure_extended_community_pool`` can cascade-reset
+            every BGP TCP session on the chassis at scale.
 
     Returns:
         Step object for extended community pool configuration
@@ -2393,6 +2416,7 @@ def create_configure_extended_community_pool_step(
             "extended_community_combinations": extended_community_combinations,
             "restart_protocols": False,
             "device_group_regex": device_group_regex,
+            "stop_protocols": stop_protocols,
         },
         description=description or "Configure extended community pool on IXIA",
     )

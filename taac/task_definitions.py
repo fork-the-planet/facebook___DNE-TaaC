@@ -896,30 +896,53 @@ def create_ixia_modify_communities_task(
     prefix_pool_regex: str,
     count: int,
     to_add: bool,
+    community_values: t.Optional[t.List[str]] = None,
+    broadcast_to_all_slots: bool = False,
 ) -> Task:
     """
-    Create a task to add/remove BGP communities on Ixia.
+    Create a task to add/remove BGP communities on Ixia (peer-scoped — only
+    flaps the BGP peer owning the matched prefix pool, NOT chassis-wide).
 
     Args:
-        prefix_pool_regex: Regex pattern to match prefix pools
-        count: Number of communities to add/remove
-        to_add: Whether to add (True) or remove (False) communities
+        prefix_pool_regex: Regex pattern to match prefix pools.
+        count: Number of communities to add (when ``to_add=True``) or remove
+            (when ``to_add=False``). The peer's ``NoOfCommunities`` is
+            incremented/decremented by this amount.
+        to_add: Whether to add (True) or remove (False) communities.
+        community_values: Optional list of community values in canonical
+            ``"<asn>:<value>"`` string form (e.g. ``["65529:99999"]``). When
+            provided, the task ALSO writes these specific values onto the
+            peer's ``BgpCommunitiesList`` slots starting at index 0, enabling
+            a true value-level swap (e.g. swap from ``"65529:34814"`` to
+            ``"65529:99999"`` on the same prefix range without resetting
+            chassis-wide BGP sessions). When None (default), legacy
+            count-only behavior is preserved.
+        broadcast_to_all_slots: When True (and ``community_values`` has
+            exactly one entry), replicate that single value across ALL
+            ``BgpCommunitiesList`` slots on the prefix pool. Needed when the
+            IXIA setup seeded the initial community across multiple slots
+            per route via ``configure_community_pool`` round-robin (each
+            route may carry its initial value in slot 0, 1, 2, ... N), so
+            a slot-0-only overwrite leaves stragglers in higher slots. When
+            False (default), each entry in ``community_values`` writes to
+            its own successive slot (legacy behavior).
 
     Returns:
         Task object to modify communities
     """
+    params: t.Dict[str, t.Any] = {
+        "prefix_pool_regex": prefix_pool_regex,
+        "count": count,
+        "to_add": to_add,
+    }
+    if community_values is not None:
+        params["community_values"] = community_values
+    if broadcast_to_all_slots:
+        params["broadcast_to_all_slots"] = True
     return Task(
         task_name="ixia_modify_communities",
         ixia_needed=True,
-        params=Params(
-            json_params=json.dumps(
-                {
-                    "prefix_pool_regex": prefix_pool_regex,
-                    "count": count,
-                    "to_add": to_add,
-                }
-            )
-        ),
+        params=Params(json_params=json.dumps(params)),
     )
 
 

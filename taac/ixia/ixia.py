@@ -6542,6 +6542,7 @@ class Ixia:
         as_path_pool: t.List[str],
         restart_protocols: bool = True,
         device_group_regex: str = ".*",
+        stop_protocols: bool = True,
     ) -> bool:
         """
         Configure AS path distribution from a constant pool across BGP routes.
@@ -6559,6 +6560,13 @@ class Ixia:
             as_path_pool: List of AS path strings (e.g., ["65001 65002", "65003 65004"])
             restart_protocols: Whether to restart protocols after configuring (default: True)
             device_group_regex: Regex to filter device groups by name (default: ".*" matches all)
+            stop_protocols: Whether to call ``stop_protocols()`` before the config
+                write (default: True). Default preserves legacy behavior. Set to
+                False ONLY when the caller knows the topology can absorb the
+                config change in-place — otherwise the unconditional stop here
+                can cascade-reset every BGP TCP session across every DG on the
+                chassis at scale (peers see errno 104 Connection reset by peer
+                within milliseconds of the first pool-config call).
 
         Returns:
             bool: True if successful, False otherwise
@@ -6579,9 +6587,15 @@ class Ixia:
                 f"(device_group_regex={device_group_regex})"
             )
 
-            # Stop protocols before making changes
-            self.logger.info("Stopping protocols before configuring AS path pool")
-            self.stop_protocols()
+            # Stop protocols before making changes (opt-in to avoid chassis-wide cascade)
+            if stop_protocols:
+                self.logger.info("Stopping protocols before configuring AS path pool")
+                self.stop_protocols()
+            else:
+                self.logger.info(
+                    "Skipping stop_protocols (caller opted out — config write "
+                    "expected to land in-place without TCP session reset)"
+                )
 
             # Find device groups for the specified interface using existing method
             device_groups = self.get_device_groups_by_port_and_interface(
@@ -6833,6 +6847,7 @@ class Ixia:
         community_combinations: t.List[t.List[str]],
         restart_protocols: bool = True,
         device_group_regex: str = ".*",
+        stop_protocols: bool = True,
     ) -> bool:
         """
         Configure diverse community combinations for each prefix using Ixia API.
@@ -6851,6 +6866,13 @@ class Ixia:
                 Example: [["100:1", "100:2"], ["100:2", "100:3"], ...]
             restart_protocols: Whether to restart protocols after configuring (default: True)
             device_group_regex: Regex to filter device groups by name (default: ".*" matches all)
+            stop_protocols: Whether to call ``stop_protocols()`` before the config
+                write (default: True). Default preserves legacy behavior. Set to
+                False ONLY when the caller knows the topology can absorb the
+                config change in-place — otherwise the unconditional stop here
+                can cascade-reset every BGP TCP session across every DG on the
+                chassis at scale (peers see errno 104 Connection reset by peer
+                within milliseconds of the first pool-config call).
 
         Returns:
             bool: True if successful, False otherwise
@@ -6880,9 +6902,15 @@ class Ixia:
 
             communities_per_prefix = len(community_combinations[0])
 
-            # Stop protocols before making changes
-            self.logger.info("Stopping protocols before configuring community pool")
-            self.stop_protocols()
+            # Stop protocols before making changes (opt-in to avoid chassis-wide cascade)
+            if stop_protocols:
+                self.logger.info("Stopping protocols before configuring community pool")
+                self.stop_protocols()
+            else:
+                self.logger.info(
+                    "Skipping stop_protocols (caller opted out — config write "
+                    "expected to land in-place without TCP session reset)"
+                )
 
             # Find device groups for the specified interface
             device_groups = self.get_device_groups_by_port_and_interface(
@@ -7129,6 +7157,7 @@ class Ixia:
         extended_community_combinations: t.List[t.List[str]],
         restart_protocols: bool = True,
         device_group_regex: str = ".*",
+        stop_protocols: bool = True,
     ) -> bool:
         """
         Configure diverse extended community combinations for each prefix using Ixia API.
@@ -7148,6 +7177,12 @@ class Ixia:
                 Example: [["rt:100:1", "rt:100:2"], ["rt:100:2", "rt:100:3"], ...]
             restart_protocols: Whether to restart protocols after configuring (default: True)
             device_group_regex: Regex to filter device groups by name (default: ".*" matches all)
+            stop_protocols: Whether to call ``stop_protocols()`` before the config
+                write (default: True). Default preserves legacy behavior. Set to
+                False ONLY when the caller knows the topology can absorb the
+                config change in-place — otherwise the unconditional stop here
+                can cascade-reset every BGP TCP session across every DG on the
+                chassis at scale.
 
         Returns:
             bool: True if successful, False otherwise
@@ -7177,11 +7212,17 @@ class Ixia:
 
             ext_communities_per_prefix = len(extended_community_combinations[0])
 
-            # Stop protocols before making changes
-            self.logger.info(
-                "Stopping protocols before configuring extended community pool"
-            )
-            self.stop_protocols()
+            # Stop protocols before making changes (opt-in to avoid chassis-wide cascade)
+            if stop_protocols:
+                self.logger.info(
+                    "Stopping protocols before configuring extended community pool"
+                )
+                self.stop_protocols()
+            else:
+                self.logger.info(
+                    "Skipping stop_protocols (caller opted out — config write "
+                    "expected to land in-place without TCP session reset)"
+                )
 
             # Find device groups for the specified interface
             device_groups = self.get_device_groups_by_port_and_interface(
