@@ -501,14 +501,16 @@ def _get_control_plane_tasks(
     # injected after daemons are running.
     tasks.extend(_get_add_intern_userid_tasks(device_name=device_name))
 
-    # Restart Bgp, FibAgent, and FibAgentBgp so they re-read the updated ACL
+    # Restart FibAgent, FibAgentBgp, and Bgp so they re-read the updated ACL
     # files. These daemons load their thrift ACLs at startup and don't re-read
     # on modification, so a restart is required for the new UIDs to take
     # effect. Without restarting Bgp here, any later Thrift call against the
     # Bgp daemon (e.g. ``getBgpSessions`` from ``BGP_SESSION_CHECK``) gets
     # ``AuthorizationException: Authorization failed`` because Bgp's
     # in-memory ACL still reflects the pre-injection ``Bgpd_lab.json``.
-    for daemon in ["Bgp", "FibAgent", "FibAgentBgp"]:
+    # Bgp is restarted LAST so it comes up after its FIB agents are ready (same
+    # FibAgentBgp-before-Bgp invariant as BGPCPP_DAEMONS; see T274256815).
+    for daemon in ["FibAgent", "FibAgentBgp", "Bgp"]:
         tasks.append(
             create_arista_daemon_control_task(
                 hostname=device_name,

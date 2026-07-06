@@ -161,16 +161,35 @@ OPENR_OTHER_LINK = {
 
 # =============================================================================
 # BGP++ Daemon Names (for arista_daemon_control tasks)
-# Includes Openr for conveyor profiles that require it.
+#
+# ORDER MATTERS -- this list is the sequential (re)start order, and it follows
+# the FIB-programming dependency chain so each daemon's downstream target is
+# already up before it starts:
+#
+#   FibGrpc / FibBgpGrpc  (EosSdkRpc gRPC backends, ports 9544 / 9545)
+#     -> FibAgent / FibAgentBgp  (FIB agents, thrift 5912 / 5913)
+#       -> Openr / Bgp  (routing daemons)
+#
+# Bgp MUST be last: BGP++ (the ``Bgp`` daemon) programs routes into
+# ``FibAgentBgp`` (thrift 5913 -> FibBgpGrpc 9545) and resolves nexthops via the
+# Open-R FIB agent, so those agents/backends must be (re)started BEFORE ``Bgp``.
+# If ``Bgp`` starts first it converges its full RIB before its FIB agent exists,
+# the FIB agent is then restarted out from under it, and at init BGP++ has
+# nothing to program to ("Fib agent is not connected. Skipping fib batch
+# programming.") -- forcing a churny resync. See T274256815.
+#
+# ``Openr`` is enabled only for profiles that require it (see
+# _get_control_plane_tasks). ``RouteGrpc`` (EosSdkRpc backing the EOS RouteAgent,
+# port 9547) is intentionally excluded: it is not on the BGP++ FIB-programming
+# path and nothing in the BGP++ conveyor health/post checks uses it.
 # =============================================================================
 BGPCPP_DAEMONS = [
-    "Bgp",
+    "FibGrpc",
+    "FibBgpGrpc",
     "FibAgent",
     "FibAgentBgp",
-    "FibBgpGrpc",
-    "FibGrpc",
     "Openr",
-    "RouteGrpc",
+    "Bgp",
 ]
 
 
