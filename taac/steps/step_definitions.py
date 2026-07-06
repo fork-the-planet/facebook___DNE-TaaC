@@ -386,6 +386,79 @@ def create_verify_ixia_bgp_rx_stats_delta_step(
     )
 
 
+def create_snapshot_per_peer_bgp_rx_stats_step(
+    hostname: str,
+    interface: str,
+    snapshot_key: str,
+    peer_addrs: t.List[str],
+    counter_name: str = "rx_total_messages",
+    description: t.Optional[str] = None,
+) -> Step:
+    """Snapshot IXIA-side per-peer wire-received BGP counters. Reads the
+    same ``BGP+ Peer Per Port`` StatView as the aggregate G3 snapshot but
+    keeps per-peer rows indexed by neighbor peer IP. Pair with
+    ``create_verify_per_peer_bgp_rx_asymmetry_step`` to prove fast peers
+    receive more wire updates than slow peers in the same UG (spec 2.3.1
+    wire-side asymmetry -- complement to the DUT-internal queue-depth
+    asymmetry proof in ``verify_fast_peer_queue_shallower``)."""
+    if description is None:
+        description = (
+            f"Snapshot IXIA-side per-peer BGP {counter_name} on "
+            f"{hostname}:{interface} for {len(peer_addrs)} peer(s) "
+            f"(key={snapshot_key})"
+        )
+    return create_custom_step(
+        params_dict={
+            "custom_step_name": "snapshot_per_peer_bgp_rx_stats",
+            "hostname": hostname,
+            "interface": interface,
+            "snapshot_key": snapshot_key,
+            "peer_addrs": peer_addrs,
+            "counter_name": counter_name,
+        },
+        description=description,
+    )
+
+
+def create_verify_per_peer_bgp_rx_asymmetry_step(
+    hostname: str,
+    interface: str,
+    snapshot_key: str,
+    fast_peer_addrs: t.List[str],
+    slow_peer_addrs: t.List[str],
+    min_ratio: float = 1.0,
+    counter_name: str = "rx_total_messages",
+    description: t.Optional[str] = None,
+) -> Step:
+    """Verify median IXIA-side wire-received ``counter_name`` on
+    ``fast_peer_addrs`` is at least ``min_ratio`` times median on
+    ``slow_peer_addrs`` since the matching snapshot. Wire-side proof of
+    the spec 2.3.1 central claim: fast peers, in the same UG as slow
+    peers, receive more BGP messages on wire during storm -- DUT drains
+    fast independently of slow inside the UG. Median (not mean) for
+    outlier robustness against a flapping peer."""
+    if description is None:
+        description = (
+            f"Verify IXIA per-peer BGP {counter_name} asymmetry on "
+            f"{hostname}:{interface}: median(fast)/median(slow) >= "
+            f"{min_ratio} across {len(fast_peer_addrs)} fast + "
+            f"{len(slow_peer_addrs)} slow peer(s) (key={snapshot_key})"
+        )
+    return create_custom_step(
+        params_dict={
+            "custom_step_name": "verify_per_peer_bgp_rx_asymmetry",
+            "hostname": hostname,
+            "interface": interface,
+            "snapshot_key": snapshot_key,
+            "fast_peer_addrs": fast_peer_addrs,
+            "slow_peer_addrs": slow_peer_addrs,
+            "min_ratio": min_ratio,
+            "counter_name": counter_name,
+        },
+        description=description,
+    )
+
+
 def create_snapshot_peer_egress_stats_step(
     hostname: str,
     peer_addrs: t.List[str],

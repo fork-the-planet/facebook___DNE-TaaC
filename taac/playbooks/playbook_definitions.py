@@ -6629,6 +6629,15 @@ def create_ug_backpressure_fast_peers_not_held_back_playbook(
     # ``fast_peer_ixia_interface`` naming the port (e.g. Ethernet3/36/1).
     enable_fast_peer_ixia_wire_check: bool = False,
     fast_peer_ixia_interface: t.Optional[str] = None,
+    # Optional post-storm stage — an additional stage appended AFTER the
+    # existing storm+settle+gates stage but BEFORE cleanup_steps. Used to
+    # inject caller-defined verifiers that must run on the storm's terminal
+    # state (e.g. per-peer IXIA wire counter asymmetry gate that compares
+    # fast vs slow BGP RX rates). Kept as a separate stage rather than
+    # appended to the storm stage's step list so the log output cleanly
+    # separates "storm phase" from "post-storm verification" and downstream
+    # test-log parsers can attribute failures to the right phase.
+    stage_2_extra_steps: t.Optional[t.List[Step]] = None,
 ) -> Playbook:
     """Build the BGP++ Update Group qualification 2.3.1 playbook --
     'Fast Peers Not Held Back by Slow Peers'.
@@ -7132,9 +7141,23 @@ def create_ug_backpressure_fast_peers_not_held_back_playbook(
     if snapshot_checks is None:
         snapshot_checks = list(BGP_STANDARD_SNAPSHOT_CHECKS)
 
+    stages_list: t.List[t.Any] = [storm_stage]
+    if stage_2_extra_steps:
+        stages_list.append(
+            create_steps_stage(
+                steps=stage_2_extra_steps,
+                description=(
+                    "Phase 3.5 (2.3.1): caller-defined post-storm "
+                    "verification stage (e.g. per-peer IXIA wire "
+                    "asymmetry gate)"
+                ),
+            )
+        )
+    stages_list.append(withdraw_stage)
+
     kwargs: t.Dict[str, t.Any] = {
         "name": "ug_backpressure_fast_peers_not_held_back",
-        "stages": [storm_stage, withdraw_stage],
+        "stages": stages_list,
         "prechecks": prechecks,
         "postchecks": postchecks,
         "snapshot_checks": snapshot_checks,

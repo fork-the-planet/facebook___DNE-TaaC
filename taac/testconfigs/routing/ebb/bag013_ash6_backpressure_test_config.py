@@ -88,6 +88,8 @@ from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ixia_config_for_ebb_scale im
 )
 from taac.steps.step_definitions import (
     create_configure_bgp_peer_tcp_window_size_step,
+    create_snapshot_per_peer_bgp_rx_stats_step,
+    create_verify_per_peer_bgp_rx_asymmetry_step,
 )
 from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConfig
@@ -507,6 +509,47 @@ def _pb_2_3_1() -> taac_types.Playbook:
             f"peers otherwise drain at line rate."
         ),
     )
+    # Wire-side per-peer asymmetry snapshot + verify (spec 2.3.1 CENTRAL
+    # CLAIM proven on WIRE, complementing the DUT-internal queue-depth
+    # asymmetry proof in ``verify_fast_peer_queue_shallower``). Snapshot
+    # runs in setup_steps (post-IXIA-setup, pre-storm baseline). Verify
+    # runs in the new post-storm stage_2 (after storm+settle, before
+    # cleanup) so the delta captures the full storm window.
+    _per_peer_wire_snapshot_key = f"pb_2_3_1_per_peer_rx_pre_storm_{DEVICE_NAME}"
+    _per_peer_wire_snapshot = create_snapshot_per_peer_bgp_rx_stats_step(
+        hostname=DEVICE_NAME,
+        interface=IXIA_INTERFACE_MIMIC_EBGP,
+        snapshot_key=_per_peer_wire_snapshot_key,
+        peer_addrs=list(_FAST_EBGP_V6_PEER_ADDRS) + list(_SLOW_EBGP_V6_PEER_ADDRS),
+        description=(
+            f"Phase 0 wire-per-peer snapshot (2.3.1): capture per-peer "
+            f"IXIA Messages Rx baseline on "
+            f"{DEVICE_NAME}:{IXIA_INTERFACE_MIMIC_EBGP} across "
+            f"{len(_FAST_EBGP_V6_PEER_ADDRS)} fast + "
+            f"{len(_SLOW_EBGP_V6_PEER_ADDRS)} slow peer(s), for post-storm "
+            f"wire-side asymmetry verification"
+        ),
+    )
+    _per_peer_wire_verify = create_verify_per_peer_bgp_rx_asymmetry_step(
+        hostname=DEVICE_NAME,
+        interface=IXIA_INTERFACE_MIMIC_EBGP,
+        snapshot_key=_per_peer_wire_snapshot_key,
+        fast_peer_addrs=list(_FAST_EBGP_V6_PEER_ADDRS),
+        slow_peer_addrs=list(_SLOW_EBGP_V6_PEER_ADDRS),
+        # Strict >: fast median must exceed slow median. On bag013 the
+        # TCP-window disparity is 65535 / 1500 = 43.7x, so real ratio
+        # will be much larger. Kept at 1.0 (strict) so any regression
+        # (fast median <= slow median) fails loudly; can tighten after
+        # first hardware run establishes baseline ratio.
+        min_ratio=1.0,
+        description=(
+            f"Phase 3.5 wire-per-peer asymmetry gate (2.3.1 CENTRAL CLAIM): "
+            f"median IXIA Messages Rx on fast peers must exceed slow peers "
+            f"since Phase 0 snapshot on "
+            f"{DEVICE_NAME}:{IXIA_INTERFACE_MIMIC_EBGP} -- proves DUT drains "
+            f"fast independently of slow on the WIRE inside the same UG"
+        ),
+    )
     return create_ug_backpressure_fast_peers_not_held_back_playbook(
         device_name=DEVICE_NAME,
         ixia_interface=IXIA_INTERFACE_MIMIC_IBGP,
@@ -523,7 +566,8 @@ def _pb_2_3_1() -> taac_types.Playbook:
         expected_established_sessions=_EXPECTED_ESTABLISHED_SESSIONS,
         memory_threshold_bytes=_MEMORY_THRESHOLD_BYTES,
         storm_sender_peer_addr_prefix=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
-        setup_steps=[slow_peer_throttle_setup],
+        setup_steps=[slow_peer_throttle_setup, _per_peer_wire_snapshot],
+        stage_2_extra_steps=[_per_peer_wire_verify],
         # Re-enable IXIA wire check in COLUMN-DISCOVERY mode. Wrapper
         # now logs all IxNetwork view columns on snapshot so we can find
         # a counter that includes keepalives (Rx Updates alone was 0
