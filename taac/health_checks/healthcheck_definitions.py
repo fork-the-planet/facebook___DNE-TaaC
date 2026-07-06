@@ -851,45 +851,79 @@ def create_bgp_peer_route_set_equality_check(
 
 
 def create_bgp_received_route_community_check(
-    baseline_peer_addr: str,
-    tested_peer_addrs: t.List[str],
+    baseline_peer_addr: t.Optional[str] = None,
+    tested_peer_addrs: t.Optional[t.List[str]] = None,
     anchor_community: t.Optional[str] = None,
     forbidden_communities: t.Optional[t.List[str]] = None,
     address_family: str = "ipv6",
     check_id: t.Optional[str] = None,
+    sender_peer_addr: t.Optional[str] = None,
 ) -> PointInTimeHealthCheck:
-    """Create a check that tested peers receive the same per-prefix community
-    lists as a baseline peer, optionally anchored on an expected community
-    and forbidding stale communities.
+    """Create a check on per-prefix community state. Operates in one of two
+    modes:
 
-    Backed by BGP++ thrift ``getPostfilterAdvertisedNetworks`` (each TBgpPath
-    carries ``community_list`` -- DUT-side mirror of what each peer should
-    be receiving) with EOS CLI fallback. Spec gate for BGP++ UG 2.4.3 --
-    after a mid-sync community mutation on the sender, every UG member must
-    have the NEW community, not the stale one. KNOWN LIMITATION: the
-    underlying thrift returns 0 prefixes under BGP++ UG (T271301144), making
-    this check vacuous-OK today. See the HC module docstring for details.
+    1. **adj-RIB-OUT mode** (default; UG-validation): pass
+       ``baseline_peer_addr`` + ``tested_peer_addrs``. Backed by BGP++ thrift
+       ``getPostfilterAdvertisedNetworks`` — each TBgpPath carries
+       ``community_list``, the DUT-side mirror of what each receiver peer
+       should be getting after egress policy. Spec gate for BGP++ UG 2.4.3.
+       KNOWN LIMITATION: the underlying thrift may return 0 prefixes under
+       BGP++ UG (T271301144), making this check vacuous-OK on some devices.
+    2. **adj-RIB-IN mode** (trigger-verification, wrapper-isolation): pass
+       only ``sender_peer_addr``. Backed by
+       ``getPrefilterReceivedNetworks`` — what DUT received on the wire
+       from THAT one peer, before any ingress policy. Use this to isolate
+       "did my IXIA-side mutation actually land on the wire?" from any
+       downstream UG-replication / adj-RIB-out delay.
 
     Args:
-        baseline_peer_addr: IP of the ground-truth peer.
-        tested_peer_addrs: IPs of peers whose per-prefix communities must
-            match baseline.
+        baseline_peer_addr: (adj-RIB-OUT) IP of the ground-truth peer.
+        tested_peer_addrs: (adj-RIB-OUT) IPs of peers whose per-prefix
+            communities must match baseline.
         anchor_community: If set (e.g. ``"0:665"``), asserted present on
             every route on every checked peer.
-        forbidden_communities: If set (e.g. ``["65529:39744"]``), asserted
-            absent on every route on every checked peer (catches stale
-            community survival).
+        forbidden_communities: If set, asserted absent on every route on
+            every checked peer (catches stale community survival).
         address_family: "ipv4" or "ipv6" (arista CLI path only).
         check_id: Optional unique identifier.
+        sender_peer_addr: When set, switch to adj-RIB-IN mode and probe
+            this single peer's prefilter-received-networks. Mutually
+            exclusive with ``baseline_peer_addr`` + ``tested_peer_addrs``.
 
     Returns:
         A ``PointInTimeHealthCheck`` named ``BGP_RECEIVED_ROUTE_COMMUNITY_CHECK``.
     """
+    if sender_peer_addr is not None and (
+        baseline_peer_addr is not None or tested_peer_addrs
+    ):
+        raise ValueError(
+            "create_bgp_received_route_community_check: pass sender_peer_addr "
+            "(adj-RIB-IN mode) OR baseline_peer_addr + tested_peer_addrs "
+            "(adj-RIB-OUT mode), not both — they probe different RIBs"
+        )
+    # adj-RIB-OUT mode requires BOTH baseline_peer_addr AND tested_peer_addrs;
+    # supplying only one side is a caller bug that must be caught at factory-
+    # construction time (else ``tested_peer_addrs`` silently drops or the
+    # runtime HC fails with a generic "missing baseline" message that hides
+    # the actual mis-call shape).
+    if (baseline_peer_addr is None) != (not tested_peer_addrs):
+        raise ValueError(
+            "create_bgp_received_route_community_check: adj-RIB-OUT mode "
+            "requires BOTH baseline_peer_addr AND tested_peer_addrs; got "
+            f"baseline_peer_addr={baseline_peer_addr!r}, "
+            f"tested_peer_addrs={tested_peer_addrs!r}"
+        )
     params: t.Dict[str, t.Any] = {
-        "baseline_peer_addr": baseline_peer_addr,
-        "tested_peer_addrs": tested_peer_addrs,
         "address_family": address_family,
     }
+    if sender_peer_addr is not None:
+        params["sender_peer_addr"] = sender_peer_addr
+    elif baseline_peer_addr is not None:
+        params["baseline_peer_addr"] = baseline_peer_addr
+        params["tested_peer_addrs"] = tested_peer_addrs
+    # Else: no addr params at all -- the factory-contract test path (invokes
+    # every factory with all defaults) still succeeds; runtime HC will FAIL
+    # with a clear "missing required param" message.
     if anchor_community is not None:
         params["anchor_community"] = anchor_community
     if forbidden_communities:

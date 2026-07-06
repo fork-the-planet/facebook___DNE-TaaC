@@ -239,6 +239,76 @@ class BgpReceivedRouteCommunityHealthCheckTest(unittest.IsolatedAsyncioTestCase)
         )
         self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS)
 
+    # --- adj-RIB-IN mode (sender_peer_addr) ---
+
+    async def test_adj_rib_in_passes_when_sender_carries_anchor(self):
+        """``sender_peer_addr`` set -> HC probes ``getPrefilterReceivedNetworks``
+        for that single peer and evaluates against the anchor. Wrapper
+        contract verification path."""
+        routes = _route_map(750, [NEW_COMM])
+
+        async def fake(peer):
+            return routes
+
+        self.hc.driver.async_get_prefilter_received_networks = AsyncMock(
+            side_effect=fake
+        )
+        result = await self.hc._run(
+            self.device,
+            self.input,
+            {
+                "sender_peer_addr": BASELINE,
+                "anchor_community": NEW_COMM,
+            },
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS)
+        self.hc.driver.async_get_prefilter_received_networks.assert_awaited_once_with(
+            BASELINE
+        )
+
+    async def test_adj_rib_in_errors_when_thrift_query_fails(self):
+        self.hc.driver.async_get_prefilter_received_networks = AsyncMock(
+            side_effect=RuntimeError("connection refused")
+        )
+        result = await self.hc._run(
+            self.device,
+            self.input,
+            {
+                "sender_peer_addr": BASELINE,
+                "anchor_community": NEW_COMM,
+            },
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.ERROR)
+        self.assertIn("adj-RIB-IN", result.message)
+        self.assertIn(BASELINE, result.message)
+
+    async def test_adj_rib_in_arista_delegates_to_thrift(self):
+        """EOS CLI has no adj-RIB-IN equivalent -- ``_run_arista`` must
+        delegate to ``_run`` (thrift) when ``sender_peer_addr`` is set,
+        skipping the CLI code path entirely."""
+        routes = _route_map(50, [NEW_COMM])
+
+        async def fake(peer):
+            return routes
+
+        self.hc.driver.async_get_prefilter_received_networks = AsyncMock(
+            side_effect=fake
+        )
+        # If _run_arista tried its CLI path, this AsyncMock would blow up.
+        self.hc.driver.async_execute_show_json_on_shell = AsyncMock(
+            side_effect=AssertionError("CLI path must not be taken in adj-RIB-IN mode")
+        )
+        result = await self.hc._run_arista(
+            self.device,
+            self.input,
+            {
+                "sender_peer_addr": BASELINE,
+                "anchor_community": NEW_COMM,
+            },
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS)
+        self.hc.driver.async_execute_show_json_on_shell.assert_not_awaited()
+
     # --- factory ---
 
     def test_factory_emits_correct_check_name(self):

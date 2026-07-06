@@ -240,6 +240,136 @@ def create_custom_step(
     )
 
 
+def create_snapshot_bgp_sent_route_counts_step(
+    hostname: str,
+    peer_addrs: t.List[str],
+    snapshot_key: str,
+    description: t.Optional[str] = None,
+) -> Step:
+    """Snapshot ``postpolicy_sent_prefix_count`` for a set of BGP peers on the
+    DUT, tagged with ``snapshot_key`` for later look-up by
+    ``create_verify_bgp_sent_route_count_delta_step``. Backs the spec-loyal
+    "storm delivery" gate for BGP++ UG backpressure tests -- the check asserts
+    that peer receive-counts grew by at least ``storm_prefix_count`` between
+    snapshot and verify, independent of whatever baseline RIB fanout the DUT
+    is doing.
+
+    Args:
+        hostname: Device hostname (bgpcpp source of truth).
+        peer_addrs: Peer IPs to snapshot.
+        snapshot_key: Unique key across the playbook; the matching verify step
+            must use the same string.
+        description: Optional custom description.
+    """
+    if description is None:
+        description = (
+            f"Snapshot BGP sent-count for {len(peer_addrs)} peer(s) on "
+            f"{hostname} (key={snapshot_key})"
+        )
+    return create_custom_step(
+        params_dict={
+            "custom_step_name": "snapshot_bgp_sent_route_counts",
+            "hostname": hostname,
+            "peer_addrs": list(peer_addrs),
+            "snapshot_key": snapshot_key,
+        },
+        description=description,
+    )
+
+
+def create_verify_bgp_sent_route_count_delta_step(
+    hostname: str,
+    peer_addrs: t.List[str],
+    snapshot_key: str,
+    min_delta: int,
+    max_delta: t.Optional[int] = None,
+    tolerance: int = 0,
+    description: t.Optional[str] = None,
+) -> Step:
+    """Verify each peer's ``postpolicy_sent_prefix_count`` grew by at least
+    ``min_delta`` (and optionally at most ``max_delta``) since the matching
+    ``create_snapshot_bgp_sent_route_counts_step`` step. Raises
+    ``TestCaseFailure`` if more than ``tolerance`` peers violate. Paired with
+    a snapshot step to close the spec-loyalty gap left by dropping absolute
+    anchor counts on UG backpressure equality gates.
+
+    Args:
+        hostname: Device hostname.
+        peer_addrs: Peer IPs to verify (should match or be a subset of the
+            peers passed to the snapshot).
+        snapshot_key: Key from the matching snapshot step.
+        min_delta: Minimum per-peer count increase (inclusive).
+        max_delta: Optional maximum per-peer count increase.
+        tolerance: Peers allowed to violate before the step fails
+            (default 0 -- all must satisfy).
+        description: Optional custom description.
+    """
+    if description is None:
+        _bound = (
+            f"in [{min_delta}, {max_delta}]"
+            if max_delta is not None
+            else f">= {min_delta}"
+        )
+        description = (
+            f"Verify BGP sent-count delta {_bound} on {len(peer_addrs)} "
+            f"peer(s) on {hostname} (key={snapshot_key}, tol={tolerance})"
+        )
+    params: t.Dict[str, t.Any] = {
+        "custom_step_name": "verify_bgp_sent_route_count_delta",
+        "hostname": hostname,
+        "peer_addrs": list(peer_addrs),
+        "snapshot_key": snapshot_key,
+        "min_delta": min_delta,
+        "tolerance": tolerance,
+    }
+    if max_delta is not None:
+        params["max_delta"] = max_delta
+    return create_custom_step(params_dict=params, description=description)
+
+
+def create_verify_dut_received_from_peer_group_step(
+    hostname: str,
+    sender_peer_addr_prefix: str,
+    min_prefix_count: int,
+    description: t.Optional[str] = None,
+) -> Step:
+    """Verify DUT's ingress RIB has received at least ``min_prefix_count``
+    prefixes from sender peers whose ``peer_addr`` starts with
+    ``sender_peer_addr_prefix``. Spec-loyal "storm arrived at DUT" probe --
+    decoupled from egress-policy filtering, which controls what DUT then
+    re-advertises OUT to other peers (some topologies drop heavy-attr storms
+    at egress, making per-peer ``sent_prefix_count`` an unreliable
+    "storm delivered" signal). Ingress RIB inspection is topology-agnostic.
+
+    Filters by peer address prefix rather than DUT-side ``peer_group`` name
+    because DUT-side peer_group values reflect BGP peer-group naming (e.g.
+    ``EB-EB``) not IXIA topology names.
+
+    Args:
+        hostname: Device hostname.
+        sender_peer_addr_prefix: String prefix of storm-sender peer IPv6
+            addresses (e.g. ``"2401:db00:e50d:11:9"`` for iBGP plane 1).
+        min_prefix_count: Assert total ``prepolicy_rcvd_prefix_count`` across
+            matching peers >= this. Raises ``TestCaseFailure`` otherwise.
+        description: Optional custom description.
+    """
+    if description is None:
+        description = (
+            f"Verify DUT {hostname} ingress RIB received >= "
+            f"{min_prefix_count} prefix(es) from peers with peer_addr "
+            f"starting with {sender_peer_addr_prefix!r}"
+        )
+    return create_custom_step(
+        params_dict={
+            "custom_step_name": "verify_dut_received_prefixes_from_peer_group",
+            "hostname": hostname,
+            "sender_peer_addr_prefix": sender_peer_addr_prefix,
+            "min_prefix_count": min_prefix_count,
+        },
+        description=description,
+    )
+
+
 def create_record_jq_timestamp_step(
     var_name: str,
     description: t.Optional[str] = None,

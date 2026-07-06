@@ -26,6 +26,16 @@ def _create_ibgp_plane_device_groups(
     multiplier: int,
     device_group_index_offset: int = 0,
     drain: bool = False,
+    # Optional per-plane drain-DG override for BGP attribute pools (only the
+    # IPv6 drain DG -- the canonical "heavy-attr storm sender" in 2.3.x tests).
+    # When non-empty, replaces the default CSV-driven COMMUNITIES config on
+    # that DG with inline value_lists. Use to pre-attach 32 community
+    # combinations + 16 ext-community combinations at IXIA-build time so
+    # tests can skip mid-test `configure_*_pool` calls (which call
+    # `stop_protocols()` unconditionally in ixia.py and cascade-reset every
+    # BGP TCP session on the chassis). See [[project-bgp-ug-backpressure-...]]
+    # memory for the cascade diagnosis.
+    drain_dg_v6_attribute_overrides: list[ixia_types.BgpAttributeConfig] | None = None,
 ) -> list[DeviceGroupConfig]:
     """
     Create device group configurations for a single iBGP plane.
@@ -114,6 +124,15 @@ def _create_ibgp_plane_device_groups(
 
     # IPv6 DC (Remote EB) DRAIN (only when drain=True)
     if drain:
+        # Default CSV-driven COMMUNITIES; overridable inline via
+        # drain_dg_v6_attribute_overrides (2.3.x heavy-attr storm pre-config).
+        v6_drain_attr_configs = drain_dg_v6_attribute_overrides or [
+            ixia_types.BgpAttributeConfig(
+                attribute=ixia_types.BgpAttribute.COMMUNITIES,
+                file_path=get_bgp_route_file_path(profile, "ibgp_ipv6_communites.csv"),
+                distribution_type=ixia_types.DistribitionType.ROUND_ROBIN,
+            )
+        ]
         device_groups.append(
             DeviceGroupConfig(
                 device_group_name=f"DEVICE_GROUP_IPV6_IBGP_PLANE_{plane_num}_REMOTE_EB_DRAIN",
@@ -142,15 +161,7 @@ def _create_ibgp_plane_device_groups(
                             ),
                             import_file_type=ixia_types.BgpRouteImportFileType.CSV,
                             network_group_index=0,
-                            bgp_attribute_configs=[
-                                ixia_types.BgpAttributeConfig(
-                                    attribute=ixia_types.BgpAttribute.COMMUNITIES,
-                                    file_path=get_bgp_route_file_path(
-                                        profile, "ibgp_ipv6_communites.csv"
-                                    ),
-                                    distribution_type=ixia_types.DistribitionType.ROUND_ROBIN,
-                                )
-                            ],
+                            bgp_attribute_configs=v6_drain_attr_configs,
                             bgp_next_hop_modification_type=ixia_types.BgpNextHopModificationType.PRESERVE_FROM_FILE,
                             prefix_pool_name=f"PREFIX_POOL_IBGP_IPV6_PLANE_{plane_num}_REMOTE_EB_DRAIN",
                             start_index=ibgp_peer_scale_per_plane
@@ -379,6 +390,16 @@ def create_ebb_scale_basic_port_configs(
     ixia_interface_mimic_ibgp_plane3: str | None = None,
     ixia_interface_mimic_ibgp_plane4: str | None = None,
     drain: bool = False,
+    # Per-plane optional override for the IPv6 drain DG's BGP attribute pool
+    # configs. Map: plane_num (1..4) -> list of BgpAttributeConfig. Used by the
+    # 2.3.x backpressure testconfig to attach 32 community combos + 16
+    # ext-community combos inline at build time on the storm-sender DG
+    # (plane 1 drain). Avoids mid-test `configure_*_pool` calls that
+    # cascade-reset every BGP TCP session on the chassis -- see
+    # ixia.py:6789/7090 unconditional `stop_protocols()` hazard.
+    plane_drain_dg_v6_attribute_overrides: (
+        dict[int, list[ixia_types.BgpAttributeConfig]] | None
+    ) = None,
 ) -> list[BasicPortConfig]:
     """
     Create basic port configurations for EBB scale testing with eBGP, iBGP, and BGP monitoring.
@@ -720,8 +741,9 @@ def create_ebb_scale_basic_port_configs(
         interface = str(plane_config["interface"])
         current_offset = device_group_index_by_interface.get(interface, 0)
 
+        plane_num_int = int(plane_config["plane_num"])  # type: ignore[arg-type]
         plane_device_groups = _create_ibgp_plane_device_groups(
-            plane_num=int(plane_config["plane_num"]),  # type: ignore[arg-type]
+            plane_num=plane_num_int,
             ibgp_peer_scale_per_plane=ibgp_peer_scale_per_plane,
             ibgp_peer_to_drain_per_plane=ibgp_peer_to_drain_per_plane,
             ibgp_remote_as=ibgp_remote_as,
@@ -733,6 +755,9 @@ def create_ebb_scale_basic_port_configs(
             multiplier=multiplier,
             device_group_index_offset=current_offset,
             drain=drain,
+            drain_dg_v6_attribute_overrides=(
+                (plane_drain_dg_v6_attribute_overrides or {}).get(plane_num_int)
+            ),
         )
 
         interface_device_groups[interface].extend(plane_device_groups)

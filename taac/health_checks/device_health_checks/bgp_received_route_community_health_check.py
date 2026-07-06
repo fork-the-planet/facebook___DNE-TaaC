@@ -170,6 +170,44 @@ class BgpReceivedRouteCommunityHealthCheck(
         tested_peer_addrs = check_params.get("tested_peer_addrs") or []
         anchor_community = check_params.get("anchor_community")
         forbidden_communities = check_params.get("forbidden_communities") or []
+        sender_peer_addr = check_params.get("sender_peer_addr")
+
+        # adj-RIB-IN mode (TRIGGER verification): probe what DUT received on
+        # the wire from a SINGLE sender peer via ``getPrefilterReceivedNetworks``.
+        # This isolates the IXIA-side mutation (the wrapper task's job) from
+        # any downstream UG replication delay or per-receiver-peer adj-RIB-out
+        # state. Use when the test goal is "did my IXIA mutation actually
+        # land on the wire?"; for "did UG propagate to every receiver?",
+        # use the default adj-RIB-OUT mode below.
+        if sender_peer_addr:
+            try:
+                # pyrefly: ignore [missing-attribute]
+                mapping = await self.driver.async_get_prefilter_received_networks(
+                    sender_peer_addr
+                )
+                per_peer: t.Dict[str, t.Dict[t.Any, t.FrozenSet[str]]] = {
+                    _norm(sender_peer_addr): {
+                        prefix: _extract_communities(path)
+                        for prefix, path in mapping.items()
+                    }
+                }
+            except Exception as e:
+                return hc_types.HealthCheckResult(
+                    status=hc_types.HealthCheckStatus.ERROR,
+                    message=(
+                        f"BGP received-route community check on {hostname}: "
+                        f"adj-RIB-IN thrift query for sender={sender_peer_addr} "
+                        f"failed: {e}"
+                    ),
+                )
+            return self._evaluate(
+                hostname=hostname,
+                baseline_peer_addr=_norm(sender_peer_addr),
+                tested_peer_addrs=[],
+                per_peer=per_peer,
+                anchor_community=anchor_community,
+                forbidden_communities=forbidden_communities,
+            )
 
         if not baseline_peer_addr:
             return hc_types.HealthCheckResult(
@@ -195,7 +233,7 @@ class BgpReceivedRouteCommunityHealthCheck(
         # Fetch per-peer prefix -> community-set map via thrift. "Tested peers
         # receive" (test semantics) = "DUT advertised to them" (DUT-side mirror).
         try:
-            per_peer: t.Dict[str, t.Dict[t.Any, t.FrozenSet[str]]] = {}
+            per_peer = {}
             for peer_addr in all_peer_addrs:
                 # pyrefly: ignore [missing-attribute]
                 mapping = await self.driver.async_get_postfilter_advertised_networks(
@@ -236,6 +274,15 @@ class BgpReceivedRouteCommunityHealthCheck(
         anchor_community = check_params.get("anchor_community")
         forbidden_communities = check_params.get("forbidden_communities") or []
         address_family = check_params.get("address_family", "ipv6")
+        sender_peer_addr = check_params.get("sender_peer_addr")
+
+        # adj-RIB-IN mode has no native EOS CLI equivalent (EOS
+        # ``show ip bgp neighbors <peer> received-routes`` doesn't surface
+        # the same prefilter view as bgpcpp's ``getPrefilterReceivedNetworks``).
+        # Always delegate to the thrift path on _run, which is correct for
+        # both ARISTA_FBOSS (bgpcpp running on EOS-host) and pure FBOSS.
+        if sender_peer_addr:
+            return await self._run(obj, input, check_params)
 
         if not baseline_peer_addr or not tested_peer_addrs:
             return hc_types.HealthCheckResult(
