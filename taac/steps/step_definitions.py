@@ -327,6 +327,188 @@ def create_verify_bgp_sent_route_count_delta_step(
     return create_custom_step(params_dict=params, description=description)
 
 
+def create_snapshot_ixia_bgp_rx_stats_step(
+    hostname: str,
+    interface: str,
+    snapshot_key: str,
+    description: t.Optional[str] = None,
+) -> Step:
+    """Snapshot IXIA-side wire-received BGP counters (Rx Total Messages,
+    Rx Updates, Routes Rx) on the given DUT-facing port. Pair with
+    ``create_verify_ixia_bgp_rx_stats_delta_step`` to assert DUT sent
+    updates on wire during a test window. Bypasses DUT-side egress-
+    policy blind spots (spec 2.3.1 wire-side observability)."""
+    if description is None:
+        description = (
+            f"Snapshot IXIA-side wire BGP RX stats on {hostname}:{interface} "
+            f"(key={snapshot_key})"
+        )
+    return create_custom_step(
+        params_dict={
+            "custom_step_name": "snapshot_ixia_bgp_rx_stats",
+            "hostname": hostname,
+            "interface": interface,
+            "snapshot_key": snapshot_key,
+        },
+        description=description,
+    )
+
+
+def create_verify_ixia_bgp_rx_stats_delta_step(
+    hostname: str,
+    interface: str,
+    snapshot_key: str,
+    min_rx_delta: int = 1,
+    counter_name: str = "rx_total_messages",
+    description: t.Optional[str] = None,
+) -> Step:
+    """Verify IXIA-side wire-received BGP ``counter_name`` grew by at
+    least ``min_rx_delta`` since the matching snapshot. Proves DUT
+    actively sent BGP traffic to fast peers on-wire during storm --
+    spec 2.3.1 wire-side observability that works even under restrictive
+    DUT egress policy (keepalives always pass)."""
+    if description is None:
+        description = (
+            f"Verify IXIA-side wire BGP {counter_name} delta >= "
+            f"{min_rx_delta} on {hostname}:{interface} "
+            f"(key={snapshot_key})"
+        )
+    return create_custom_step(
+        params_dict={
+            "custom_step_name": "verify_ixia_bgp_rx_stats_delta",
+            "hostname": hostname,
+            "interface": interface,
+            "snapshot_key": snapshot_key,
+            "min_rx_delta": min_rx_delta,
+            "counter_name": counter_name,
+        },
+        description=description,
+    )
+
+
+def create_snapshot_peer_egress_stats_step(
+    hostname: str,
+    peer_addrs: t.List[str],
+    snapshot_key: str,
+    description: t.Optional[str] = None,
+) -> Step:
+    """Snapshot per-peer ``TPeerEgressStats`` backpressure counters
+    (``adjribout_queue_blocks``, ``send_queue_blocks``,
+    ``total_async_socket_buffered``) for later delta verification via
+    ``create_verify_backpressure_observed_step``. DUT-internal signal --
+    works regardless of egress-policy filtering that would blind a wire-
+    side probe (spec 2.3.1)."""
+    if description is None:
+        description = (
+            f"Snapshot per-peer egress stats on {hostname} for "
+            f"{len(peer_addrs)} peer(s) (key={snapshot_key})"
+        )
+    return create_custom_step(
+        params_dict={
+            "custom_step_name": "snapshot_peer_egress_stats",
+            "hostname": hostname,
+            "peer_addrs": list(peer_addrs),
+            "snapshot_key": snapshot_key,
+        },
+        description=description,
+    )
+
+
+def create_verify_backpressure_observed_step(
+    hostname: str,
+    peer_addrs: t.List[str],
+    snapshot_key: str,
+    min_peers_with_block: int = 1,
+    description: t.Optional[str] = None,
+) -> Step:
+    """Verify at least ``min_peers_with_block`` of ``peer_addrs`` show an
+    ``adjribout_queue_blocks`` delta > 0 since the matching snapshot. Spec
+    2.3.1 pre-condition: the storm actually stressed DUT's UG send path.
+    If this fires with 0 blocks the workload didn't induce backpressure
+    and the rest of the 2.3.1 asymmetry assertion is not meaningfully
+    testable."""
+    if description is None:
+        description = (
+            f"Verify backpressure observed on {hostname}: >= "
+            f"{min_peers_with_block} of {len(peer_addrs)} peer(s) with "
+            f"adjribout_queue_blocks delta (key={snapshot_key})"
+        )
+    return create_custom_step(
+        params_dict={
+            "custom_step_name": "verify_backpressure_observed",
+            "hostname": hostname,
+            "peer_addrs": list(peer_addrs),
+            "snapshot_key": snapshot_key,
+            "min_peers_with_block": min_peers_with_block,
+        },
+        description=description,
+    )
+
+
+def create_verify_ug_queue_recovered_step(
+    hostname: str,
+    peer_addrs: t.List[str],
+    max_queue_size: int = 0,
+    num_samples: int = 3,
+    sample_interval_s: float = 10,
+    description: t.Optional[str] = None,
+) -> Step:
+    """Verify per-peer ``total_async_socket_buffered`` <= ``max_queue_size``
+    PERSISTENTLY across ``num_samples`` samples ``sample_interval_s`` apart.
+    Spec 2.3.1 "no peer PERMANENTLY stuck" — a transient in-flight byte at
+    one instant is normal traffic, not stuck state. Only peers > max in
+    EVERY sample fail. No tolerance knob — strict spec loyalty."""
+    if description is None:
+        description = (
+            f"Verify UG queues recovered on {hostname}: {len(peer_addrs)} "
+            f"peer(s) persistently <= {max_queue_size} across "
+            f"{num_samples} samples ({sample_interval_s}s apart)"
+        )
+    return create_custom_step(
+        params_dict={
+            "custom_step_name": "verify_ug_queue_recovered",
+            "hostname": hostname,
+            "peer_addrs": list(peer_addrs),
+            "max_queue_size": max_queue_size,
+            "num_samples": num_samples,
+            "sample_interval_s": sample_interval_s,
+        },
+        description=description,
+    )
+
+
+def create_verify_fast_peer_queue_shallower_step(
+    hostname: str,
+    fast_peer_addrs: t.List[str],
+    slow_peer_addrs: t.List[str],
+    snapshot_key: str,
+    min_delta: float = 0,
+    description: t.Optional[str] = None,
+) -> Step:
+    """Verify avg ``adjribout_queue_blocks`` DELTA on ``fast_peer_addrs``
+    is at least ``min_delta`` less than avg DELTA on ``slow_peer_addrs``
+    since the matching ``snapshot_peer_egress_stats`` step (spec 2.3.1
+    central claim -- run mid-storm). Positive delta proves DUT blocks
+    on slow peers MORE than fast peers within the same UG."""
+    if description is None:
+        description = (
+            f"Verify fast peers shallower than slow peers on {hostname} "
+            f"(fast={len(fast_peer_addrs)}, slow={len(slow_peer_addrs)}, "
+            f"key={snapshot_key}, min_delta={min_delta})"
+        )
+    return create_custom_step(
+        params_dict={
+            "custom_step_name": "verify_fast_peer_queue_shallower",
+            "hostname": hostname,
+            "fast_peer_addrs": list(fast_peer_addrs),
+            "slow_peer_addrs": list(slow_peer_addrs),
+            "snapshot_key": snapshot_key,
+            "min_delta": min_delta,
+        },
+        description=description,
+    )
+
+
 def create_verify_dut_received_from_peer_group_step(
     hostname: str,
     sender_peer_addr_prefix: str,
@@ -2183,19 +2365,26 @@ def create_register_port_channel_min_link_percentage_patcher_step(
 def create_modify_bgp_prefixes_origin_value_step(
     prefix_pool_regex: str,
     prefix_start_index: int,
-    origin_value: str,
+    origin_value: t.Optional[str] = None,
     prefix_end_index: t.Optional[int] = None,
     description: t.Optional[str] = None,
+    origin_values: t.Optional[t.List[str]] = None,
 ) -> Step:
-    """
-    Create a step to modify BGP prefix origin value.
+    """Create a step to modify BGP prefix origin value.
+
+    Supply either ``origin_value`` (scalar, applied uniformly) OR
+    ``origin_values`` (list, cycled per-slot for spec-loyal per-prefix
+    variety). ``origin_values`` takes precedence when both are set.
 
     Args:
         prefix_pool_regex: Regex pattern to match prefix pool names
         prefix_start_index: Starting index for prefix modification
-        origin_value: Origin value to set (e.g., "igp", "egp", "incomplete")
+        origin_value: Single origin value to broadcast (e.g., "igp")
         prefix_end_index: Ending index for prefix modification (optional)
         description: Custom description for the step
+        origin_values: List of origin values to cycle per-slot (e.g.,
+            ``["igp", "egp", "incomplete"]``). Enables spec 2.3.x
+            "random Origin per route" without touching the thrift enum.
 
     Returns:
         Step object for BGP prefix origin value modification
@@ -2207,8 +2396,11 @@ def create_modify_bgp_prefixes_origin_value_step(
     params_dict: t.Dict[str, t.Any] = {
         "prefix_pool_regex": prefix_pool_regex,
         "prefix_start_index": prefix_start_index,
-        "origin_value": origin_value,
     }
+    if origin_values:
+        params_dict["origin_values"] = list(origin_values)
+    else:
+        params_dict["origin_value"] = origin_value or "igp"
 
     if prefix_end_index is not None:
         params_dict["prefix_end_index"] = prefix_end_index
@@ -2293,6 +2485,33 @@ def create_change_as_path_length_step(
     )
 
 
+def create_configure_bgp_peer_tcp_window_size_step(
+    hostname: str,
+    interface: str,
+    device_group_regex: str,
+    tcp_window_size_bytes: int,
+    description: t.Optional[str] = None,
+) -> Step:
+    """Reduce TCP receive window on all Ethernet stacks in DGs matching
+    ``device_group_regex`` to induce DUT adj-RIB-out backpressure on the
+    slow-peer subset (spec 2.3.1 fast/slow asymmetry test)."""
+    if description is None:
+        description = (
+            f"Throttle TCP WindowSize={tcp_window_size_bytes} on IXIA "
+            f"DGs matching {device_group_regex!r} on {hostname}:{interface}"
+        )
+    return create_ixia_api_step(
+        api_name="configure_bgp_peer_tcp_window_size",
+        args_dict={
+            "hostname": hostname,
+            "interface": interface,
+            "device_group_regex": device_group_regex,
+            "tcp_window_size_bytes": tcp_window_size_bytes,
+        },
+        description=description,
+    )
+
+
 def create_configure_as_path_pool_step(
     device_name: str,
     interface: str,
@@ -2315,7 +2534,7 @@ def create_configure_as_path_pool_step(
         stop_protocols: Whether the IXIA wrapper should call ``stop_protocols()``
             before the config write (default: True). Default preserves legacy
             behavior. Set to False ONLY when the caller knows the topology can
-            absorb the config change in-place — the unconditional stop in
+            absorb the config change in-place -- the unconditional stop in
             ``ixia.py::configure_as_path_pool`` can cascade-reset every BGP TCP
             session on the chassis at scale.
 
@@ -2358,7 +2577,7 @@ def create_configure_community_pool_step(
         stop_protocols: Whether the IXIA wrapper should call ``stop_protocols()``
             before the config write (default: True). Default preserves legacy
             behavior. Set to False ONLY when the caller knows the topology can
-            absorb the config change in-place — the unconditional stop in
+            absorb the config change in-place -- the unconditional stop in
             ``ixia.py::configure_community_pool`` can cascade-reset every BGP TCP
             session on the chassis at scale.
 
@@ -2401,7 +2620,7 @@ def create_configure_extended_community_pool_step(
         stop_protocols: Whether the IXIA wrapper should call ``stop_protocols()``
             before the config write (default: True). Default preserves legacy
             behavior. Set to False ONLY when the caller knows the topology can
-            absorb the config change in-place — the unconditional stop in
+            absorb the config change in-place -- the unconditional stop in
             ``ixia.py::configure_extended_community_pool`` can cascade-reset
             every BGP TCP session on the chassis at scale.
 

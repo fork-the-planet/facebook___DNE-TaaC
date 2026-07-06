@@ -53,6 +53,10 @@ from taac.testconfigs.routing.ebb.bag012_ash6_test_config import (
     BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_UPDATE_GROUP_CONFIG,
     BGP_UG_NEW_PEER_JOIN_TEST_CONFIG,
 )
+from taac.testconfigs.routing.ebb.bag013_ash6_backpressure_test_config import (
+    BGP_UG_BACKPRESSURE_TEST_CONFIG,
+    BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG,
+)
 from taac.testconfigs.routing.ebb.bag013_ash6_test_config import (
     BAG013_ASH6_CONVEYOR_TEST_CONFIG,
     BAG013_ASH6_CONVEYOR_TEST_UPDATE_GROUP_CONFIG,
@@ -134,6 +138,14 @@ EBB_BGP_PLUS_PLUS_CONVEYOR_NODE_TEST_CONFIGS = [
     # 21-eBGP + 4-iBGP testbed). Ad-hoc; not yet wired into a conveyor stage
     # (do NOT schedule until manually verified on the device).
     BGP_UG_NEW_PEER_JOIN_TEST_CONFIG,
+    # BGP++ UG Backpressure & Blocking Behavior qualification (specs 2.3.1 +
+    # 2.3.2 + 2.3.3 + 2.3.4 combined into one TestConfig with 4 playbooks
+    # sharing the EBB full-scale topology on bag013). Ad-hoc; not in conveyor.
+    BGP_UG_BACKPRESSURE_TEST_CONFIG,
+    # Topology-smoke sibling -- 30-min longevity hold on the same testbed,
+    # paired with --skip-teardown --skip-ixia-cleanup so the DUT + IXIA
+    # session stay live for hands-on inspection. Ad-hoc; not in conveyor.
+    BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG,
     # bag013.ash6 (ad-hoc, not in conveyor stages).
     # ``_UPDATE_GROUP`` variant adds the Update Group qualification 2.7.2
     # sustained-link-flap playbook (rotates flapping the 3 IXIA ports on

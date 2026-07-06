@@ -179,13 +179,21 @@ class IxiaModifyBgpPrefixesOriginValue(BaseTask):
         prefix_pool_regex = params["prefix_pool_regex"]
         prefix_start_index = params.get("prefix_start_index", 0)
         prefix_end_index = params.get("prefix_end_index")
-        origin_value = params["origin_value"]
+        # Either single scalar (legacy) or list-of-strings for per-slot cycling.
+        # ``origin_values`` (list) takes precedence when supplied; otherwise
+        # fall back to ``origin_value`` (single scalar broadcast).
+        origin_values = params.get("origin_values")
+        origin_value = params.get("origin_value")
         prefix_pool_obj_list = self.ixia.get_prefix_pools_by_regexes(
             prefix_pool_regex=prefix_pool_regex
         )
         for prefix_pool_obj in prefix_pool_obj_list:
             self.configure_bgp_prefix_origin_value(
-                prefix_pool_obj, origin_value, prefix_start_index, prefix_end_index
+                prefix_pool_obj,
+                origin_value,
+                prefix_start_index,
+                prefix_end_index,
+                origin_values=origin_values,
             )
         self.ixia.apply_changes()
 
@@ -193,9 +201,10 @@ class IxiaModifyBgpPrefixesOriginValue(BaseTask):
     def configure_bgp_prefix_origin_value(
         self,
         prefix_pool_obj,
-        origin_value: str,
+        origin_value: t.Optional[str],
         prefix_start_index: int = 0,
         prefix_end_index: t.Optional[int] = None,
+        origin_values: t.Optional[t.List[str]] = None,
     ) -> None:
         bgp_ip_route_property = (
             (prefix_pool_obj.BgpIPRouteProperty.find())
@@ -213,11 +222,21 @@ class IxiaModifyBgpPrefixesOriginValue(BaseTask):
         for i in range(prefix_pool_obj.Count):
             mod = i % network_group_multiplier
             if mod >= prefix_start_index and mod < prefix_pool_prefix_end_index:
-                origin_value_list[i] = origin_value
+                if origin_values:
+                    # Cycle through supplied list -- gives spec-loyal per-slot
+                    # variety (e.g. ``["igp", "egp", "incomplete"]``) which
+                    # exercises the DUT's per-prefix Origin handling in the
+                    # heavy-attr storm.
+                    origin_value_list[i] = origin_values[
+                        (mod - prefix_start_index) % len(origin_values)
+                    ]
+                else:
+                    origin_value_list[i] = origin_value
         bgp_ip_route_property.Origin.ValueList(origin_value_list)
+        applied = f"cycling {origin_values}" if origin_values else f"= {origin_value}"
         self.logger.info(
             f"Configured origin of prefixes in range {prefix_start_index} - {prefix_pool_prefix_end_index}"
-            f" to {origin_value} for {prefix_pool_obj.Name}"
+            f" ({applied}) for {prefix_pool_obj.Name}"
         )
 
 

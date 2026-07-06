@@ -6840,6 +6840,115 @@ class Ixia:
             self.logger.warning(f"Error configuring AS path pool: {str(e)}")
 
     @external_api
+    def configure_bgp_peer_tcp_window_size(
+        self,
+        hostname: str,
+        interface: str,
+        device_group_regex: str,
+        tcp_window_size_bytes: int,
+    ) -> int:
+        """Reduce the TCP receive window on every BGP peer under DeviceGroups
+        matching ``device_group_regex`` to ``tcp_window_size_bytes``. Used to
+        induce DUT adj-RIB-out backpressure on a subset of BGP peers (spec-
+        loyal fast/slow asymmetry test) -- IxNetwork BGP peers otherwise drain
+        at line rate and DUT's send path never fills, so the "fast peers not
+        held back by slow peers" spec claim isn't naturally testable.
+
+        The write targets ``BgpIpv6Peer.TcpWindowSizeInBytes`` /
+        ``BgpIpv4Peer.TcpWindowSizeInBytes`` directly (verified 2026-07-02 on
+        bag013 -- ``Ethernet.Tcp`` doesn't exist; the only tcp-shaped attr on
+        the peer is ``TcpWindowSizeInBytes``). It calls neither
+        ``stop_protocols()`` nor ``apply_changes()`` and is safe to run mid-
+        storm; callers issue ``apply_changes`` themselves.
+
+        Args:
+            device_group_regex: Regex matching DGs whose peers should be
+                throttled (e.g. r"^DEVICE_GROUP_IPV6_EBGP_SLOW$").
+            tcp_window_size_bytes: New TCP window size in bytes. Use ~1500 to
+                force flow-control on every UPDATE.
+
+        Returns:
+            Number of peers on which the write succeeded.
+
+        Raises:
+            RuntimeError: If ``device_group_regex`` matched at least one DG
+                but the write did not succeed on any peer (framework failure
+                or malformed IxNetwork tree). Silently returning 0 would let
+                the downstream storm phase proceed unthrottled and produce
+                trivially-passing fast/slow-asymmetry gates.
+        """
+        device_groups = self.find_device_groups(regex=device_group_regex)
+        if not device_groups:
+            self.logger.warning(
+                f"[configure_bgp_peer_tcp_window_size] no DGs match "
+                f"regex={device_group_regex!r}"
+            )
+            return 0
+        touched = 0
+        for dg in device_groups:
+            for ethernet in dg.Ethernet.find():
+                touched += self._write_tcp_window_on_peers(
+                    peers=(
+                        peer
+                        for ipv6 in ethernet.Ipv6.find()
+                        for peer in ipv6.BgpIpv6Peer.find()
+                    ),
+                    dg_name=dg.Name,
+                    ip_family="v6",
+                    tcp_window_size_bytes=tcp_window_size_bytes,
+                )
+                touched += self._write_tcp_window_on_peers(
+                    peers=(
+                        peer
+                        for ipv4 in ethernet.Ipv4.find()
+                        for peer in ipv4.BgpIpv4Peer.find()
+                    ),
+                    dg_name=dg.Name,
+                    ip_family="v4",
+                    tcp_window_size_bytes=tcp_window_size_bytes,
+                )
+        if touched == 0:
+            raise RuntimeError(
+                f"[configure_bgp_peer_tcp_window_size] regex="
+                f"{device_group_regex!r} matched {len(device_groups)} DG(s) "
+                f"but no peer accepted the TcpWindowSizeInBytes="
+                f"{tcp_window_size_bytes} write -- either the IxNetwork tree "
+                f"has no BgpIpv6Peer/BgpIpv4Peer children under the matched "
+                f"DGs, or every write raised. Downstream fast/slow-asymmetry "
+                f"gates would trivially pass without throttling."
+            )
+        return touched
+
+    def _write_tcp_window_on_peers(
+        self,
+        *,
+        peers,
+        dg_name: str,
+        ip_family: str,
+        tcp_window_size_bytes: int,
+    ) -> int:
+        """Write ``TcpWindowSizeInBytes`` on each peer, logging (but tolerating)
+        per-peer failures. Returns the number of successful writes.
+        """
+        touched = 0
+        for peer in peers:
+            try:
+                peer.TcpWindowSizeInBytes.Single(tcp_window_size_bytes)
+                touched += 1
+                self.logger.info(
+                    f"[configure_bgp_peer_tcp_window_size] set "
+                    f"TcpWindowSizeInBytes={tcp_window_size_bytes} on "
+                    f"DG={dg_name!r} {ip_family} Peer={peer.Name!r}"
+                )
+            except AttributeError as inner:
+                self.logger.warning(
+                    f"[configure_bgp_peer_tcp_window_size] "
+                    f"TcpWindowSizeInBytes not present on DG={dg_name!r} "
+                    f"{ip_family} Peer={peer.Name!r}: {inner!s}"
+                )
+        return touched
+
+    @external_api
     def configure_community_pool(
         self,
         hostname: str,

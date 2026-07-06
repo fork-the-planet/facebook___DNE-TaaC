@@ -114,22 +114,23 @@ class FastPeersNotHeldBackPlaybookTest(unittest.TestCase):
 
     def test_storm_stage_skips_pool_config_and_emits_advertise(self):
         """Since 2026-06-29 ``_heavy_attr_advertise_steps`` defaults to
-        ``skip_pool_config=True``: the three ``configure_*_pool`` steps are
-        OMITTED from the trigger because they cascade-reset every BGP TCP
-        session on the EBB-scale chassis (root cause: unconditional
+        ``skip_pool_config=True``: the two chassis-cascading
+        ``configure_*_pool`` steps (community + ext-community) are OMITTED
+        from the trigger because they cascade-reset every BGP TCP session
+        on the EBB-scale chassis (root cause: unconditional
         ``stop_protocols()`` in ixia.py). Pools are pre-attached at IXIA-
         build time via ``plane_drain_dg_v6_attribute_overrides`` on the
-        topology builder. Per-prefix MED/LP/Origin randomization stays in
-        the trigger (different IXIA API, no port-level stop). Storm advertise
-        stays. AS_PATH pool config is intentionally dropped (the
-        ``BgpAttribute`` thrift enum doesn't expose AS_PATH for build-time
-        pre-attach -- spec gap, see project memory)."""
+        topology builder. Per-prefix MED/LP/Origin cycling stays in the
+        trigger (different IXIA API, no port-level stop). AS_PATH pool
+        config is now emitted with ``stop_protocols=False`` scoped to only
+        the storm sender DG, closing the 255-ASN spec gap without cascade."""
         storm = self.playbook.stages[0]
-        # POSITIVE: trigger MUST contain MED/LP/Origin randomization + advertise.
+        # POSITIVE: trigger MUST contain MED/LP/Origin cycling + AS_PATH + advertise.
         for label, needle in (
             ("randomize MED", "randomize med"),
             ("randomize LocalPref", "randomize localpref"),
-            ("set Origin", "set origin="),
+            ("cycle Origin", "cycle origin"),
+            ("targeted AS_PATH", "set as_path"),
             ("storm advertise", "heavy-attr storm"),
         ):
             hits = _steps_by_desc(storm, needle)
@@ -138,7 +139,6 @@ class FastPeersNotHeldBackPlaybookTest(unittest.TestCase):
         for label, needle in (
             ("community pool config", "set 32 community combinations"),
             ("ext-community pool config", "set 16 ext-community combinations"),
-            ("AS_PATH pool config", "set as_path"),
         ):
             hits = _steps_by_desc(storm, needle)
             self.assertEqual(
@@ -241,7 +241,11 @@ class WithdrawAttrChangePlaybookTest(unittest.TestCase):
     WITHDRAW = 200
     LP_MODIFY = 100
     INITIAL_COMMUNITY = "65529:34814"
-    MUTATED_COMMUNITY = "65529:99999"
+    # 16-bit RFC 1997 low field (0..65535); IXIA silently truncates values
+    # above 65535 (99999 % 65536 = 34463), landing an unexpected on-wire
+    # value. Kept in-range to match bag013's production config, which was
+    # moved off "65529:99999" for the same reason.
+    MUTATED_COMMUNITY = "65529:1234"
     TARGET_LP = 200
 
     def setUp(self):
@@ -334,7 +338,11 @@ class WithdrawAttrChangeCascadeSafePlaybookTest(unittest.TestCase):
     WITHDRAW = 200
     LP_MODIFY = 100
     INITIAL_COMMUNITY = "65529:34814"
-    MUTATED_COMMUNITY = "65529:99999"
+    # 16-bit RFC 1997 low field (0..65535); IXIA silently truncates values
+    # above 65535 (99999 % 65536 = 34463), landing an unexpected on-wire
+    # value. Kept in-range to match bag013's production config, which was
+    # moved off "65529:99999" for the same reason.
+    MUTATED_COMMUNITY = "65529:1234"
     TARGET_LP = 200
 
     def setUp(self):
@@ -410,6 +418,146 @@ class WithdrawAttrChangeCascadeSafePlaybookTest(unittest.TestCase):
             if "withdraw ibgp storm prefixes" in (s.description or "").lower()
         ]
         self.assertEqual(len(withdraw_storm), 1)
+
+
+class WithdrawAttrChangePeerScopedPlaybookTest(unittest.TestCase):
+    """2.3.3 with ``use_peer_scoped_community_swap=True`` (and
+    ``skip_community_swap_for_cascade_safety=False``) -- the EBB full-scale
+    path used by bag013 once the peer-scoped ``ixia_modify_communities``
+    task is available. Phase 2c uses RUN_TASK_STEP(ixia_modify_communities,
+    community_values=[mutated]) instead of the cascade-prone
+    INVOKE_IXIA_API_STEP(configure_community_pool); cleanup mirrors with
+    the same task but ``community_values=[initial]``. The inline Phase 3
+    spec gate VALIDATION_STEP is appended to trigger_steps BEFORE cleanup
+    so the community-anchor postcheck sees mutated state (cleanup reverts
+    it before postchecks run)."""
+
+    IBGP_STORM = 5000
+    EBGP_POOL_COUNT = 400
+    WITHDRAW = 200
+    LP_MODIFY = 100
+    INITIAL_COMMUNITY = "65529:34814"
+    # 16-bit RFC 1997 low field (0..65535); IXIA silently truncates values
+    # above 65535 (99999 % 65536 = 34463), landing an unexpected on-wire
+    # value. Kept in-range to match bag013's production config, which was
+    # moved off "65529:99999" for the same reason.
+    MUTATED_COMMUNITY = "65529:1234"
+    TARGET_LP = 200
+
+    def setUp(self):
+        self.playbook = create_ug_backpressure_withdraw_attr_change_playbook(
+            device_name=DEVICE,
+            ixia_interface=IFACE,
+            ibgp_storm_prefix_pool_regex=STORM_POOL,
+            ibgp_storm_device_group_regex=STORM_DG,
+            ibgp_storm_prefix_count=self.IBGP_STORM,
+            community_combinations=COMMUNITIES_32,
+            extended_community_combinations=EXT_COMMUNITIES_16,
+            as_path=AS_PATH_255,
+            ebgp_attr_change_prefix_pool_regex=EBGP_POOL,
+            ebgp_attr_change_device_group_regex=EBGP_DG,
+            ebgp_attr_change_prefix_count=self.EBGP_POOL_COUNT,
+            withdraw_count=self.WITHDRAW,
+            lp_modify_count=self.LP_MODIFY,
+            initial_community=self.INITIAL_COMMUNITY,
+            mutated_community=self.MUTATED_COMMUNITY,
+            target_local_pref=self.TARGET_LP,
+            ibgp_receiver_peer_addrs=IBGP_PEERS,
+            expected_established_sessions=10,
+            memory_threshold_bytes=MEMORY_THRESHOLD,
+            skip_community_swap_for_cascade_safety=False,
+            use_peer_scoped_community_swap=True,
+        )
+
+    def _peer_scoped_swap_steps(self, steps, expected_value):
+        """Filter to RUN_TASK_STEPs that swap community via
+        ``ixia_modify_communities`` with the given ``community_values[0]``."""
+        out = []
+        for s in steps or []:
+            task_name, params = _run_task_args(s)
+            if task_name != "ixia_modify_communities":
+                continue
+            if (params.get("community_values") or [None])[0] != expected_value:
+                continue
+            out.append((s, params))
+        return out
+
+    def test_phase_2c_uses_peer_scoped_task_not_cascade_api(self):
+        """Phase 2c MUST route through RUN_TASK_STEP(ixia_modify_communities)
+        with ``community_values=[mutated_community]`` -- NOT the chassis-wide
+        ``configure_community_pool`` API step. Regression here means we lost
+        the cascade-safe path and would reset all BGP sessions on the chassis."""
+        trigger = self.playbook.stages[0]
+        swap = self._peer_scoped_swap_steps(trigger.steps, self.MUTATED_COMMUNITY)
+        self.assertEqual(
+            len(swap),
+            1,
+            "expected exactly 1 peer-scoped ixia_modify_communities Phase 2c "
+            "swap with community_values=[mutated_community]",
+        )
+        _, params = swap[0]
+        self.assertEqual(params.get("prefix_pool_regex"), EBGP_POOL)
+        self.assertEqual(params.get("count"), 0)
+        self.assertEqual(params.get("to_add"), True)
+        # No cascade-prone configure_community_pool step on the trigger.
+        cascade_hits = _steps_by_desc(trigger, "swap ebgp dg community pool")
+        self.assertEqual(
+            len(cascade_hits),
+            0,
+            "regression: chassis-wide configure_community_pool swap step "
+            "re-emerged in peer-scoped mode; would cascade-reset all sessions",
+        )
+
+    def test_inline_phase_3_spec_gate_validation_step_present(self):
+        """An inline VALIDATION_STEP must run AFTER Phase 2c swap and BEFORE
+        cleanup reverts the community — otherwise the community-anchor
+        postcheck only sees the reverted state and can never pass."""
+        trigger = self.playbook.stages[0]
+        inline_gate = _steps_by_desc(
+            trigger, "phase 3 inline trigger-verification gate"
+        )
+        self.assertEqual(
+            len(inline_gate),
+            1,
+            "regression: inline community-anchor VALIDATION_STEP missing — "
+            "postcheck-time HC will fail because Phase 4 cleanup reverts "
+            "the mutated community before postchecks run",
+        )
+        # The inline gate must come AFTER the Phase 2c swap step.
+        swap = self._peer_scoped_swap_steps(trigger.steps, self.MUTATED_COMMUNITY)
+        self.assertEqual(
+            len(swap),
+            1,
+            "expected exactly 1 peer-scoped Phase 2c swap step -- IndexError "
+            "on swap[0][0] below would obscure the real 'swap missing' cause",
+        )
+        idx = {step: i for i, step in enumerate(trigger.steps or [])}
+        self.assertLess(idx[swap[0][0]], idx[inline_gate[0]])
+
+    def test_cleanup_uses_peer_scoped_restore_not_cascade_api(self):
+        """Cleanup MUST also route through RUN_TASK_STEP(ixia_modify_communities)
+        with ``community_values=[initial_community]`` -- symmetric with Phase 2c."""
+        cleanup = self.playbook.cleanup_steps or []
+        restore = self._peer_scoped_swap_steps(cleanup, self.INITIAL_COMMUNITY)
+        self.assertEqual(
+            len(restore),
+            1,
+            "expected exactly 1 peer-scoped ixia_modify_communities cleanup "
+            "restore with community_values=[initial_community]",
+        )
+        # And the cascade-prone restore is NOT present.
+        cascade_restore = [
+            s
+            for s in cleanup
+            if "restore ebgp dg community to" in (s.description or "").lower()
+            and (_run_task_args(s)[0] or "") != "ixia_modify_communities"
+        ]
+        self.assertEqual(
+            len(cascade_restore),
+            0,
+            "regression: chassis-wide configure_community_pool restore "
+            "re-emerged in peer-scoped cleanup; would cascade",
+        )
 
 
 class AllPeersBlockDownRecoverPlaybookTest(unittest.TestCase):

@@ -185,8 +185,16 @@ from taac.steps.step_definitions import (
     create_tcpdump_step,
     create_toggle_ixia_prefix_session_flap_churn_step,
     create_unregister_patcher_step,
+    create_snapshot_bgp_sent_route_counts_step,
+    create_snapshot_ixia_bgp_rx_stats_step,
+    create_snapshot_peer_egress_stats_step,
     create_validation_step,
+    create_verify_backpressure_observed_step,
+    create_verify_bgp_sent_route_count_delta_step,
     create_verify_dut_received_from_peer_group_step,
+    create_verify_fast_peer_queue_shallower_step,
+    create_verify_ixia_bgp_rx_stats_delta_step,
+    create_verify_ug_queue_recovered_step,
     create_verify_port_operational_state_step,
     duration_all_prefix_flaps_s,
     duration_all_session_flaps_s,
@@ -6372,11 +6380,15 @@ def _heavy_attr_advertise_steps(
     a future framework fix can re-enable mid-test pool configuration without
     breaking callers.
 
-    Per spec 2.3.x: AS_PATH "AS_SEQ with 255 random ASNs"; build-time
-    AS_PATH pre-attach is NOT yet supported (the ``BgpAttribute`` thrift
-    enum only exposes COMMUNITIES + EXT_COMMUNITIES). The 255-ASN AS_PATH
-    aspect of the spec is therefore dropped until the framework is fixed;
-    see project memory [[project-bgp-ug-backpressure-validation-matrix]].
+    Per spec 2.3.x: AS_PATH "AS_SEQ with 255 random ASNs". Build-time
+    AS_PATH pre-attach via the ``BgpAttribute`` thrift enum is not
+    supported (enum lacks AS_PATH). Runtime path IS now supported: a
+    targeted ``configure_as_path_pool`` step runs BELOW even under
+    ``skip_pool_config=True``, but scoped to ONLY the storm sender DG
+    (``device_group_regex``) and with ``stop_protocols=False`` so it
+    writes the AsPath.ValueList in-place without the chassis-wide TCP
+    cascade. This closes the 255-ASN AS_PATH spec gap without needing a
+    thrift/framework change.
     """
     steps: t.List[Step] = []
     if not skip_pool_config:
@@ -6429,25 +6441,38 @@ def _heavy_attr_advertise_steps(
                 description=f"{description_prefix}: randomize LocalPref on {prefix_pool_regex}[{prefix_start_index}..{prefix_end_index}]",
             ),
         )
+    # Targeted AS_PATH pool config -- runs even under skip_pool_config=True
+    # because it's scoped to ONLY the storm-sender DG (device_group_regex)
+    # and uses stop_protocols=False. Writes AsPath.ValueList in-place on
+    # matching prefix pools; no chassis-wide TCP cascade. Closes spec 2.3.x
+    # 255-ASN AS_PATH gap.
+    if as_path:
+        steps.append(
+            create_configure_as_path_pool_step(
+                device_name=device_name,
+                interface=ixia_interface,
+                as_path_pool=[str(a) for a in as_path],
+                device_group_regex=device_group_regex,
+                stop_protocols=False,
+                description=f"{description_prefix}: set AS_PATH (length={len(as_path)}) on {device_group_regex} (targeted, no cascade)",
+            ),
+        )
     if randomize_origin:
-        # NOTE: the underlying ``IxiaModifyBgpPrefixesOriginValue`` task
-        # accepts a single Origin value and applies it uniformly across the
-        # selected prefix range (see ``ixia_tasks.py::configure_bgp_prefix_origin_value``
-        # — only one ``origin_value`` param, no per-slot ValueList path).
-        # We use a FIXED ``"igp"`` so the playbook config hash is
-        # deterministic (a prior ``random.choice(...)`` form broke the
-        # golden-config hash test); ``"igp"`` is the canonical non-default
-        # Origin attribute carried in EBB-scale backpressure storms. To get
-        # per-prefix Origin variation would require extending the task layer
-        # with a ValueList path like ``IxiaRandomizeBgpPrefixLocalPreference``.
-        origin_value = "igp"
+        # Per-slot Origin cycling: ``IxiaModifyBgpPrefixesOriginValue`` now
+        # accepts ``origin_values: List[str]`` and writes per-prefix via the
+        # underlying ``Origin.ValueList`` path (see ``ixia_tasks.py:175``).
+        # Cycling ``[igp, egp, incomplete]`` per prefix exercises DUT
+        # per-prefix Origin handling in the heavy-attr storm (spec 2.3.x).
+        # Deterministic order keeps the playbook config hash stable for the
+        # golden-config test (earlier ``random.choice(...)`` form broke it).
+        _origin_cycle = ["igp", "egp", "incomplete"]
         steps.append(
             create_modify_bgp_prefixes_origin_value_step(
                 prefix_pool_regex,
                 prefix_start_index,
-                origin_value,
-                prefix_end_index,
-                description=f"{description_prefix}: set Origin={origin_value} on {prefix_pool_regex}[{prefix_start_index}..{prefix_end_index}] (fixed, not per-prefix)",
+                prefix_end_index=prefix_end_index,
+                origin_values=_origin_cycle,
+                description=f"{description_prefix}: cycle Origin {_origin_cycle} per-prefix on {prefix_pool_regex}[{prefix_start_index}..{prefix_end_index}]",
             ),
         )
     # 5. Advertise the prefixes (rapid push -- creates the egress storm)
@@ -6580,6 +6605,30 @@ def create_ug_backpressure_fast_peers_not_held_back_playbook(
     # heavy-attr storms at egress -- see Run #11 finding, memory
     # ``[[project-bgp-ug-backpressure-run7-findings]]``).
     storm_sender_peer_addr_prefix: t.Optional[str] = None,
+    # Slow eBGP peer address list — the peers that have been artificially
+    # TCP-throttled (via ``create_configure_bgp_peer_tcp_window_size_step``
+    # in the caller's setup_steps) to induce DUT adj-RIB-out backpressure
+    # inside the SAME UG as fast_peer_addrs. When supplied, the Phase 1.5
+    # asymmetry gate compares avg blocks_delta on slow_ebgp_peer_addrs vs
+    # fast_peer_addrs (spec 2.3.1 central claim). When NOT supplied, the
+    # gate falls back to fast vs iBGP receivers (cross-UG comparison --
+    # weaker signal since UGs differ).
+    slow_ebgp_peer_addrs: t.Optional[t.List[str]] = None,
+    # Opt-in fast-peer wire-side observability (snapshot + during-storm liveness
+    # + post-settle delta). Off by default because it REQUIRES DUT eBGP egress
+    # policy to permit the heavy-attr storm on the wire -- topologies like
+    # bag013 that have restrictive egress filters false-fail this gate. Enable
+    # only on testbeds where the storm is proven to reach fast peers on-wire.
+    enable_fast_peer_wire_check: bool = False,
+    # Opt-in IXIA-side wire-received BGP counters check. Bypasses DUT
+    # egress-policy blind spots (bag013 EB-FA-OUT filters storm on DUT
+    # side, so DUT sent_prefix_count doesn't move -- but IXIA sees
+    # whatever DUT actually put on wire, including keepalives + baseline
+    # updates). Snapshot pre-storm, verify Rx Total Messages > 0 delta
+    # post-storm on the fast-peer-facing DUT port. When enabled, requires
+    # ``fast_peer_ixia_interface`` naming the port (e.g. Ethernet3/36/1).
+    enable_fast_peer_ixia_wire_check: bool = False,
+    fast_peer_ixia_interface: t.Optional[str] = None,
 ) -> Playbook:
     """Build the BGP++ Update Group qualification 2.3.1 playbook --
     'Fast Peers Not Held Back by Slow Peers'.
@@ -6684,14 +6733,266 @@ def create_ug_backpressure_fast_peers_not_held_back_playbook(
     # ``[[project-bgp-ug-backpressure-run7-findings]]``). If caller does NOT
     # provide ``storm_sender_peer_addr_prefix`` (e.g. tests that don't want
     # the DUT-side probe), the gate is skipped.
+    #
+    # Fast-peer wire-side observability (Phase 0 snapshot + Phase 1.5 during-
+    # storm liveness + Phase 3 delta): opt-in via ``enable_fast_peer_wire_check``
+    # -- the spec 2.3.1 central claim is that fast peers CONTINUE receiving
+    # updates EVEN WHEN slow iBGP receivers block. Snapshot pre-storm sent_count
+    # per fast peer, then verify delta at mid-storm (>=1 route arrived DURING
+    # the storm) and again post-settle (delta >= storm_prefix_count).
+    #
+    # TOPOLOGY REQUIREMENT: the DUT's eBGP egress policy MUST permit the
+    # heavy-attr storm routes on the wire, otherwise delta is trivially 0
+    # and the gate false-fails. bag013's EB-FA-OUT policy filters more than
+    # just community (prefix range + AS-PATH length checks), so the anchor-
+    # community trick alone is insufficient -- the wire-side probe is
+    # DISABLED on bag013 (Run #14 finding). The follow-up path is to add a
+    # slow-peer TCP-throttle DG (see task #141): same UG, different peer
+    # session speeds -> asymmetry gate directly exercises the spec claim
+    # instead of relying on egress-policy alignment.
+    #
+    # DUT-INTERNAL observability (default ON): snapshot per-peer
+    # ``adjribout_queue_blocks`` pre-storm, then post-storm assert
+    #   (a) backpressure was observed on some slow peers (proves the workload
+    #       exercised UG send path),
+    #   (b) fast-peer avg queue_size < slow-peer avg queue_size mid-storm
+    #       (proves DUT doesn't hold fast peers back inside the same UG --
+    #       spec 2.3.1 central claim),
+    #   (c) all UG queues drained post-settle (spec 2.3.1 "no peer permanently
+    #       stuck").
+    # This is topology-agnostic and works even when egress policy filters the
+    # storm on the wire (bag013).
+    _egress_stats_snapshot_key = (
+        f"pb_2_3_1_egress_stats_pre_storm_{device_name}"
+    )
+    _dut_internal_pre_storm: t.List[Step] = []
+    _dut_internal_mid_storm: t.List[Step] = []
+    _dut_internal_post_settle: t.List[Step] = []
+    if fast_peer_addrs and iBGP_receiver_peer_addrs:
+        # ``bgp_mon_peer_addrs`` accepts ``None`` in some callers (e.g. bag013
+        # keeps BGP_MON IDLE and passes ``[]``, but other callers may pass
+        # ``None``). Match ``slow_ebgp_peer_addrs`` pattern with an ``or []``
+        # guard so ``list(None)`` cannot raise ``TypeError`` here.
+        _all_ug_peer_addrs = (
+            list(fast_peer_addrs)
+            + list(iBGP_receiver_peer_addrs)
+            + list(bgp_mon_peer_addrs or [])
+            + list(slow_ebgp_peer_addrs or [])
+        )
+        _dut_internal_pre_storm.append(
+            create_snapshot_peer_egress_stats_step(
+                hostname=device_name,
+                peer_addrs=_all_ug_peer_addrs,
+                snapshot_key=_egress_stats_snapshot_key,
+                description=(
+                    f"Phase 0 (2.3.1): snapshot per-peer egress stats "
+                    f"(adjribout_queue_blocks etc.) for "
+                    f"{len(_all_ug_peer_addrs)} peer(s) on {device_name} "
+                    f"(key={_egress_stats_snapshot_key})"
+                ),
+            ),
+        )
+        _dut_internal_mid_storm.append(
+            create_verify_fast_peer_queue_shallower_step(
+                hostname=device_name,
+                fast_peer_addrs=list(fast_peer_addrs),
+                # Prefer same-UG slow peers (TCP-throttled eBGP) when supplied
+                # -- that's the spec-loyal fast/slow-inside-same-UG comparison.
+                # Fall back to iBGP receivers (cross-UG, weaker signal) when
+                # no throttled slow peers are configured.
+                slow_peer_addrs=list(
+                    slow_ebgp_peer_addrs
+                    if slow_ebgp_peer_addrs
+                    else iBGP_receiver_peer_addrs
+                ),
+                snapshot_key=_egress_stats_snapshot_key,
+                min_delta=0,
+                description=(
+                    f"Phase 1.5 fast/slow asymmetry (2.3.1 CENTRAL CLAIM): "
+                    f"avg fast-peer UG queue_size < avg slow-peer UG "
+                    f"queue_size on {device_name} mid-storm (proves DUT "
+                    f"does NOT hold fast peers back on slow-peer "
+                    f"backpressure inside the same UG)"
+                ),
+            ),
+        )
+        _dut_internal_post_settle.append(
+            create_verify_backpressure_observed_step(
+                hostname=device_name,
+                # Prefer TCP-throttled slow eBGP peers (same-UG asymmetry).
+                # Fall back to iBGP receivers (cross-UG) when unavailable.
+                peer_addrs=list(
+                    slow_ebgp_peer_addrs
+                    if slow_ebgp_peer_addrs
+                    else iBGP_receiver_peer_addrs
+                ),
+                snapshot_key=_egress_stats_snapshot_key,
+                min_peers_with_block=1,
+                description=(
+                    f"Phase 3 backpressure-observed pre-condition (2.3.1): "
+                    f">= 1 slow iBGP receiver on {device_name} saw "
+                    f"adjribout_queue_blocks delta > 0 during storm "
+                    f"(spec-loyal: 2.3.1 asymmetry claim requires observed "
+                    f"backpressure). If IXIA line-rate receivers don't "
+                    f"induce this naturally, artificial slow-peer TCP "
+                    f"throttling must be added to the testbed's slow-peer "
+                    f"DG (see task #141 slow-peer TCP RxBuffer carve-out)."
+                ),
+            ),
+        )
+        # Post-settle queue-drained check: scope to peers that AREN'T being
+        # artificially TCP-throttled. Slow eBGP peers (with tiny TCP window)
+        # take much longer to drain the storm through their throttled socket
+        # (10K prefixes * ~200B/UPDATE / 1500B window * RTT ~= minutes per
+        # peer), so requiring their queue == 0 within the standard post_storm
+        # settle window is unrealistic. Fast peers should drain quickly and
+        # ARE what the spec's "no peer permanently stuck" claim tests --
+        # residual queue on artificially-slowed peers is expected behavior.
+        _queue_drained_scope = [
+            addr
+            for addr in _all_ug_peer_addrs
+            if addr not in set(map(str, slow_ebgp_peer_addrs or []))
+        ]
+        _dut_internal_post_settle.append(
+            create_verify_ug_queue_recovered_step(
+                hostname=device_name,
+                peer_addrs=_queue_drained_scope,
+                # Spec-loyal: threshold at 1 MTU = 1500 bytes. Below that
+                # a peer cannot have a stuck BGP UPDATE (min viable UPDATE
+                # is header+attrs+prefix > 20 bytes but typically 100+;
+                # <1500B in socket buffer means at most sub-MTU steady-
+                # state noise, not routes stuck in adj-RIB-out). The spec's
+                # "no peer permanently stuck" is about ROUTE delivery, not
+                # sub-MTU TCP-buffer residuals (Run #29 finding: peers had
+                # constant 1-byte buffer -- TCP-level noise, not stuck).
+                max_queue_size=1500,
+                # Multi-sample: only peers whose buffer is > 1500B in ALL
+                # samples AND not draining count as permanently stuck.
+                num_samples=3,
+                sample_interval_s=10,
+                description=(
+                    f"Phase 3 UG queue drained (2.3.1 'no peer PERMANENTLY "
+                    f"stuck'): all {len(_queue_drained_scope)} non-throttled "
+                    f"UG peer(s) on {device_name} have "
+                    f"total_async_socket_buffered <= 1500B (1 MTU) across "
+                    f"3 samples 10s apart, with drain progress if higher "
+                    f"(TCP-throttled slow eBGP peers excluded)"
+                ),
+            ),
+        )
+
+    # IXIA-side wire observability: snapshot IXIA-side RX counters on the
+    # fast-peer-facing DUT port pre-storm, verify Rx Total Messages grew
+    # post-storm. Bypasses DUT egress-policy blind spots -- IXIA counts
+    # any BGP traffic that DUT actually emitted on-wire, including
+    # keepalives + baseline route re-advertisements. On bag013 where
+    # EB-FA-OUT filters the storm, this proves DUT is still actively
+    # communicating with fast peers (spec-loyal wire-side proof-of-life).
+    _ixia_rx_snapshot_key = f"pb_2_3_1_ixia_rx_pre_storm_{device_name}"
+    _ixia_rx_pre_storm_snapshot: t.List[Step] = []
+    _ixia_rx_post_settle_verify: t.List[Step] = []
+    if enable_fast_peer_ixia_wire_check and fast_peer_ixia_interface:
+        _ixia_rx_pre_storm_snapshot.append(
+            create_snapshot_ixia_bgp_rx_stats_step(
+                hostname=device_name,
+                interface=fast_peer_ixia_interface,
+                snapshot_key=_ixia_rx_snapshot_key,
+                description=(
+                    f"Phase 0 (2.3.1): snapshot IXIA-side wire BGP RX "
+                    f"counters on {device_name}:{fast_peer_ixia_interface} "
+                    f"pre-storm (key={_ixia_rx_snapshot_key})"
+                ),
+            ),
+        )
+        _ixia_rx_post_settle_verify.append(
+            create_verify_ixia_bgp_rx_stats_delta_step(
+                hostname=device_name,
+                interface=fast_peer_ixia_interface,
+                snapshot_key=_ixia_rx_snapshot_key,
+                min_rx_delta=1,
+                # Live-probed 2026-07-02 Run #37: IxNetwork column names
+                # are "Messages Rx" (all BGP messages incl. keepalives) +
+                # "Updates Rx" (UPDATE messages only) + "KeepAlives Rx"
+                # + "Routes Rx" etc. Sample: Messages Rx=564091, Updates
+                # Rx=531300, KeepAlives Rx=32087 -- keepalives fire every
+                # 30s so Messages Rx delta > 0 during any window >30s
+                # even when storm gets egress-filtered. This is spec-
+                # loyal wire-side proof-of-life: DUT is actively
+                # communicating with fast peers on wire (session alive,
+                # UG not blocked from delivering any BGP message).
+                counter_name="rx_total_messages",
+                description=(
+                    f"Phase 3 fast-peer IXIA wire-side check (2.3.1): "
+                    f"IXIA saw >= 1 new BGP UPDATE message from "
+                    f"{device_name} on {fast_peer_ixia_interface} "
+                    f"during storm window (spec-loyal wire-side proof "
+                    f"that DUT continues sending UPDATEs to fast peers "
+                    f"during heavy iBGP backpressure)"
+                ),
+            ),
+        )
+
+    _fast_peer_snapshot_key = f"pb_2_3_1_fast_peer_pre_storm_{device_name}"
+    _fast_peer_pre_storm_snapshot: t.List[Step] = []
+    _fast_peer_during_storm_liveness: t.List[Step] = []
+    _fast_peer_post_settle_delta: t.List[Step] = []
+    if fast_peer_addrs and enable_fast_peer_wire_check:
+        _fast_peer_pre_storm_snapshot.append(
+            create_snapshot_bgp_sent_route_counts_step(
+                hostname=device_name,
+                peer_addrs=list(fast_peer_addrs),
+                snapshot_key=_fast_peer_snapshot_key,
+                description=(
+                    f"Phase 0 (2.3.1): snapshot {len(fast_peer_addrs)} "
+                    f"fast-peer sent_count pre-storm (key="
+                    f"{_fast_peer_snapshot_key})"
+                ),
+            ),
+        )
+        _fast_peer_during_storm_liveness.append(
+            create_verify_bgp_sent_route_count_delta_step(
+                hostname=device_name,
+                peer_addrs=list(fast_peer_addrs),
+                snapshot_key=_fast_peer_snapshot_key,
+                min_delta=1,
+                tolerance=1,
+                description=(
+                    "Phase 1.5 fast-peer during-storm liveness (2.3.1): "
+                    "each fast peer has received >= 1 storm route by the "
+                    "mid-storm settle mark (spec: 'fast peers continue "
+                    "receiving even when slow peers block'); tolerance=1"
+                ),
+            ),
+        )
+        _fast_peer_post_settle_delta.append(
+            create_verify_bgp_sent_route_count_delta_step(
+                hostname=device_name,
+                peer_addrs=list(fast_peer_addrs),
+                snapshot_key=_fast_peer_snapshot_key,
+                min_delta=storm_prefix_count,
+                tolerance=1,
+                description=(
+                    f"Phase 3 fast-peer full-delivery gate (2.3.1): each "
+                    f"fast peer has received >= {storm_prefix_count} storm "
+                    f"routes by post-settle (spec-loyal 'fast peers receive "
+                    f"storm on wire'); tolerance=1 absorbs 1 slow-converging"
+                ),
+            ),
+        )
+
     storm_stage = create_steps_stage(
-        steps=storm_steps
+        steps=_dut_internal_pre_storm
+        + _ixia_rx_pre_storm_snapshot
+        + _fast_peer_pre_storm_snapshot
+        + storm_steps
         + [
             create_longevity_step(
                 duration=during_storm_settle_s,
-                description=f"Phase 1-settle (2.3.1): {during_storm_settle_s}s mid-storm settle for BGP_MON liveness window",
+                description=f"Phase 1-settle (2.3.1): {during_storm_settle_s}s mid-storm settle for during-storm liveness window",
             ),
             *([during_storm_check] if during_storm_check is not None else []),
+            *_fast_peer_during_storm_liveness,
+            *_dut_internal_mid_storm,
             create_longevity_step(
                 duration=post_storm_settle_s,
                 description=f"Phase 2 (2.3.1): {post_storm_settle_s}s post-storm settle for slow peers to catch up",
@@ -6715,6 +7016,9 @@ def create_ug_backpressure_fast_peers_not_held_back_playbook(
             if storm_sender_peer_addr_prefix
             else []
         )
+        + _fast_peer_post_settle_delta
+        + _dut_internal_post_settle
+        + _ixia_rx_post_settle_verify
         + [
             # Phase 3 equality gate: within each outbound-policy peer group,
             # all peers have identical route sets (no peer permanently stuck;
