@@ -32,6 +32,7 @@ from taac.libs.fpf.fpf_collector_registry import (
     get_check_results,
     register_collector,
 )
+from taac.libs.fpf.fpf_hrt_bulk_tracker import NUM_LANES
 from taac.libs.fpf.fpf_stress_checks import (
     BgpRibCollector,
     FsdbRibmapCollector,
@@ -52,6 +53,19 @@ from taac.utils.oss_taac_lib_utils import get_root_logger
 logger = get_root_logger()
 
 BASELINE_COLLECTION_SEC = 120
+
+
+def _all_plane_gtsws(gtsws: t.List[str]) -> t.List[str]:
+    """Expand the observer GTSW list to ALL plane GTSWs (gtsw001..gtsw{NUM_LANES})
+    so the BGP-RIB and FSDB-ribMap collectors observe every plane's switch, not
+    just the observer subset (gtsw001/002). The naming suffix (e.g.
+    ``.l1002.c087.mwg2``) is taken from the first GTSW; returns the input
+    unchanged if it can't be parsed.
+    """
+    if not gtsws or not gtsws[0].startswith("gtsw") or "." not in gtsws[0]:
+        return gtsws
+    suffix = gtsws[0][gtsws[0].index(".") :]
+    return [f"gtsw{i:03d}{suffix}" for i in range(1, NUM_LANES + 1)]
 
 
 class FpfStartCollectorsTask(BaseTask):
@@ -79,13 +93,16 @@ class FpfStartCollectorsTask(BaseTask):
 
         set_allow_baseline_failures(bool(params.get("allow_baseline_failures", False)))
 
+        # BGP-RIB + FSDB-ribMap collectors observe ALL plane GTSWs (not just the
+        # observer subset gtsw001/002) so every plane's switch is tracked.
+        collector_gtsws = _all_plane_gtsws(gtsws)
         logger.info(
-            f"[FpfStartCollectors] Starting collectors for {len(gtsws)} GTSWs, "
-            f"{len(hosts)} hosts"
+            f"[FpfStartCollectors] Starting collectors: bgp/fsdb over "
+            f"{len(collector_gtsws)} plane GTSWs, hrt over {len(hosts)} hosts"
         )
 
         fsdb_collector = FsdbRibmapCollector(
-            gtsws=gtsws,
+            gtsws=collector_gtsws,
             subnet_prefix=subnet_prefix,
             interval_sec=poll_interval_sec,
             fsdb_mode=fsdb_mode,
@@ -100,7 +117,7 @@ class FpfStartCollectorsTask(BaseTask):
         hrt_collector.set_append_mode(True)
 
         bgp_collector = BgpRibCollector(
-            gtsws=gtsws,
+            gtsws=collector_gtsws,
             subnet_prefix=subnet_prefix,
             interval_sec=poll_interval_sec,
         )

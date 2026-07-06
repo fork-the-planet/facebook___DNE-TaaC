@@ -196,10 +196,11 @@ def fpf_ib_traffic_tasks(skip_ssh: bool):
     return setup, teardown
 
 
-# FSDB ribMap collector read path. "ribmap" -> bgp/ribMap (valid on the current
-# GTSWs); "canonical" -> bgp/canonicalRib (newer FSDB schema, returns
-# INVALID_PATH on GTSWs that don't expose it yet). Overridable per test config.
-FSDB_COLLECTOR_MODE = "ribmap"
+# FSDB ribMap collector read path. "canonical" -> bgp/canonicalRib (the path the
+# GTSWs publish the RIB under now that canonical RIB is enabled on the fabric);
+# "ribmap" -> bgp/ribMap (legacy schema, now empty -> collectors read 0).
+# Overridable per test config.
+FSDB_COLLECTOR_MODE = "canonical"
 
 # When True, health checks classify failures on lanes already impaired at
 # precheck (e.g. a degraded lab GTSW/plane) as PRE-EXISTING (baseline) rather

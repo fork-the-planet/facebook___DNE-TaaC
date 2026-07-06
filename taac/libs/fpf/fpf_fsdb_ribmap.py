@@ -64,13 +64,16 @@ FSDB_PATHS = {
 }
 
 
-async def get_fsdb_rib_map(driver: FbossSwitchInternal, mode: str = "ribmap") -> dict:
+async def get_fsdb_rib_map(
+    driver: FbossSwitchInternal, mode: str = "canonical"
+) -> dict:
     """Fetch FSDB BGP rib state via getOperState thrift API.
 
     Args:
         driver: FBOSS switch driver for the target GTSW.
-        mode: ``"ribmap"`` for ``bgp/ribMap`` (legacy),
-              ``"canonical"`` for ``bgp/canonicalRib`` (new).
+        mode: ``"canonical"`` for ``bgp/canonicalRib`` (default, now that
+              canonical RIB is enabled on the fabric),
+              ``"ribmap"`` for ``bgp/ribMap`` (legacy, now empty).
 
     Uses a 10s timeout since the payload can be large.
     Exceptions are intentionally NOT caught here — the caller (tracker /
