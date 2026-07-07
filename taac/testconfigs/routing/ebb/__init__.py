@@ -17,10 +17,6 @@ from taac.testconfigs.routing.ebb.arista_ebb_scale_test_config import (
 from taac.testconfigs.routing.ebb.arista_mimic_ebb_test_full_scale_test_config import (
     ARISTA_MIMIC_EBB_TEST_FULL_SCALE_TEST_CONFIG,
 )
-from taac.testconfigs.routing.ebb.bag013_ash6_backpressure_test_config import (
-    BGP_UG_BACKPRESSURE_TEST_CONFIG,
-    BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG,
-)
 from taac.testconfigs.routing.ebb.bgp_plus_plus_verify_computational_load_test_config import (
     BGP_PLUS_PLUS_VERIFY_COMPUTATIONAL_LOAD_TEST_CONFIG,
 )
@@ -167,8 +163,6 @@ __all__ = [
     "ARISTA_MIMIC_EBB_TEST_FULL_SCALE_TEST_CONFIG",
     "BGP_PLUS_PLUS_VERIFY_COMPUTATIONAL_LOAD_TEST_CONFIG",
     "BGP_PLUS_PLUS_VERIFY_CONSTANT_ATTRIBUTE_STORAGE_TEST_CONFIG",
-    "BGP_UG_BACKPRESSURE_TEST_CONFIG",
-    "BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG",
     "CASE1_TEST_CONFIG",
     "CASE2_TEST_CONFIG",
     "EB01_ARISTA_MIMIC_EBB_TEST_FULL_SCALE_WITHOUT_OPEN_R_TEST_CONFIG",

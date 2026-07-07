@@ -26,7 +26,7 @@ Asserts per factory:
 import json
 import unittest
 
-from taac.playbooks.playbook_definitions import (
+from taac.playbooks.routing.bgp_ug_playbooks import (
     create_ug_backpressure_all_peers_block_down_recover_playbook,
     create_ug_backpressure_fast_peers_not_held_back_playbook,
     create_ug_backpressure_peer_blocks_down_recover_playbook,

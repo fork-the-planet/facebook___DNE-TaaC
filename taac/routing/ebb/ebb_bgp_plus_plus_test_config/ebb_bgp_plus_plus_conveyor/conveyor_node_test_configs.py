@@ -50,10 +50,6 @@ from taac.testconfigs.routing.cicd_ebb_int_tc import (
     BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_CONFIG,
     BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_UPDATE_GROUP_CONFIG,
 )
-from taac.testconfigs.routing.ebb.bag013_ash6_backpressure_test_config import (
-    BGP_UG_BACKPRESSURE_TEST_CONFIG,
-    BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG,
-)
 
 # Migrated to the routing framework in Diffs 2 + 3 (Wave 1 Struct-Init):
 # BGP_UG_NEW_PEER_JOIN_TEST_CONFIG (bag012 UG) + the two BAG013 conveyor
@@ -67,6 +63,8 @@ from taac.testconfigs.routing.ebb.bag013_ash6_backpressure_test_config import (
 from taac.testconfigs.routing.qual_bgp_update_group import (
     BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG,
     BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG,
+    BGP_UG_BACKPRESSURE_TEST_CONFIG,
+    BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG,
     BGP_UG_NEW_PEER_JOIN_TEST_CONFIG,
 )
 

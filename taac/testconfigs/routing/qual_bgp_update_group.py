@@ -8,6 +8,8 @@ External consumers import via ``testconfigs.routing`` root; see README.md §7.
 """
 
 from taac.testconfigs.routing.factories.bgp_update_group import (
+    create_bgp_ug_backpressure_test_config,
+    create_bgp_ug_backpressure_topology_smoke_test_config,
     create_bgp_ug_eb03_initial_dump_identical_routes_test_config,
     create_bgp_ug_initial_dump_identical_routes_test_config,
     create_bgp_ug_new_peer_join_test_config,
@@ -49,9 +51,25 @@ EB03_LAB_ASH6_BGP_TEST_UPDATE_GROUP_CONFIG = (
 )
 
 
+# ─── Wave 2B — BAG013 BGP UG Backpressure (spec 2.3.1 / 2.3.2 / 2.3.3 / 2.3.4)
+# TestConfig.name field is preserved verbatim as ``BGP_UG_BACKPRESSURE_TEST`` /
+# ``BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE`` so the golden manifest stays byte-wise
+# identical to the legacy ``bag013_ash6_backpressure_test_config.py`` outputs.
+BGP_UG_BACKPRESSURE_TEST_CONFIG = create_bgp_ug_backpressure_test_config(
+    BAG013_ASH6, name="BGP_UG_BACKPRESSURE_TEST"
+)
+BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG = (
+    create_bgp_ug_backpressure_topology_smoke_test_config(
+        BAG013_ASH6, name="BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE"
+    )
+)
+
+
 __all__ = [
     "BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG",
     "BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG",
+    "BGP_UG_BACKPRESSURE_TEST_CONFIG",
+    "BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG",
     "BGP_UG_NEW_PEER_JOIN_TEST_CONFIG",
     "EB03_LAB_ASH6_BGP_TEST_UPDATE_GROUP_CONFIG",
 ]
