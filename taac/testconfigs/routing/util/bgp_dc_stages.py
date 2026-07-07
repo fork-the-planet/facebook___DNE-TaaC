@@ -1,3 +1,4 @@
+# (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
 # pyre-unsafe
 """
 BGP DC Common Building Blocks
@@ -5,14 +6,15 @@ BGP DC Common Building Blocks
 
 Domain-specific stage and health-check composition for BGP DC tests.
 
-Step helpers (sequences, do_continuous_sequence helper, duration scalars) were
-migrated to ``steps/step_definitions.py`` in Phase 7-B22. Stages and the
-SKIP_BGPD_MAIN_CORE_DUMP_CHECK constant remain here as the BGP DC-specific
-stage/HC composition layer.
+Wave 3A hoist (from ``routing/dc_routing/bgp_dc/common.py``).
+
+Step helpers (sequences, do_continuous_sequence helper, duration scalars) live
+in ``steps/step_definitions.py``. Stages and the SKIP_BGPD_MAIN_CORE_DUMP_CHECK
+constant live here as the BGP DC-specific stage/HC composition layer.
 
 HOW TO USE
 ----------
-    from taac.routing.dc_routing.bgp_dc.common import (
+    from taac.testconfigs.routing.util.bgp_dc_stages import (
         DISABLE_PREFIX_FLAPS_STAGE,
         DISABLE_SESSION_FLAPS_STAGE,
         BGP_RESTART_STAGE,
@@ -30,10 +32,6 @@ For step sequences and duration constants, import from step_definitions instead:
 from taac.health_checks.healthcheck_definitions import (
     create_device_core_dumps_check,
 )
-from taac.routing.dc_routing.bgp_dc.shared_constants import (
-    AGENT_RESTART_STEPS,
-    BGP_RESTART_STEPS,
-)
 from taac.stages.stage_definitions import (
     create_attribute_churn_stage,
     create_steps_stage,
@@ -44,6 +42,10 @@ from taac.steps.step_definitions import (
     duration_frequent_best_path_computation_s,
     local_pref_churn_interval_s,
     wait_time_after_disable_churn_s,
+)
+from taac.testconfigs.routing.util.bgp_dc_healthchecks import (
+    AGENT_RESTART_STEPS,
+    BGP_RESTART_STEPS,
 )
 
 

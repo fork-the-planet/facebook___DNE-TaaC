@@ -3,16 +3,12 @@
 # pyre-unsafe
 """Neutral shared symbols for BGP DC tests.
 
-Phase 5.0d (B2) extraction. Symbols here are consumed by both:
-- `routing/dc_routing/bgp_dc/common.py` (the BGP DC building-block layer)
-- `playbooks/helpers/routing/bgp_dc/{restart,longevity,platform_hardening}_playbooks.py`
-  (the BGP DC playbook helper layer)
-
-Previously these lived in `testconfigs/internal/fboss_bgp_and_platform_hardening_conveyor.py`,
-which created a layering-violation: lower layers (helpers + common) imported
-from a higher layer (testconfig). They are now defined here and re-exported
-from the original testconfig location for backward compatibility with
-non-bgp_dc consumers.
+Wave 3A hoist. Symbols here are consumed by:
+- `testconfigs/routing/util/bgp_dc_stages.py` (BGP DC stage-composition layer)
+- `playbooks/playbook_definitions.py` (BGP DC playbook helpers)
+- `testconfigs/fboss_solution_tests/fboss_bgp_and_platform_hardening_conveyor.py`
+  (re-exports for non-bgp_dc consumers)
+- `testconfigs/routing/fboss_bgp_plus_plus_chronos_node_test_config.py`
 """
 
 from taac.health_checks.healthcheck_definitions import (
@@ -24,9 +20,7 @@ from taac.steps.step_definitions import (
 )
 from taac.test_as_a_config import types as taac_types
 
-# Re-export `create_ixia_packet_loss_check_traffic_split` for the existing
-# callers in testconfigs/internal/fboss_bgp_and_platform_hardening_conveyor.py
-# and testconfigs/hyperport/* which import it from this module.
+# Re-export `create_ixia_packet_loss_check_traffic_split` for existing callers.
 __all__ = [
     "AGENT_RESTART_STEPS",
     "BGP_RESTART_STEPS",

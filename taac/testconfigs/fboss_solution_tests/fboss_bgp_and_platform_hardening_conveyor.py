@@ -64,17 +64,8 @@ from taac.playbooks.playbook_definitions import (
 
 # Re-exported for backward compatibility with non-bgp_dc consumers
 # (network_ai_hardening_test_config, dsf_hardening_test_config_playbooks,
-# mp3n_gar_test_config, etc.). Phase 5.0d (B2) extracted these symbols to
-# routing/dc_routing/bgp_dc/shared_constants.py to break the bgp_dc layering
-# inversion.
-from taac.routing.dc_routing.bgp_dc.shared_constants import (  # noqa: F401
-    AGENT_RESTART_STEPS,
-    BGP_RESTART_STEPS,
-    BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
-    create_ixia_packet_loss_check_traffic_split,
-    get_ixia_healthcheck_ignore_cpu_and_v4_directional_traffic,
-    get_ixia_healthcheck_stable_state,
-)
+# mp3n_gar_test_config, etc.). Wave 3A hoisted these symbols into
+# testconfigs/routing/util/bgp_dc_healthchecks.py.
 from taac.stages.stage_definitions import create_steps_stage
 from taac.steps.step_definitions import (
     create_allocate_cgroup_memory_step,
@@ -97,54 +88,40 @@ from taac.task_definitions import (
     create_run_commands_on_shell_task,
     create_wait_for_agent_convergence_task,
 )
+from taac.testconfigs.routing.util.bgp_dc_healthchecks import (  # noqa: F401
+    AGENT_RESTART_STEPS,
+    BGP_RESTART_STEPS,
+    BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
+    create_ixia_packet_loss_check_traffic_split,
+    get_ixia_healthcheck_ignore_cpu_and_v4_directional_traffic,
+    get_ixia_healthcheck_stable_state,
+)
+
+# TODO Wave-4A: drop these shims after all consumers migrate to
+# testconfigs/routing/util/bgp_dc_tc_checks. Kept here for existing callers
+# in this file, testconfigs/routing/fboss_bgp_plus_plus_chronos_node_test_config,
+# testconfigs/fboss_solution_tests/fboss_wide_ecmp_test_config, and
+# testconfigs/internal/fboss_bgp_back_pressure_test_config.
+from taac.testconfigs.routing.util.bgp_dc_tc_checks import (  # noqa: F401
+    _apply_tc_checks_to_playbooks,
+    _PERMIT_ALL_POLICY_TERM,
+    build_bgp_dc_tc_postchecks,
+    build_bgp_dc_tc_prechecks,
+)
 from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import Service, ServiceInterruptionTrigger, TestConfig
 
 
-def _apply_tc_checks_to_playbooks(
-    playbooks, tc_prechecks, tc_postchecks, tc_snapshot_checks
-):
-    """Merge TestConfig-level checks into each playbook.
-
-    For each playbook, append tc_prechecks/tc_postchecks/tc_snapshot_checks
-    to the playbook's existing checks (if any).
-    """
-    return [
-        pb(
-            prechecks=list(pb.prechecks or []) + tc_prechecks,
-            postchecks=list(pb.postchecks or []) + tc_postchecks,
-            snapshot_checks=list(pb.snapshot_checks or []) + tc_snapshot_checks,
-        )
-        for pb in playbooks
-    ]
-
-
-# Policy term that unconditionally accepts all routes (ALWAYS match, no actions
-# → bgpd defaults to PERMIT).
-_PERMIT_ALL_POLICY_TERM = {
-    "name": "RULE_ACCEPT_ALL",
-    "description": "Unconditionally accept all prefixes",
-    "policy_match_entries": {
-        "name": "",
-        "description": "",
-        "match_logic_type": 1,
-        "match_entries": [
-            {
-                "type": 20,  # ALWAYS
-                "match_logic_type": 0,
-            }
-        ],
-    },
-}
-
-# Symbols extracted to routing/dc_routing/bgp_dc/shared_constants.py to break
-# the bgp_dc layering inversion (Phase 5.0d B2). Re-exported above for
-# backward compatibility with non-bgp_dc consumers:
-#   - BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED
-#   - BGP_RESTART_STEPS, AGENT_RESTART_STEPS
-#   - create_ixia_packet_loss_check_traffic_split
-#   - get_ixia_healthcheck_ignore_cpu_and_v4_directional_traffic
-#   - get_ixia_healthcheck_stable_state
+# Wave 3A: hoisted _apply_tc_checks_to_playbooks, _PERMIT_ALL_POLICY_TERM,
+# build_bgp_dc_tc_prechecks, and build_bgp_dc_tc_postchecks into
+# testconfigs/routing/util/bgp_dc_tc_checks.py. Re-exported at the top of
+# this module as backward-compat shims.
+#
+# Non-bgp_dc IXIA/BGP-DC constants (BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
+# BGP_RESTART_STEPS, AGENT_RESTART_STEPS, create_ixia_packet_loss_check_traffic_split,
+# get_ixia_healthcheck_ignore_cpu_and_v4_directional_traffic,
+# get_ixia_healthcheck_stable_state) are re-exported from
+# testconfigs/routing/util/bgp_dc_healthchecks.py.
 
 
 def get_ixia_healthcheck_track_only_v6_directional_bgp_traffic(device_name: str):
@@ -1226,79 +1203,6 @@ def build_bgp_dc_basic_port_configs(
                 ),
             ],
         ),
-    ]
-
-
-def build_bgp_dc_tc_prechecks(prefix_limit, *, include_traffic_check, device_name=None):
-    """Build the standard BGP DC TestConfig prechecks list. When
-    ``include_traffic_check`` is True, the IXIA stable-state check is included
-    (requires ``device_name``).
-
-    Mirrors the inline `tc_prechecks` block in
-    ``test_config_for_bgp_and_fboss_platform_hardening_in_conveyor`` exactly
-    when ``include_traffic_check=True``.
-    """
-    return [
-        create_systemctl_active_state_check(),
-        *(
-            [get_ixia_healthcheck_stable_state(device_name)]
-            if include_traffic_check
-            else []
-        ),
-        create_prefix_limit_check(prefix_limit=prefix_limit),
-        create_unclean_exit_check(),
-        create_memory_utilization_check(
-            threshold=5 * (1024**3),
-            threshold_by_service={
-                "bgpd": 4.5 * (1024**3),
-                "fsdb": 7 * (1024**3),
-                "qsfp_service": 2 * (1024**3),
-                "fboss_sw_agent": 12 * (1024**3),
-                "fboss_hw_agent@0": 8 * (1024**3),
-            },
-            start_time_jq_var="test_case_start_time",
-        ),
-        BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
-    ]
-
-
-def build_bgp_dc_tc_postchecks(
-    prefix_limit, *, include_traffic_check, device_name=None
-):
-    """Build the standard BGP DC TestConfig postchecks list. When
-    ``include_traffic_check`` is True, the IXIA stable-state check is included
-    (requires ``device_name``).
-
-    Mirrors the inline `tc_postchecks` block in
-    ``test_config_for_bgp_and_fboss_platform_hardening_in_conveyor`` exactly
-    when ``include_traffic_check=True``.
-    """
-    return [
-        create_systemctl_active_state_check(),
-        create_device_core_dumps_check(),
-        *(
-            [get_ixia_healthcheck_stable_state(device_name)]
-            if include_traffic_check
-            else []
-        ),
-        create_prefix_limit_check(prefix_limit=prefix_limit),
-        BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
-        create_unclean_exit_check(),
-        create_memory_utilization_check(
-            threshold=5 * (1024**3),
-            threshold_by_service={
-                "bgpd": 4.5 * (1024**3),
-                "fsdb": 5 * (1024**3),
-                "qsfp_service": 2 * (1024**3),
-                "fboss_sw_agent": 12 * (1024**3),
-                "fboss_hw_agent@0": 8 * (1024**3),
-            },
-            start_time_jq_var="test_case_start_time",
-        ),
-        create_cpu_utilization_check(
-            threshold=400.0, start_time_jq_var="test_case_start_time"
-        ),
-        create_service_restart_check(),
     ]
 
 

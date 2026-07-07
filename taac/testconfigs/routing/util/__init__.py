@@ -14,6 +14,9 @@ pattern).
 """
 
 from taac.testconfigs.routing.util import (  # noqa: F401
+    bgp_dc_healthchecks,
+    bgp_dc_stages,
+    bgp_dc_tc_checks,
     bgp_ebb_check_profiles,
     bgp_ebb_constants,
     bgp_ebb_health_checks,

@@ -104,7 +104,7 @@ from taac.task_definitions import (
     create_run_commands_on_shell_task,
     create_wait_for_agent_convergence_task,
 )
-from taac.testconfigs.fboss_solution_tests.fboss_bgp_and_platform_hardening_conveyor import (
+from taac.testconfigs.routing.util.bgp_dc_tc_checks import (
     _apply_tc_checks_to_playbooks,
     _PERMIT_ALL_POLICY_TERM,
     build_bgp_dc_tc_postchecks,

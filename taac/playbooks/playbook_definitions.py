@@ -91,15 +91,15 @@ from taac.packet_headers import (
     DSF_RDMA_PACKET_HEADERS,
     TC2_PFC_PAUSE_PACKET_HEADERS,
 )
-from taac.routing.dc_routing.bgp_dc.common import (
-    DISABLE_PREFIX_FLAPS_STAGE,
-    DISABLE_SESSION_FLAPS_STAGE,
-    FREQUENT_BEST_PATH_COMPUTATION_STAGE,
-)
-from taac.routing.dc_routing.bgp_dc.shared_constants import (
+from taac.testconfigs.routing.util.bgp_dc_healthchecks import (
     BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
     get_ixia_healthcheck_ignore_cpu_and_v4_directional_traffic,
     get_ixia_healthcheck_stable_state,
+)
+from taac.testconfigs.routing.util.bgp_dc_stages import (
+    DISABLE_PREFIX_FLAPS_STAGE,
+    DISABLE_SESSION_FLAPS_STAGE,
+    FREQUENT_BEST_PATH_COMPUTATION_STAGE,
 )
 from taac.testconfigs.routing.util.bgp_ebb_health_checks import (
     BGP_STANDARD_POSTCHECKS,
@@ -221,11 +221,11 @@ def get_restart_playbooks(
         SERVICES_TO_MONITOR_DURING_AGENT_RESTART,
         SERVICES_TO_MONITOR_DURING_BGP_RESTART,
     )
-    from taac.routing.dc_routing.bgp_dc.common import (
-        BGP_RESTART_STAGE,
-    )
-    from taac.routing.dc_routing.bgp_dc.shared_constants import (
+    from taac.testconfigs.routing.util.bgp_dc_healthchecks import (
         AGENT_RESTART_STEPS,
+    )
+    from taac.testconfigs.routing.util.bgp_dc_stages import (
+        BGP_RESTART_STAGE,
     )
 
     return [
