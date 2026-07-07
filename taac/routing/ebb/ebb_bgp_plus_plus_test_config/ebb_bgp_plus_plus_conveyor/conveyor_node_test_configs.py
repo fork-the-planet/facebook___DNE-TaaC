@@ -16,7 +16,7 @@ free; consumers that need the aggregated list import it from this
 module directly.
 """
 
-from taac.testconfigs.routing.ebb.bag002_snc1_test_config import (
+from taac.testconfigs.routing.cicd_ebb_int_tc import (
     BAG002_SNC1_CONVEYOR_TEST_CONFIG,
 )
 from taac.testconfigs.routing.ebb.bag010_ash6_test_config import (

@@ -17,9 +17,6 @@ from taac.testconfigs.routing.ebb.arista_ebb_scale_test_config import (
 from taac.testconfigs.routing.ebb.arista_mimic_ebb_test_full_scale_test_config import (
     ARISTA_MIMIC_EBB_TEST_FULL_SCALE_TEST_CONFIG,
 )
-from taac.testconfigs.routing.ebb.bag002_snc1_test_config import (
-    BAG002_SNC1_CONVEYOR_TEST_CONFIG,
-)
 from taac.testconfigs.routing.ebb.bag010_ash6_test_config import (
     BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_CONFIG,
     BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_UPDATE_GROUP_CONFIG,
@@ -191,7 +188,6 @@ from taac.testconfigs.routing.ebb.test_config_update_packing import (
 
 __all__ = [
     "ARISTA_MIMIC_EBB_TEST_FULL_SCALE_TEST_CONFIG",
-    "BAG002_SNC1_CONVEYOR_TEST_CONFIG",
     "BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_CONFIG",
     "BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_UPDATE_GROUP_CONFIG",
     "BAG010_ASH6_DRAIN_CONVEYOR_TEST_CONFIG",
