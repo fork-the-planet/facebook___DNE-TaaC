@@ -51,7 +51,6 @@ from taac.testconfigs.routing.ebb.bag012_ash6_test_config import (
     BAG012_ASH6_PERFORMANCE_SCALING_TEST_UPDATE_GROUP_CONFIG,
     BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_CONFIG,
     BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_UPDATE_GROUP_CONFIG,
-    BGP_UG_NEW_PEER_JOIN_TEST_CONFIG,
 )
 from taac.testconfigs.routing.ebb.bag013_ash6_backpressure_test_config import (
     BGP_UG_BACKPRESSURE_TEST_CONFIG,
@@ -60,6 +59,13 @@ from taac.testconfigs.routing.ebb.bag013_ash6_backpressure_test_config import (
 from taac.testconfigs.routing.ebb.bag013_ash6_test_config import (
     BAG013_ASH6_CONVEYOR_TEST_CONFIG,
     BAG013_ASH6_CONVEYOR_TEST_UPDATE_GROUP_CONFIG,
+)
+
+# Migrated to the routing framework in Diff 2 (Wave 1 Struct-Init):
+# BGP_UG_NEW_PEER_JOIN_TEST_CONFIG now lives in
+# testconfigs/routing/qual_bgp_update_group.py; import via that path.
+from taac.testconfigs.routing.qual_bgp_update_group import (
+    BGP_UG_NEW_PEER_JOIN_TEST_CONFIG,
 )
 
 

@@ -2,9 +2,9 @@
 
 # pyre-unsafe
 """Unit tests for the BGP++ Update Group hardening 2.4.1/2.4.2/2.4.3 playbook
-factories (``create_new_peer_join_full_sync_resilience_playbook``,
-``create_new_peer_join_routes_withdrawn_playbook``,
-``create_new_peer_join_attribute_change_playbook``).
+factories (``create_bgp_ug_new_peer_join_full_sync_resilience_playbook``,
+``create_bgp_ug_new_peer_join_routes_withdrawn_playbook``,
+``create_bgp_ug_new_peer_join_attribute_change_playbook``).
 
 Each factory is verified for:
 - Expected playbook ``name``.
@@ -17,10 +17,10 @@ Each factory is verified for:
 import json
 import unittest
 
-from taac.playbooks.playbook_definitions import (
-    create_new_peer_join_attribute_change_playbook,
-    create_new_peer_join_full_sync_resilience_playbook,
-    create_new_peer_join_routes_withdrawn_playbook,
+from taac.playbooks.routing.bgp_ug_playbooks import (
+    create_bgp_ug_new_peer_join_attribute_change_playbook,
+    create_bgp_ug_new_peer_join_full_sync_resilience_playbook,
+    create_bgp_ug_new_peer_join_routes_withdrawn_playbook,
 )
 from taac.health_check.health_check import types as hc_types
 
@@ -51,7 +51,7 @@ class NewPeerJoinFullSyncResiliencePlaybookTest(unittest.TestCase):
     """2.4.1 -- resilience to UG-member churn during sync."""
 
     def setUp(self):
-        self.playbook = create_new_peer_join_full_sync_resilience_playbook(
+        self.playbook = create_bgp_ug_new_peer_join_full_sync_resilience_playbook(
             device_name=DEVICE,
             control_peer_addrs=CTRL,
             held_back_peer_addr=HELD,
@@ -133,7 +133,7 @@ class NewPeerJoinRoutesWithdrawnPlaybookTest(unittest.TestCase):
     """2.4.2 -- mid-sync withdrawal via sender session-down."""
 
     def setUp(self):
-        self.playbook = create_new_peer_join_routes_withdrawn_playbook(
+        self.playbook = create_bgp_ug_new_peer_join_routes_withdrawn_playbook(
             device_name=DEVICE,
             control_peer_addrs=CTRL,
             held_back_peer_addr=HELD,
@@ -228,7 +228,7 @@ class NewPeerJoinRoutesWithdrawnPlaybookTest(unittest.TestCase):
         self.assertEqual(args.get("device_group_name_regex"), B_VAR1_REGEX)
 
     def test_tcpdump_inserted_when_capture_device_given(self):
-        pb = create_new_peer_join_routes_withdrawn_playbook(
+        pb = create_bgp_ug_new_peer_join_routes_withdrawn_playbook(
             device_name=DEVICE,
             control_peer_addrs=CTRL,
             held_back_peer_addr=HELD,
@@ -257,7 +257,7 @@ class NewPeerJoinAttributeChangePlaybookTest(unittest.TestCase):
     """2.4.3 -- mid-sync community change."""
 
     def setUp(self):
-        self.playbook = create_new_peer_join_attribute_change_playbook(
+        self.playbook = create_bgp_ug_new_peer_join_attribute_change_playbook(
             device_name=DEVICE,
             control_peer_addrs=CTRL,
             held_back_peer_addr=HELD,
