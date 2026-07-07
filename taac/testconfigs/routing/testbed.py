@@ -72,6 +72,18 @@ _ASH6_IXIA_CHASSIS = "2401:db00:2066:303b::3001"
 
 # ─── BAG conveyor testbeds ────────────────────────────────────────────────
 
+BAG002_SNC1 = Testbed(
+    device_name="bag002.snc1",
+    ixia_chassis_ip="ares1-my24520014",
+    ixia_ports=[
+        ("Ethernet3/25/1", "1/17"),  # eBGP
+        ("Ethernet3/26/1", "1/18"),  # iBGP
+        ("Ethernet3/27/1", "1/19"),  # BGP-MON
+    ],
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    peer_groups=ebb_peer_groups(),
+)
+
 BAG012_ASH6 = Testbed(
     device_name="bag012.ash6",
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
@@ -102,4 +114,35 @@ BAG013_ASH6 = Testbed(
     bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
     openr_configerator_path="taac/ebb_ci_cd_configs/bag013_ash6_openr_config",
     peer_groups=ebb_peer_groups(),
+)
+
+
+# ─── EB03 lab testbed (Arista lab box in ASH6) ────────────────────────────
+# eb03.lab.ash6 is a lab device with admin/password auth (svc-netcastle_bot
+# not authorized). extras carries lab-specific credentials + MockDeviceInfo
+# fields (netwhoami returns #INVALID# for this device).
+EB03_LAB_ASH6 = Testbed(
+    device_name="eb03.lab.ash6",
+    ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
+    ixia_ports=[
+        ("Ethernet3/1/3", "6/5"),  # eBGP
+        ("Ethernet3/1/5", "6/6"),  # iBGP
+        ("Ethernet3/36/1", "2/8"),  # BGP-MON
+    ],
+    dut_bgp_as=64981,
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    lab_device_password_env_var="TAAC_EBB_LAB_DEVICE_PASSWORD",
+    peer_groups=ebb_peer_groups(),
+    extras={
+        "lab_admin_username": "admin",
+        "lab_admin_password_default": "dnepit",  # pragma: allowlist secret
+        "mock_device_hardware": "ARISTA_7516",
+        "mock_device_role": "EB",
+        "mock_device_asic": "JERICHO",
+        "mock_device_dc": "ash6",
+        "mock_device_region": "ash",
+        "mock_device_asset_id": 12345,
+        "mock_device_network_area": "BACKBONE",
+        "mock_device_network_type": "EBB",
+    },
 )

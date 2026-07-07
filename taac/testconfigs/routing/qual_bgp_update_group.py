@@ -8,6 +8,7 @@ External consumers import via ``testconfigs.routing`` root; see README.md §7.
 """
 
 from taac.testconfigs.routing.factories.bgp_update_group import (
+    create_bgp_ug_eb03_initial_dump_identical_routes_test_config,
     create_bgp_ug_initial_dump_identical_routes_test_config,
     create_bgp_ug_new_peer_join_test_config,
     create_bgp_ug_sustained_link_flap_test_config,
@@ -15,6 +16,7 @@ from taac.testconfigs.routing.factories.bgp_update_group import (
 from taac.testconfigs.routing.testbed import (
     BAG012_ASH6,
     BAG013_ASH6,
+    EB03_LAB_ASH6,
 )
 
 
@@ -39,8 +41,17 @@ BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG = (
 )
 
 
+# ─── Diff 4 — EB03 lab-box UG initial-dump (spec 2.1.1 + longevity debugging)
+# TestConfig.name field grandfathered from eb03_update_group_test_config.py
+# so the golden manifest stays byte-wise identical (hash 56b3fa16bf520c5f).
+EB03_LAB_ASH6_BGP_TEST_UPDATE_GROUP_CONFIG = (
+    create_bgp_ug_eb03_initial_dump_identical_routes_test_config(EB03_LAB_ASH6)
+)
+
+
 __all__ = [
     "BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG",
     "BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG",
     "BGP_UG_NEW_PEER_JOIN_TEST_CONFIG",
+    "EB03_LAB_ASH6_BGP_TEST_UPDATE_GROUP_CONFIG",
 ]
