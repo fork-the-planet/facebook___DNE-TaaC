@@ -56,15 +56,19 @@ from taac.testconfigs.routing.ebb.bag013_ash6_backpressure_test_config import (
     BGP_UG_BACKPRESSURE_TEST_CONFIG,
     BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG,
 )
-from taac.testconfigs.routing.ebb.bag013_ash6_test_config import (
-    BAG013_ASH6_CONVEYOR_TEST_CONFIG,
-    BAG013_ASH6_CONVEYOR_TEST_UPDATE_GROUP_CONFIG,
-)
 
-# Migrated to the routing framework in Diff 2 (Wave 1 Struct-Init):
-# BGP_UG_NEW_PEER_JOIN_TEST_CONFIG now lives in
+# Migrated to the routing framework in Diffs 2 + 3 (Wave 1 Struct-Init):
+# BGP_UG_NEW_PEER_JOIN_TEST_CONFIG (bag012 UG) + the two BAG013 conveyor
+# TestConfigs (spec 2.1.1 initial-dump + 2.7.2 sustained-link-flap; renamed to
+# BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG +
+# BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG at the Python level, but
+# the internal TestConfig ``name`` field is preserved verbatim as
+# ``BAG013_ASH6_BGP_CONVEYOR_TEST`` / ``..._UPDATE_GROUP`` so the golden
+# manifest is byte-wise identical) now live in
 # testconfigs/routing/qual_bgp_update_group.py; import via that path.
 from taac.testconfigs.routing.qual_bgp_update_group import (
+    BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG,
+    BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG,
     BGP_UG_NEW_PEER_JOIN_TEST_CONFIG,
 )
 
@@ -155,7 +159,11 @@ EBB_BGP_PLUS_PLUS_CONVEYOR_NODE_TEST_CONFIGS = [
     # bag013.ash6 (ad-hoc, not in conveyor stages).
     # ``_UPDATE_GROUP`` variant adds the Update Group qualification 2.7.2
     # sustained-link-flap playbook (rotates flapping the 3 IXIA ports on
-    # independent cadences, asserts no cross-group BGP session disruption).
-    BAG013_ASH6_CONVEYOR_TEST_CONFIG,
-    BAG013_ASH6_CONVEYOR_TEST_UPDATE_GROUP_CONFIG,
+    # independent cadences, asserts no cross-group BGP session disruption)
+    # plus the 2.1.1 initial-dump-identical-routes playbook (full parity
+    # with eb03.lab.ash6). Renamed from BAG013_ASH6_CONVEYOR_TEST_{CONFIG,
+    # UPDATE_GROUP_CONFIG} in Wave 1 Diff 3 (Python constant only; the
+    # internal ``TestConfig.name`` field is preserved verbatim).
+    BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG,
+    BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG,
 ]

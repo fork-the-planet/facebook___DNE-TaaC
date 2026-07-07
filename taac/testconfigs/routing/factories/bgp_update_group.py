@@ -18,20 +18,63 @@ one-line catalog change.
 import typing as t
 
 from ixia.ixia import types as ixia_types
-from taac.constants import BgpPlusPlusProfile
+from neteng.test_infra.dne.taac.constants import BgpPlusPlusProfile, Gigabyte
+from taac.health_checks.healthcheck_definitions import (
+    create_bgp_session_establish_check,
+    create_bgp_update_group_check,
+    create_cpu_utilization_check,
+    create_drain_state_check,
+    create_memory_utilization_check,
+)
 from taac.playbooks.routing.bgp_ug_playbooks import (
+    create_bgp_ug_initial_dump_identical_routes_playbook,
     create_bgp_ug_new_peer_join_attribute_change_playbook,
     create_bgp_ug_new_peer_join_full_sync_resilience_playbook,
     create_bgp_ug_new_peer_join_routes_withdrawn_playbook,
+    create_bgp_ug_sustained_link_flap_playbook,
 )
 from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_common_tasks import (
+    get_common_setup_tasks,
+    get_teardown_tasks,
     get_update_packing_setup_tasks,
 )
 from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_constants import (
+    BGP_MON_PEER_COUNT,
+    BGP_MON_REMOTE_AS,
+    DEFAULT_PROFILE,
+    EBGP_PEER_COUNT_V4,
+    EBGP_PEER_COUNT_V6,
+    EBGP_PEER_TO_DRAIN,
     EBGP_REMOTE_AS,
+    IBGP_PEER_SCALE_PER_PLANE,
+    IBGP_PEER_TO_DRAIN_PER_PLANE,
     IBGP_REMOTE_AS,
+    IXIA_BGP_MON_IC_PARENT_NETWORK,
+    IXIA_EBGP_IC_PARENT_NETWORK_V4,
     IXIA_EBGP_IC_PARENT_NETWORK_V6,
+    IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE1,
+    IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE2,
+    IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE3,
+    IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE4,
+    IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE1,
+    IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE2,
+    IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE3,
+    IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE4,
     IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
+    IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE2,
+    IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE3,
+    IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE4,
+    IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE1,
+    IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE2,
+    IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE3,
+    IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE4,
+    PEERGROUP_BGP_MON,
+    PEERGROUP_EBGP_V6,
+    PEERGROUP_IBGP_V4,
+    PEERGROUP_IBGP_V6,
+)
+from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ixia_config_for_ebb_scale import (
+    create_ebb_scale_basic_port_configs,
 )
 from taac.steps.step_definitions import (
     create_ixia_api_step,
@@ -553,5 +596,407 @@ def create_bgp_ug_new_peer_join_test_config(testbed: Testbed) -> taac_types.Test
 
 
 __all__ = [
+    "create_bgp_ug_initial_dump_identical_routes_test_config",
     "create_bgp_ug_new_peer_join_test_config",
+    "create_bgp_ug_sustained_link_flap_test_config",
 ]
+
+
+# =============================================================================
+# BGP UG initial-dump-identical-routes (spec 2.1.1) + sustained-link-flap
+# (spec 2.7.2) — bag013 conveyor topology.
+#
+# Moved from testconfigs/routing/ebb/bag013_ash6_test_config.py. Wave 1
+# constraint: hardcoded to bag013.ash6's topology / IXIA wiring / OpenR link
+# addresses. ``testbed`` MUST be BAG013_ASH6. Wave 2 will parameterize the
+# helpers here on ``testbed.*`` so other EBB devices can host the qualification
+# via a one-line catalog change.
+# =============================================================================
+
+# BGP++ Update Group qualification 2.7.2 -- Sustained Link Flap timing.
+# Test values are intentional first-run defaults: 15-min total run with short
+# cadences (30/45/75 s) and a brief 5 s down to exercise the orchestration in
+# a few minutes per iteration. Production values per the BGP++ Update Group
+# qualification 2.7.2 doc are 1 h total with 2/3/5 min cadences and 15 s down --
+# swap by flipping ``_BAG013_2_7_2_USE_PRODUCTION_VALUES``.
+_BAG013_2_7_2_USE_PRODUCTION_VALUES = True
+
+# Per-interface peer subnets in CIDR form. Used by the step's isolation check
+# to attribute each Established BGP peer to its IXIA-facing interface so the
+# check knows which peers should NOT flap during a given cycle. CIDR is
+# required because the step uses ``ipaddress.ip_address() in ipaddress.ip_network()``
+# matching (an earlier iteration used bare string prefixes and mis-attributed
+# peers that spilled beyond the literal ``IXIA_*_PARENT_NETWORK_*`` constant,
+# producing hundreds of false-positive cross-group violations -- e.g. eBGP V4
+# extends from 10.163.28.X into 10.163.29.X to fit 140 /31 pairs).
+#
+# Subnet sizes chosen empirically from the V6 run's peer-address ranges:
+#   * eBGP V4 covers 10.163.28-29  -> /16 (10.163.0.0/16) is generously safe
+#   * eBGP V6 sits inside :8::/80  -> /80 matches the IXIA generator
+#   * iBGP V4 planes 1-8 are on 10.164-10.171, one /16 per plane
+#   * iBGP V6 planes 1-8 are on :9::/80 through :16::/80 (one /80 per plane)
+#   * BGP MON V6 sits inside :22:a::/80
+_BAG013_EBGP_PEER_SUBNETS = [
+    "10.163.0.0/16",
+    f"{IXIA_EBGP_IC_PARENT_NETWORK_V6}::/80",
+]
+_BAG013_IBGP_PEER_SUBNETS = [
+    # iBGP V4 -- 8 planes (DC 1-4: 10.164-10.167.X; MP 1-4: 10.168-10.171.X)
+    "10.164.0.0/16",
+    "10.165.0.0/16",
+    "10.166.0.0/16",
+    "10.167.0.0/16",
+    "10.168.0.0/16",
+    "10.169.0.0/16",
+    "10.170.0.0/16",
+    "10.171.0.0/16",
+    # iBGP V6 -- 8 planes, each on a distinct /80 inside 2401:db00:e50d:11::
+    f"{IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1}::/80",
+    f"{IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE2}::/80",
+    f"{IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE3}::/80",
+    f"{IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE4}::/80",
+    f"{IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE1}::/80",
+    f"{IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE2}::/80",
+    f"{IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE3}::/80",
+    f"{IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE4}::/80",
+]
+_BAG013_BGP_MON_PEER_SUBNETS = [f"{IXIA_BGP_MON_IC_PARENT_NETWORK}::/80"]
+
+if _BAG013_2_7_2_USE_PRODUCTION_VALUES:
+    _BAG013_2_7_2_TOTAL_DURATION_S = 3600
+    _BAG013_2_7_2_PORT_SCHEDULE = [
+        {
+            "interface": "Ethernet3/36/1",
+            "label": "eBGP",
+            "period_s": 120,
+            "down_s": 15,
+            "peer_subnets": _BAG013_EBGP_PEER_SUBNETS,
+        },
+        {
+            "interface": "Ethernet3/36/2",
+            "label": "iBGP",
+            "period_s": 180,
+            "down_s": 15,
+            "peer_subnets": _BAG013_IBGP_PEER_SUBNETS,
+        },
+        {
+            "interface": "Ethernet3/36/3",
+            "label": "BGP-MON",
+            "period_s": 300,
+            "down_s": 15,
+            "peer_subnets": _BAG013_BGP_MON_PEER_SUBNETS,
+        },
+    ]
+else:
+    _BAG013_2_7_2_TOTAL_DURATION_S = 900
+    _BAG013_2_7_2_PORT_SCHEDULE = [
+        {
+            "interface": "Ethernet3/36/1",
+            "label": "eBGP",
+            "period_s": 30,
+            "down_s": 5,
+            "peer_subnets": _BAG013_EBGP_PEER_SUBNETS,
+        },
+        {
+            "interface": "Ethernet3/36/2",
+            "label": "iBGP",
+            "period_s": 45,
+            "down_s": 5,
+            "peer_subnets": _BAG013_IBGP_PEER_SUBNETS,
+        },
+        {
+            "interface": "Ethernet3/36/3",
+            "label": "BGP-MON",
+            "period_s": 75,
+            "down_s": 5,
+            "peer_subnets": _BAG013_BGP_MON_PEER_SUBNETS,
+        },
+    ]
+
+
+def _bag013_2_7_2_prechecks():
+    """Build the bag013.ash6-specific precheck list for the 2.7.2 playbook.
+
+    Hand-rolled (rather than via ``create_standard_prechecks``) for two
+    bag013-specific reasons:
+      1. bag013.ash6 BGP MON peers stay IDLE (known device-level bgpcpp
+         config quirk; see project notes / MEMORY). We pass
+         ``parent_prefixes_to_ignore=[IXIA_BGP_MON_IC_PARENT_NETWORK::/80]``
+         to drop them from the session count.
+      2. ``create_standard_prechecks`` enforces an EXACT
+         ``expected_established_sessions`` count (defaults to 0 and is
+         strictly compared, so omitting the count fails with "expected 0
+         found N"). bag013's actual count drifts from the bag010 formula
+         (1272 vs 1290) for reasons we haven't traced -- safer to use the
+         "no non-established peers among non-MON set" semantics (omit
+         ``expected_established_sessions``) than to hard-code a
+         device-specific number that will rot.
+
+    Other devices (bag010 / bag011) that pick up the
+    ``create_bgp_ug_sustained_link_flap_playbook`` factory should
+    pass their own precheck list -- typically
+    ``create_standard_prechecks(peergroup_ibgp_v6=..., peergroup_ibgp_v4=...,
+    expected_established_sessions=N, exclude_bgp_mon=True)`` -- since
+    they don't share bag013's IDLE-MON quirk.
+    """
+    return [
+        create_bgp_session_establish_check(
+            # ``IXIA_BGP_MON_IC_PARENT_NETWORK`` is a bare string prefix
+            # (e.g. ``"2401:db00:e50d:22:a"``), but the precheck pipes
+            # ``parent_prefixes_to_ignore`` through ``ipaddress.ip_network()``
+            # which rejects that form. Append ``::/80`` to make it a valid
+            # CIDR -- mirrors how ``common_health_checks.create_standard_prechecks``
+            # builds the same exclusion list.
+            parent_prefixes_to_ignore=[f"{IXIA_BGP_MON_IC_PARENT_NETWORK}::/80"],
+        ),
+        create_drain_state_check(),
+        create_memory_utilization_check(
+            threshold=Gigabyte.GIG_5.value,
+            start_time_jq_var="test_case_start_time",
+        ),
+        create_cpu_utilization_check(
+            threshold=400.0, start_time_jq_var="test_case_start_time"
+        ),
+        # Confirm BGP++ ``update_group`` is actually active on the running
+        # daemon before the flap loop starts. Mirrors the setup-task-level
+        # ``Cli -p15 -c 'show bgpcpp update-group'`` guard in
+        # ``conveyor_common_tasks._get_control_plane_tasks`` (D108374944), but
+        # goes through the ``getUpdateGroupInfo`` thrift API (D108632994)
+        # instead of CLI parsing. Provides a second, structured early-fail if
+        # the patch silently regressed between setup completion and prechecks.
+        create_bgp_update_group_check(expect_enabled=True),
+    ]
+
+
+def _create_bag013_ash6_conveyor_test_config_impl(
+    testbed: Testbed,
+    profile: BgpPlusPlusProfile,
+    enable_update_group: bool,
+) -> taac_types.TestConfig:
+    """Byte-wise-identical extraction of the legacy
+    ``bag013_ash6_test_config.create_bag013_ash6_conveyor_test_config``.
+
+    The default (``enable_update_group=False``) variant has NO playbooks --
+    bag013 is reserved for ad-hoc testing.
+
+    When ``enable_update_group=True``, the BGP++ ``enable_update_group`` setting
+    is dynamically toggled on the device during BGP++ deployment (in-shell patch
+    of ``/mnt/flash/bgpcpp_config`` per D100093369), the TestConfig ``name``
+    field is suffixed with ``_UPDATE_GROUP``, and the qualification 2.1.1 +
+    2.7.2 playbooks are attached.
+    """
+    assert testbed.device_name == "bag013.ash6", (
+        f"bag013 conveyor factories are Wave 1 hardcoded to bag013.ash6; "
+        f"got testbed.device_name={testbed.device_name!r}. Wave 2 will "
+        f"parameterize on testbed."
+    )
+    assert testbed.dut_bgp_as is not None, "Testbed must have dut_bgp_as set"
+    assert testbed.bgpcpp_configerator_path is not None, (
+        "Testbed must have bgpcpp_configerator_path set for BGP++ deployment"
+    )
+    assert testbed.openr_configerator_path is not None, (
+        "Testbed must have openr_configerator_path set for OpenR deployment"
+    )
+    assert len(testbed.ixia_ports) >= 3, (
+        "Testbed must have >= 3 IXIA ports (eBGP + iBGP + BGP-MON)"
+    )
+
+    device_name = testbed.device_name
+    ixia_chassis_ip = testbed.ixia_chassis_ip
+    ixia_interface_mimic_ebgp, ixia_port_ebgp = testbed.ixia_ports[0]
+    ixia_interface_mimic_ibgp, ixia_port_ibgp = testbed.ixia_ports[1]
+    ixia_interface_mimic_bgp_mon, ixia_port_bgp_mon = testbed.ixia_ports[2]
+
+    setup_tasks = get_common_setup_tasks(
+        device_name=device_name,
+        bgp_asn=testbed.dut_bgp_as,
+        ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
+        ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+        ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
+        bgpcpp_configerator_path=testbed.bgpcpp_configerator_path,
+        profile=profile,
+        openr_configerator_path=testbed.openr_configerator_path,
+        openr_port_channel_member="Ethernet3/9/1",
+        openr_port_channel_ipv4="10.131.97.232/31",
+        openr_port_channel_link_local="fe80::eba:a7f:fcfc/64",
+        openr_local_link={
+            "ipv4": "10.131.97.232",
+            "ipv6": "fe80::eba:a7f:fcfc",
+            "ifName": "po100211",
+            "weight": 0,
+            "metric": 10,
+        },
+        openr_other_link={
+            "ipv4": "10.131.97.233",
+            "ipv6": "fe80::eba:a7f:fcfd",
+            "ifName": "po100211",
+            "weight": 0,
+            "metric": 10,
+        },
+        enable_update_group=enable_update_group,
+    )
+
+    teardown_tasks = get_teardown_tasks(
+        ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
+        ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+        ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
+    )
+
+    test_config_name = "BAG013_ASH6_BGP_CONVEYOR_TEST"
+    if enable_update_group:
+        test_config_name += "_UPDATE_GROUP"
+
+    playbooks = (
+        [
+            # 2.1.1 Initial Dump: all peers in the same group receive identical
+            # routes (membership + dump-compare). Full parity with eb03.
+            create_bgp_ug_initial_dump_identical_routes_playbook(
+                device_name=device_name,
+                ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+                ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
+                ibgp_v6_peer_group=PEERGROUP_IBGP_V6,
+                ebgp_v6_peer_group=PEERGROUP_EBGP_V6,
+                ibgp_v4_peer_group=PEERGROUP_IBGP_V4,
+                bgp_mon_peer_group=PEERGROUP_BGP_MON,
+            ),
+            create_bgp_ug_sustained_link_flap_playbook(
+                device_name=device_name,
+                port_schedule=_BAG013_2_7_2_PORT_SCHEDULE,
+                total_duration_s=_BAG013_2_7_2_TOTAL_DURATION_S,
+                prechecks=_bag013_2_7_2_prechecks(),
+                # postchecks/snapshot_checks left None -- factory defaults
+                # cover the spec (BGP_STANDARD_POSTCHECKS + load-avg<12 +
+                # BGP_STANDARD_SNAPSHOT_CHECKS).
+            ),
+        ]
+        if enable_update_group
+        else []
+    )
+
+    return taac_types.TestConfig(
+        name=test_config_name,
+        skip_ixia_protocol_verification=True,
+        log_collection_timeout=600,
+        basset_pool="dne.test",
+        endpoints=[
+            taac_types.Endpoint(
+                name=device_name,
+                dut=True,
+                ixia_ports=[
+                    ixia_interface_mimic_ebgp,
+                    ixia_interface_mimic_ibgp,
+                    ixia_interface_mimic_bgp_mon,
+                ],
+                direct_ixia_connections=[
+                    taac_types.DirectIxiaConnection(
+                        interface=ixia_interface_mimic_ebgp,
+                        ixia_chassis_ip=ixia_chassis_ip,
+                        ixia_port=ixia_port_ebgp,
+                    ),
+                    taac_types.DirectIxiaConnection(
+                        interface=ixia_interface_mimic_ibgp,
+                        ixia_chassis_ip=ixia_chassis_ip,
+                        ixia_port=ixia_port_ibgp,
+                    ),
+                    taac_types.DirectIxiaConnection(
+                        interface=ixia_interface_mimic_bgp_mon,
+                        ixia_chassis_ip=ixia_chassis_ip,
+                        ixia_port=ixia_port_bgp_mon,
+                    ),
+                ],
+            ),
+        ],
+        host_os_type_map={device_name: taac_types.DeviceOsType.ARISTA_FBOSS},
+        startup_checks=[],
+        setup_tasks=setup_tasks,
+        teardown_tasks=teardown_tasks,
+        basic_port_configs=create_ebb_scale_basic_port_configs(
+            device_name=device_name,
+            ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
+            ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+            ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
+            ebgp_peer_count_v6=EBGP_PEER_COUNT_V6,
+            ebgp_peer_count_v4=EBGP_PEER_COUNT_V4,
+            ebgp_peer_to_drain=EBGP_PEER_TO_DRAIN,
+            ibgp_peer_scale_per_plane=IBGP_PEER_SCALE_PER_PLANE,
+            ibgp_peer_to_drain_per_plane=IBGP_PEER_TO_DRAIN_PER_PLANE,
+            bgp_mon_peer_count=BGP_MON_PEER_COUNT,
+            ebgp_remote_as=EBGP_REMOTE_AS,
+            ibgp_remote_as=IBGP_REMOTE_AS,
+            bgp_mon_remote_as=BGP_MON_REMOTE_AS,
+            ixia_ebgp_ic_parent_network_v6=IXIA_EBGP_IC_PARENT_NETWORK_V6,
+            ixia_ebgp_ic_parent_network_v4=IXIA_EBGP_IC_PARENT_NETWORK_V4,
+            ixia_ibgp_ic_parent_network_v6_dc_plane1=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
+            ixia_ibgp_ic_parent_network_v6_dc_plane2=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE2,
+            ixia_ibgp_ic_parent_network_v6_dc_plane3=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE3,
+            ixia_ibgp_ic_parent_network_v6_dc_plane4=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE4,
+            ixia_ibgp_ic_parent_network_v6_mp_plane1=IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE1,
+            ixia_ibgp_ic_parent_network_v6_mp_plane2=IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE2,
+            ixia_ibgp_ic_parent_network_v6_mp_plane3=IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE3,
+            ixia_ibgp_ic_parent_network_v6_mp_plane4=IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE4,
+            ixia_ibgp_ic_parent_network_v4_dc_plane1=IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE1,
+            ixia_ibgp_ic_parent_network_v4_dc_plane2=IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE2,
+            ixia_ibgp_ic_parent_network_v4_dc_plane3=IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE3,
+            ixia_ibgp_ic_parent_network_v4_dc_plane4=IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE4,
+            ixia_ibgp_ic_parent_network_v4_mp_plane1=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE1,
+            ixia_ibgp_ic_parent_network_v4_mp_plane2=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE2,
+            ixia_ibgp_ic_parent_network_v4_mp_plane3=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE3,
+            ixia_ibgp_ic_parent_network_v4_mp_plane4=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE4,
+            ixia_bgp_mon_ic_parent_network=IXIA_BGP_MON_IC_PARENT_NETWORK,
+            profile=profile,
+        ),
+        playbooks=playbooks,
+    )
+
+
+def create_bgp_ug_initial_dump_identical_routes_test_config(
+    testbed: Testbed,
+    profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
+) -> taac_types.TestConfig:
+    """BGP++ Update Group qualification 2.1.1 (Initial Dump -- Identical Routes)
+    TestConfig for the bag013 conveyor topology.
+
+    NAME/BEHAVIOR MISMATCH (grandfathered, tracked for Wave 4 rename):
+    despite its name this factory does NOT wire up the 2.1.1 playbook -- it
+    returns a TestConfig with ``name="BAG013_ASH6_BGP_CONVEYOR_TEST"`` and an
+    empty playbook list, byte-wise identical to the legacy
+    ``bag013_ash6_test_config.create_bag013_ash6_conveyor_test_config()``
+    default variant. The 2.1.1 playbook only ships in the ``_UPDATE_GROUP``
+    sibling (``create_bgp_ug_sustained_link_flap_test_config``); bag013's
+    default has always been ad-hoc.
+
+    Wave 4 followup: rename this to something like
+    ``create_bag013_ash6_adhoc_test_config`` (or restructure to actually
+    attach the 2.1.1 playbook here, matching name-to-behavior). Left as-is
+    for now because renaming a public factory would ripple across the
+    catalog + conveyor node aggregator without providing byte-identity
+    savings.
+    """
+    return _create_bag013_ash6_conveyor_test_config_impl(
+        testbed=testbed,
+        profile=profile,
+        enable_update_group=False,
+    )
+
+
+def create_bgp_ug_sustained_link_flap_test_config(
+    testbed: Testbed,
+    profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
+) -> taac_types.TestConfig:
+    """BGP++ Update Group qualification 2.7.2 (Sustained Link Flap) TestConfig
+    for the bag013 conveyor topology.
+
+    Byte-wise identical to the legacy
+    ``bag013_ash6_test_config.create_bag013_ash6_conveyor_test_config(
+    enable_update_group=True)`` -- returns a TestConfig with
+    ``name="BAG013_ASH6_BGP_CONVEYOR_TEST_UPDATE_GROUP"`` and two playbooks
+    attached: the 2.1.1 initial-dump-identical-routes playbook (full parity
+    with eb03.lab.ash6) followed by the 2.7.2 sustained-link-flap playbook
+    (rotates flapping the 3 IXIA-facing ports on independent cadences,
+    asserts no cross-group BGP session disruption after each cycle).
+    """
+    return _create_bag013_ash6_conveyor_test_config_impl(
+        testbed=testbed,
+        profile=profile,
+        enable_update_group=True,
+    )
