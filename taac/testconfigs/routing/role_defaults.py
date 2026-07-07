@@ -8,6 +8,18 @@ it just reads standard role keys (uplink_v6, downlink_v6, ibgp_v6,
 ebgp_v6, ...) from the Testbed dicts.
 
 See ``README.md`` §2 "DUT roles and role-defaults helpers".
-
-Skeleton — populated as Wave 1 migration diffs land.
 """
+
+
+def ebb_peer_groups() -> dict[str, str]:
+    """Standard EBB BGPCPP peer-group names (bag*, eb0N.lab, jsw002, fsw*).
+
+    Values match ``routing/ebb/ebb_bgp_plus_plus_test_config/ebb_bgp_plus_plus_conveyor/conveyor_constants.py``
+    (``PEERGROUP_IBGP_V6/V4``, ``PEERGROUP_EBGP_V6/V4``).
+    """
+    return {
+        "ibgp_v6": "EB-EB-V6",
+        "ebgp_v6": "EB-FA-V6",
+        "ibgp_v4": "EB-EB-V4",
+        "ebgp_v4": "EB-FA-V4",
+    }
