@@ -16,10 +16,10 @@ free; consumers that need the aggregated list import it from this
 module directly.
 """
 
-# Migrated to the routing framework in Diffs 5 + 6 + 8 (Wave 1 Struct-Init):
+# Migrated to the routing framework in Diffs 5 + 6 + 8 + 9 (Wave 1 Struct-Init):
 # BAG002_SNC1_CONVEYOR_TEST_CONFIG (Diff 5) + BAG010_ASH6_* (Diff 6) +
-# BAG011_ASH6_* (Diff 8) now live in testconfigs/routing/cicd_ebb_int_tc.py;
-# import via that path.
+# BAG011_ASH6_* (Diff 8) + BAG012_ASH6_* (Diff 9) now live in
+# testconfigs/routing/cicd_ebb_int_tc.py; import via that path.
 from taac.testconfigs.routing.cicd_ebb_int_tc import (
     BAG002_SNC1_CONVEYOR_TEST_CONFIG,
     BAG010_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG,
@@ -40,8 +40,6 @@ from taac.testconfigs.routing.cicd_ebb_int_tc import (
     BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_UPDATE_GROUP_CONFIG,
     BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG,
     BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_UPDATE_GROUP_CONFIG,
-)
-from taac.testconfigs.routing.ebb.bag012_ash6_test_config import (
     BAG012_ASH6_BOUNDED_ECMP_SETS_TEST_UPDATE_GROUP_CONFIG,
     BAG012_ASH6_CONSTANT_ATTRIBUTE_STORAGE_TEST_CONFIG,
     BAG012_ASH6_CONSTANT_ATTRIBUTE_STORAGE_TEST_UPDATE_GROUP_CONFIG,

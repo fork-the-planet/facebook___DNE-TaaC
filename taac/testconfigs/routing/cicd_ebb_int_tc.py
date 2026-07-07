@@ -10,6 +10,13 @@ Holds bag conveyor testconfigs and the aggregated
 External consumers import via ``testconfigs.routing`` root; see README.md §7.
 """
 
+from taac.testconfigs.routing.factories.bgp_ebb_characteristic import (
+    create_ebb_bag012_bounded_ecmp_sets_test_config,
+    create_ebb_bag012_constant_attribute_storage_test_config,
+    create_ebb_bag012_conveyor_test_config,
+    create_ebb_bag012_performance_scaling_test_config,
+    create_ebb_bag012_queue_memory_monitor_test_config,
+)
 from taac.testconfigs.routing.factories.bgp_ebb_full_scale import (
     create_ebb_bag011_bgp_oscillations_test_config,
     create_ebb_bag011_bgp_restart_test_config,
@@ -26,6 +33,7 @@ from taac.testconfigs.routing.testbed import (
     BAG002_SNC1,
     BAG010_ASH6,
     BAG011_ASH6,
+    BAG012_ASH6,
 )
 
 
@@ -114,6 +122,49 @@ BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
 )
 
 
+# ─── Diff 9 — BAG012_ASH6 conveyor family (5 factories × baseline+UG) ───────
+# Python constant names + internal ``TestConfig.name`` field values are
+# grandfathered from ``bag012_ash6_test_config.py`` (Wave 4 renames to fit the
+# ``{TESTBED}_{FACTORY}_{VARIANT}_TEST_CONFIG`` shape). Golden manifest hashes
+# for all 9 tracked configs (CONVEYOR / CONSTANT_ATTRIBUTE_STORAGE /
+# QUEUE_MEMORY_MONITOR / PERFORMANCE_SCALING, each with ``_UPDATE_GROUP``
+# sibling, plus the update-group-only BOUNDED_ECMP_SETS) are preserved
+# byte-wise. bag012 wires only 2 IXIA ports (no BGP-MON) so its factories
+# live in ``factories/bgp_ebb_characteristic.py`` rather than the full-scale
+# EBB factories which require a BGP-MON port.
+BAG012_ASH6_CONVEYOR_TEST_CONFIG = create_ebb_bag012_conveyor_test_config(BAG012_ASH6)
+BAG012_ASH6_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = create_ebb_bag012_conveyor_test_config(
+    BAG012_ASH6, enable_update_group=True
+)
+BAG012_ASH6_CONSTANT_ATTRIBUTE_STORAGE_TEST_CONFIG = (
+    create_ebb_bag012_constant_attribute_storage_test_config(BAG012_ASH6)
+)
+BAG012_ASH6_CONSTANT_ATTRIBUTE_STORAGE_TEST_UPDATE_GROUP_CONFIG = (
+    create_ebb_bag012_constant_attribute_storage_test_config(
+        BAG012_ASH6, enable_update_group=True
+    )
+)
+BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_CONFIG = (
+    create_ebb_bag012_queue_memory_monitor_test_config(BAG012_ASH6)
+)
+BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_UPDATE_GROUP_CONFIG = (
+    create_ebb_bag012_queue_memory_monitor_test_config(
+        BAG012_ASH6, enable_update_group=True
+    )
+)
+BAG012_ASH6_PERFORMANCE_SCALING_TEST_CONFIG = (
+    create_ebb_bag012_performance_scaling_test_config(BAG012_ASH6)
+)
+BAG012_ASH6_PERFORMANCE_SCALING_TEST_UPDATE_GROUP_CONFIG = (
+    create_ebb_bag012_performance_scaling_test_config(
+        BAG012_ASH6, enable_update_group=True
+    )
+)
+BAG012_ASH6_BOUNDED_ECMP_SETS_TEST_UPDATE_GROUP_CONFIG = (
+    create_ebb_bag012_bounded_ecmp_sets_test_config(BAG012_ASH6)
+)
+
+
 __all__ = [
     "BAG002_SNC1_CONVEYOR_TEST_CONFIG",
     "BAG010_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG",
@@ -134,4 +185,13 @@ __all__ = [
     "BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
     "BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG",
     "BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
+    "BAG012_ASH6_BOUNDED_ECMP_SETS_TEST_UPDATE_GROUP_CONFIG",
+    "BAG012_ASH6_CONSTANT_ATTRIBUTE_STORAGE_TEST_CONFIG",
+    "BAG012_ASH6_CONSTANT_ATTRIBUTE_STORAGE_TEST_UPDATE_GROUP_CONFIG",
+    "BAG012_ASH6_CONVEYOR_TEST_CONFIG",
+    "BAG012_ASH6_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
+    "BAG012_ASH6_PERFORMANCE_SCALING_TEST_CONFIG",
+    "BAG012_ASH6_PERFORMANCE_SCALING_TEST_UPDATE_GROUP_CONFIG",
+    "BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_CONFIG",
+    "BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_UPDATE_GROUP_CONFIG",
 ]
