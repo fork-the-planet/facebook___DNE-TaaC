@@ -248,10 +248,37 @@ CTE_UCMP_STAND_ALONE_TESTBED = Testbed(
 )
 
 
-# ─── EB03 lab testbed (Arista lab box in ASH6) ────────────────────────────
-# eb03.lab.ash6 is a lab device with admin/password auth (svc-netcastle_bot
-# not authorized). extras carries lab-specific credentials + MockDeviceInfo
-# fields (netwhoami returns #INVALID# for this device).
+# ─── EB0x lab testbeds (Arista lab boxes in ASH6) ─────────────────────────
+# The ebXX.lab.ash6 devices are lab boxes with admin/password auth
+# (svc-netcastle_bot is not authorized). ``extras`` carries the shared lab
+# credentials plus MockDeviceInfo fields (netwhoami returns ``#INVALID#`` for
+# these devices, so ``get_common_setup_tasks`` needs a synthesized record).
+EB01_LAB_ASH6 = Testbed(
+    device_name="eb01.lab.ash6",
+    ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
+    ixia_ports=[
+        ("Ethernet3/1/3", "5/7"),  # eBGP
+        ("Ethernet3/1/5", "5/8"),  # iBGP
+        # No BGP-MON port on eb01 (bgp_mon_peer_count=0 in the legacy source).
+    ],
+    dut_bgp_as=64981,
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    lab_device_password_env_var="TAAC_EBB_LAB_DEVICE_PASSWORD",
+    peer_groups=ebb_peer_groups(),
+    extras={
+        "lab_admin_username": "admin",
+        "lab_admin_password_default": "dnepit",  # pragma: allowlist secret
+        "mock_device_hardware": "ARISTA_7516",
+        "mock_device_role": "EB",
+        "mock_device_asic": "JERICHO",
+        "mock_device_dc": "ash6",
+        "mock_device_region": "ash",
+        "mock_device_asset_id": 12345,
+        "mock_device_network_area": "BACKBONE",
+        "mock_device_network_type": "EBB",
+    },
+)
+
 EB03_LAB_ASH6 = Testbed(
     device_name="eb03.lab.ash6",
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
@@ -275,5 +302,181 @@ EB03_LAB_ASH6 = Testbed(
         "mock_device_asset_id": 12345,
         "mock_device_network_area": "BACKBONE",
         "mock_device_network_type": "EBB",
+    },
+)
+
+EB04_LAB_ASH6 = Testbed(
+    device_name="eb04.lab.ash6",
+    ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
+    ixia_ports=[
+        ("Ethernet3/1/1", "6/7"),  # eBGP
+        ("Ethernet3/1/3", "6/8"),  # iBGP
+        # No BGP-MON port on eb04 (bgp_mon_peer_count=0 in the legacy source;
+        # ixia_interface_mimic_bgp_mon aliases the eBGP port and is unused).
+    ],
+    dut_bgp_as=64981,
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    lab_device_password_env_var="TAAC_EBB_LAB_DEVICE_PASSWORD",
+    peer_groups=ebb_peer_groups(),
+    extras={
+        "lab_admin_username": "admin",
+        "lab_admin_password_default": "dnepit",  # pragma: allowlist secret
+        "mock_device_hardware": "ARISTA_7516",
+        "mock_device_role": "EB",
+        "mock_device_asic": "JERICHO",
+        "mock_device_dc": "ash6",
+        "mock_device_region": "ash",
+        "mock_device_asset_id": 12345,
+        "mock_device_network_area": "BACKBONE",
+        # NOTE: legacy eb04 source omits ``network_type`` on MockDeviceInfo,
+        # unlike eb01/eb03 which set ``network_type="EBB"``. Preserved verbatim.
+    },
+)
+
+
+# ─── Dev-only EB test device ──────────────────────────────────────────────
+# ``bgp.eb.test.ash6`` is a per-developer BGP++ test switch — a lab box like
+# the eb0x boxes above, but with an extra ``bgp_ip`` host-driver kwarg
+# (thrift-over-IPv6 to a non-loopback address). Only used by the queue-memory
+# monitor testconfig.
+EB_TEST_DEVICE = Testbed(
+    device_name="bgp.eb.test.ash6",
+    ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
+    ixia_ports=[
+        ("Ethernet3/1/5", "5/3"),  # eBGP
+        ("Ethernet3/1/3", "5/2"),  # iBGP
+    ],
+    dut_bgp_as=64981,
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    lab_device_password_env_var="TAAC_EBB_LAB_DEVICE_PASSWORD",
+    peer_groups=ebb_peer_groups(),
+    extras={
+        "lab_admin_username": "admin",
+        "lab_admin_password_default": "dnepit",  # pragma: allowlist secret
+        # Extra host-driver JSON kwarg beyond the standard username/password
+        # pair — routes the BGP++ thrift RPC to a specific IPv6 address on
+        # the dev testbed (device's regular loopback is not reachable from
+        # devservers).
+        "host_driver_extra_kwargs": {
+            "bgp_ip": "2401:db00:2066:304a::1001",
+        },
+        "mock_device_hardware": "ARISTA_7516",
+        "mock_device_role": "EB",
+        "mock_device_asic": "JERICHO",
+        "mock_device_dc": "ash6",
+        "mock_device_region": "ash",
+        "mock_device_asset_id": 12345,
+        "mock_device_network_area": "BACKBONE",
+        "mock_device_network_type": "EBB",
+    },
+)
+
+
+# ─── Production Arista EB in SNC1 ─────────────────────────────────────────
+# ``jsw002.m001.snc1`` is a production EB Arista used by the non-lab
+# ARISTA_MIMIC_EBB_TEST_FULL_SCALE testconfig. The legacy source declares no
+# ``direct_ixia_connections`` (topology is discovered at runtime), so the
+# chassis + port map is intentionally left empty here — Wave 5B will surface
+# the discovered ports if/when the factory needs them.
+JSW002_M001_SNC1 = Testbed(
+    device_name="jsw002.m001.snc1",
+    ixia_chassis_ip="",
+    dut_bgp_as=64981,
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    peer_groups=ebb_peer_groups(),
+    extras={
+        # Reference DUT interfaces from the legacy source, kept here so Wave
+        # 5B factories can wire up ixia setup without re-parsing the legacy
+        # testconfig files.
+        "dut_iface_ebgp": "Ethernet3/8/1",
+        "dut_iface_ibgp": "Ethernet3/8/5",
+        "dut_iface_bgp_mon": "Ethernet3/9/1",
+    },
+)
+
+
+# ─── FA verify testbed (FA001-UU001 in QZD1) ──────────────────────────────
+# ``fa001-uu001.qzd1`` is a Fabric-Aggregator uplink used by the BGP++
+# computational-load and constant-attribute-storage feature verify configs.
+# It uses FAUU-style peer-group names (PEERGROUP_FAUU_*) rather than the
+# EBB EB-EB/EB-FA scheme, so ``peer_groups`` is left empty here — a
+# future ``fa_uu_peer_groups()`` helper will populate it when Wave 5B
+# migrates the FA verify factory.
+FA001_UU001_QZD1 = Testbed(
+    device_name="fa001-uu001.qzd1",
+    ixia_chassis_ip="",
+    # dut_bgp_as = ibgp_remote_as (iBGP is same-AS): AS 65271 (FAUU-FADU pool).
+    dut_bgp_as=65271,
+    extras={
+        "dut_iface_ebgp": "eth6/13/1",
+        "dut_iface_ibgp": "eth6/15/1",
+    },
+)
+
+
+# ─── FBOSS EBB single-node testbeds (FSW / QZD family) ────────────────────
+# Four sibling testbeds built from the same ``test_config_for_bgp_plus_plus_ebb``
+# / ``..._with_bgp_mon`` factories, each pinning a different DUT. The QZD
+# testconfigs uniformly route to the ASH6 IXIA chassis (verbatim from legacy
+# ``direct_ixia_connections``); the non-MON siblings do not declare direct
+# connections at all, so their ports are captured via ``extras`` for Wave 5B
+# to consume.
+FSW001_QZB = Testbed(
+    device_name="fsw001.p003.f01.qzb1",
+    ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
+    ixia_ports=[
+        ("eth7/1/1", "1/7"),  # eBGP
+        ("eth7/3/1", "1/8"),  # iBGP
+        ("eth7/5/1", "4/3"),  # BGP-MON
+    ],
+    dut_bgp_as=64981,
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    peer_groups=ebb_peer_groups(),
+)
+
+FSW_QZB = Testbed(
+    device_name="fsw001.p003.f01.qzb1",
+    # Legacy ``fsw_qzb_...`` testconfig declares no ``direct_ixia_connections``.
+    # Same physical DUT as ``FSW001_QZB`` above; a separate Testbed instance
+    # because it drives a different testconfig (no BGP-MON, different playbook
+    # scope) and Wave 5B may layer distinct factory args on top.
+    ixia_chassis_ip="",
+    dut_bgp_as=64981,
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    peer_groups=ebb_peer_groups(),
+    extras={
+        "dut_iface_ebgp": "eth7/1/1",
+        "dut_iface_ibgp": "eth7/3/1",
+    },
+)
+
+QZD_FSW002 = Testbed(
+    device_name="fsw002.p003.f01.qzb1",
+    ixia_chassis_ip="",
+    dut_bgp_as=64981,
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    peer_groups=ebb_peer_groups(),
+    extras={
+        "dut_iface_ebgp": "eth7/1/1",
+        "dut_iface_ibgp": "eth7/3/1",
+        "dut_iface_bgp_mon": "eth7/5/1",
+    },
+)
+
+QZD_LAB = Testbed(
+    # Same DUT name as ``CTE_UCMP_STAND_ALONE_TESTBED`` — the CTE UCMP config
+    # reserves this device for confed-peer stand-alone testing, while
+    # ``QZD_LAB`` uses it as an EBB single-node full-scale DUT. Separate
+    # logical testbed because peer-groups / route-maps differ (uses
+    # PROPAGATE_FSW_SSW_* / PROPAGATE_FSW_RSW_* policy names in the legacy
+    # source, distinct from EBB EB-FA-IN/OUT).
+    device_name="fsw003.p003.f01.qzd1",
+    ixia_chassis_ip="",
+    dut_bgp_as=64981,
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    peer_groups=ebb_peer_groups(),
+    extras={
+        "dut_iface_ebgp": "eth8/16/1",
+        "dut_iface_ibgp": "eth9/16/1",
     },
 )
