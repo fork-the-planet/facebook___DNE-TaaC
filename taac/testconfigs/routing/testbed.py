@@ -279,6 +279,32 @@ EB01_LAB_ASH6 = Testbed(
     },
 )
 
+EB02_LAB_ASH6 = Testbed(
+    device_name="eb02.lab.ash6",
+    ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
+    ixia_ports=[
+        ("Ethernet3/1/3", "6/2"),  # eBGP
+        ("Ethernet3/1/5", "6/3"),  # iBGP
+        # No BGP-MON port on eb02 (bgp_mon_peer_count=0 in the legacy source).
+    ],
+    dut_bgp_as=64981,
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    lab_device_password_env_var="TAAC_EBB_LAB_DEVICE_PASSWORD",
+    peer_groups=ebb_peer_groups(),
+    extras={
+        "lab_admin_username": "admin",
+        "lab_admin_password_default": "dnepit",  # pragma: allowlist secret
+        "mock_device_hardware": "ARISTA_7516",
+        "mock_device_role": "EB",
+        "mock_device_asic": "JERICHO",
+        "mock_device_dc": "ash6",
+        "mock_device_region": "ash",
+        "mock_device_asset_id": 12345,
+        "mock_device_network_area": "BACKBONE",
+        "mock_device_network_type": "EBB",
+    },
+)
+
 EB03_LAB_ASH6 = Testbed(
     device_name="eb03.lab.ash6",
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,

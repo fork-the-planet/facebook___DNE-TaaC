@@ -10,20 +10,18 @@ See ../README.md §3.
 """
 
 from taac.constants import BgpPlusPlusProfile
-from taac.testconfigs.routing.ebb.test_config_performance_scaling_case1 import (
-    test_config_for_bgp_plus_plus_on_ebb_arista_performance_scaling,
-)
 from taac.testconfigs.routing.ebb.test_config_performance_scaling_case2 import (
     test_config_constant_attribute_storage_varying_combinations_on_eos,
-)
-from taac.testconfigs.routing.ebb.test_config_performance_scaling_case9 import (
-    test_config_for_bgp_plus_plus_on_ebb_arista_bounded_ecmp_sets,
 )
 from taac.testconfigs.routing.ebb.test_config_queue_memory_monitor import (
     test_config_bgp_queue_memory_monitoring_with_route_scale,
 )
 from taac.testconfigs.routing.ebb.test_config_update_packing import (
     test_config_bgp_update_packing_validation,
+)
+from taac.testconfigs.routing.factories.bgp_ebb_scaling import (
+    create_bgp_ebb_scaling_bounded_ecmp_sets_test_config,
+    create_bgp_ebb_scaling_performance_test_config,
 )
 from taac.testconfigs.routing.testbed import Testbed
 from taac.testconfigs.routing.util.bgp_ebb_constants import (
@@ -420,14 +418,12 @@ def create_ebb_bag012_performance_scaling_test_config(
         peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
         ebgp_peer_count=1,
     )
-    return test_config_for_bgp_plus_plus_on_ebb_arista_performance_scaling(
-        test_config_name=name,
-        device_name=device_name,
+    return create_bgp_ebb_scaling_performance_test_config(
+        testbed,
+        name=name,
         host_driver_args=None,
         oss_mock_device_data=None,
         host_os_type_map={device_name: taac_types.DeviceOsType.ARISTA_FBOSS},
-        ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
-        ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
         direct_ixia_connections=_bag012_direct_ixia_connections(testbed),
         egress_peer_counts=_BAG012_PERFORMANCE_SCALING_EGRESS_PEER_COUNTS,
         prefix_count=_BAG012_PERFORMANCE_SCALING_PREFIX_COUNT,
@@ -498,11 +494,9 @@ def create_ebb_bag012_bounded_ecmp_sets_test_config(
         enable_update_group=True,
     )
 
-    return test_config_for_bgp_plus_plus_on_ebb_arista_bounded_ecmp_sets(
-        test_config_name="BAG012_ASH6_BGP_BOUNDED_ECMP_SETS_CONVEYOR_TEST_UPDATE_GROUP",
-        device_name=device_name,
-        ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
-        ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+    return create_bgp_ebb_scaling_bounded_ecmp_sets_test_config(
+        testbed,
+        name="BAG012_ASH6_BGP_BOUNDED_ECMP_SETS_CONVEYOR_TEST_UPDATE_GROUP",
         ebgp_peer_count_v6=_BAG012_BOUNDED_ECMP_PEER_COUNT,
         ibgp_peer_count_v6=_BAG012_BOUNDED_ECMP_PEER_COUNT,
         ebgp_peer_count_v4=_BAG012_BOUNDED_ECMP_PEER_COUNT,
