@@ -16,6 +16,10 @@ free; consumers that need the aggregated list import it from this
 module directly.
 """
 
+# Migrated to the routing framework in Diffs 5 + 6 + 8 (Wave 1 Struct-Init):
+# BAG002_SNC1_CONVEYOR_TEST_CONFIG (Diff 5) + BAG010_ASH6_* (Diff 6) +
+# BAG011_ASH6_* (Diff 8) now live in testconfigs/routing/cicd_ebb_int_tc.py;
+# import via that path.
 from taac.testconfigs.routing.cicd_ebb_int_tc import (
     BAG002_SNC1_CONVEYOR_TEST_CONFIG,
     BAG010_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG,
@@ -28,8 +32,6 @@ from taac.testconfigs.routing.cicd_ebb_int_tc import (
     BAG010_ASH6_INSTABILITY_CONVEYOR_TEST_UPDATE_GROUP_CONFIG,
     BAG010_ASH6_RUNTIME_UPDATE_CONVEYOR_TEST_CONFIG,
     BAG010_ASH6_RUNTIME_UPDATE_CONVEYOR_TEST_UPDATE_GROUP_CONFIG,
-)
-from taac.testconfigs.routing.ebb.bag011_ash6_test_config import (
     BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST_CONFIG,
     BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST_UPDATE_GROUP_CONFIG,
     BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST_CONFIG,

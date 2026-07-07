@@ -11,6 +11,10 @@ External consumers import via ``testconfigs.routing`` root; see README.md §7.
 """
 
 from taac.testconfigs.routing.factories.bgp_ebb_full_scale import (
+    create_ebb_bag011_bgp_oscillations_test_config,
+    create_ebb_bag011_bgp_restart_test_config,
+    create_ebb_bag011_bgp_stability_test_config,
+    create_ebb_bag011_bgp_stage1_test_config,
     create_ebb_cold_start_and_daemon_restart_test_config,
     create_ebb_drain_test_config,
     create_ebb_instability_test_config,
@@ -21,6 +25,7 @@ from taac.testconfigs.routing.factories.bgp_ebb_full_scale import (
 from taac.testconfigs.routing.testbed import (
     BAG002_SNC1,
     BAG010_ASH6,
+    BAG011_ASH6,
 )
 
 
@@ -73,6 +78,42 @@ BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_UPDATE_GROUP_CONFIG = (
 )
 
 
+# ─── Diff 8 — BAG011_ASH6 conveyor family (4 factories × baseline+UG) ───────
+# Python constant names + internal ``TestConfig.name`` field values are
+# grandfathered from ``bag011_ash6_test_config.py`` (Wave 4 renames). Golden
+# manifest hashes for all 8 tracked configs (RESTART / OSCILLATIONS /
+# STABILITY / STAGE1, each with ``_UPDATE_GROUP`` sibling) are preserved
+# byte-wise. The ``pnh_metric_oscillation`` playbook is intentionally NOT in
+# STAGE1 — it lives on bag010's STAGE1 for cross-device wall-clock balance
+# (both bag010 and bag011 share the same full-scale topology).
+BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST_CONFIG = (
+    create_ebb_bag011_bgp_restart_test_config(BAG011_ASH6)
+)
+BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
+    create_ebb_bag011_bgp_restart_test_config(BAG011_ASH6, enable_update_group=True)
+)
+BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST_CONFIG = (
+    create_ebb_bag011_bgp_oscillations_test_config(BAG011_ASH6)
+)
+BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
+    create_ebb_bag011_bgp_oscillations_test_config(
+        BAG011_ASH6, enable_update_group=True
+    )
+)
+BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_CONFIG = (
+    create_ebb_bag011_bgp_stability_test_config(BAG011_ASH6)
+)
+BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
+    create_ebb_bag011_bgp_stability_test_config(BAG011_ASH6, enable_update_group=True)
+)
+BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG = create_ebb_bag011_bgp_stage1_test_config(
+    BAG011_ASH6
+)
+BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
+    create_ebb_bag011_bgp_stage1_test_config(BAG011_ASH6, enable_update_group=True)
+)
+
+
 __all__ = [
     "BAG002_SNC1_CONVEYOR_TEST_CONFIG",
     "BAG010_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG",
@@ -85,4 +126,12 @@ __all__ = [
     "BAG010_ASH6_INSTABILITY_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
     "BAG010_ASH6_RUNTIME_UPDATE_CONVEYOR_TEST_CONFIG",
     "BAG010_ASH6_RUNTIME_UPDATE_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
+    "BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST_CONFIG",
+    "BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
+    "BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST_CONFIG",
+    "BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
+    "BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_CONFIG",
+    "BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
+    "BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG",
+    "BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
 ]

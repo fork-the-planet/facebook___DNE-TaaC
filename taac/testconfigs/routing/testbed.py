@@ -121,6 +121,50 @@ BAG010_ASH6 = Testbed(
     },
 )
 
+BAG011_ASH6 = Testbed(
+    device_name="bag011.ash6",
+    ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
+    ixia_ports=[
+        ("Ethernet3/36/1", "7/4"),  # eBGP
+        ("Ethernet3/36/2", "7/5"),  # iBGP
+        ("Ethernet3/36/3", "7/6"),  # BGP-MON
+    ],
+    # NOTE: preserved verbatim from the legacy bag011_ash6_test_config.py
+    # which stored the DUT's local BGP AS in a variable named
+    # ``BAG012_EOS_BGP_AS = 65011``. The literal 65011 is bag011's AS; the
+    # legacy variable name was a copy-paste artifact.
+    dut_bgp_as=65011,
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    openr_configerator_path="taac/ebb_ci_cd_configs/bag011_ash6_openr_config",
+    peer_groups=ebb_peer_groups(),
+    extras={
+        # OpenR link-config knobs consumed by
+        # ``conveyor_common_tasks.get_common_setup_tasks`` for the bag011.ash6
+        # DUT. Kept in ``extras`` because they are OpenR-specific baseline
+        # attributes and do not fit the generic Testbed fields.
+        "openr_port_channel_member": "Ethernet3/9/1",
+        "openr_port_channel_ipv4": "10.131.97.236/31",
+        "openr_port_channel_link_local": "fe80::eba:a7f:fd00/64",
+        # bag011 uses the shared ``OPENR_LOCAL_LINK`` / ``OPENR_OTHER_LINK``
+        # constants from ``conveyor_constants.py`` verbatim (unlike bag010
+        # which has DUT-specific overrides).
+        "openr_local_link": {
+            "ipv4": "10.131.97.236",
+            "ipv6": "fe80::eba:a7f:fd00",
+            "ifName": "po100211",
+            "weight": 0,
+            "metric": 10,
+        },
+        "openr_other_link": {
+            "ipv4": "10.131.97.237",
+            "ipv6": "fe80::eba:a7f:fd01",
+            "ifName": "po100211",
+            "weight": 0,
+            "metric": 10,
+        },
+    },
+)
+
 BAG012_ASH6 = Testbed(
     device_name="bag012.ash6",
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,

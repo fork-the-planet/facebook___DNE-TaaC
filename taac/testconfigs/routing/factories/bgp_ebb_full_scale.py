@@ -19,11 +19,17 @@ from taac.constants import (
 from taac.playbooks.routing.bgp_ebb_playbooks import (
     create_bgp_ebb_cold_start_playbook,
     create_bgp_ebb_daemon_restart_playbook,
+    create_bgp_ebb_ebgp_route_oscillations_playbook,
+    create_bgp_ebb_ebgp_session_oscillations_playbook,
     create_bgp_ebb_fauu_drain_undrain_playbook,
+    create_bgp_ebb_ibgp_route_oscillations_playbook,
+    create_bgp_ebb_ibgp_tornado_plane_oscillations_playbook,
+    create_bgp_ebb_igp_instability_unresolvable_pnhs_playbook,
     create_bgp_ebb_igp_pnh_metric_oscillation_playbook,
     create_bgp_ebb_instability_attribute_churn_playbook,
     create_bgp_ebb_longevity_playbook,
     create_bgp_ebb_multipath_group_oscillation_playbook,
+    create_bgp_ebb_nexthop_group_count_threshold_playbook,
     create_bgp_ebb_plane_drain_undrain_playbook,
     create_bgp_ebb_route_registry_runtime_update_playbook,
     create_bgp_ebb_route_storm_playbook,
@@ -78,6 +84,7 @@ from taac.task_definitions import (
     create_run_commands_on_shell_task,
 )
 from taac.testconfigs.routing.testbed import Testbed
+from taac.utils.arista_utils import interface_name_to_short_format
 from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConfig
 
@@ -750,6 +757,308 @@ def create_ebb_stage1_consolidated_test_config(
                 expected_established_sessions=session_count,
                 profile=profile,
                 expected_peer_identity=expected_peer_identity,
+            ),
+        ],
+    )
+
+
+# =============================================================================
+# BAG011_ASH6 conveyor family — Restart / Oscillations / Stability / Stage1
+# =============================================================================
+# bag011.ash6 nexthop group threshold — fail if num_groups_configured meets or
+# exceeds this value. Preserved verbatim from the legacy
+# ``bag011_ash6_test_config.NEXTHOP_GROUP_THRESHOLD``.
+_BAG011_NEXTHOP_GROUP_THRESHOLD = 100
+
+
+def _bag011_expected_established_session_count() -> int:
+    """Established-session baseline for bag011.ash6 full-scale topology.
+
+    Total sessions across all peer types minus BGP MON. BGP MON peers
+    (ASN 64001) legitimately stay IDLE intermittently on bag011 post-
+    restart / cold-start (R96.1 failure analysis), and the upstream bgpcpp
+    configerator config does not always bring them back. Excluding them from
+    BGP session-establish checks avoids spurious flakes while preserving the
+    iBGP/eBGP signal.
+    """
+    total_session_count = (
+        EBGP_PEER_COUNT_V6
+        + EBGP_PEER_COUNT_V4
+        + BGP_MON_PEER_COUNT
+        + IBGP_PEER_SCALE_PER_PLANE * 4  # 4 DC-site devices, IPv4 remote EB
+        + IBGP_PEER_SCALE_PER_PLANE * 4  # 4 DC-site devices, IPv6 remote EB
+        + IBGP_PEER_SCALE_PER_PLANE * 4  # 4 MP-site devices, IPv4 remote MP
+        + IBGP_PEER_SCALE_PER_PLANE * 4  # 4 MP-site devices, IPv6 remote MP
+    )
+    return total_session_count - BGP_MON_PEER_COUNT
+
+
+def create_ebb_bag011_bgp_restart_test_config(
+    testbed: Testbed,
+    profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
+    enable_update_group: bool = False,
+) -> TestConfig:
+    """BGP restart conveyor test — daemon-restart + cold-start.
+
+    Extracted verbatim from the legacy
+    ``bag011_ash6_test_config.create_bgp_restart_test_config`` factory. The
+    internal ``TestConfig.name`` field is preserved verbatim as
+    ``BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST`` (+ ``_UPDATE_GROUP``) so the
+    golden manifest hash is byte-wise identical.
+    """
+    name = "BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST"
+    if enable_update_group:
+        name += "_UPDATE_GROUP"
+
+    device_name = testbed.device_name
+    expected_peer_identity = build_expected_peer_identity()
+    return _build_ebb_full_scale_test_config(
+        testbed=testbed,
+        name=name,
+        profile=profile,
+        enable_update_group=enable_update_group,
+        drain=False,
+        playbooks=[
+            create_bgp_ebb_daemon_restart_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                profile=profile,
+                expected_peer_identity=expected_peer_identity,
+            ),
+            create_bgp_ebb_cold_start_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                profile=profile,
+                expected_peer_identity=expected_peer_identity,
+            ),
+        ],
+    )
+
+
+def create_ebb_bag011_bgp_oscillations_test_config(
+    testbed: Testbed,
+    profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
+    enable_update_group: bool = False,
+) -> TestConfig:
+    """BGP oscillations conveyor test — eBGP/iBGP session + route oscillations.
+
+    Extracted verbatim from the legacy
+    ``bag011_ash6_test_config.create_bgp_oscillations_test_config`` factory.
+    The internal ``TestConfig.name`` field is preserved verbatim as
+    ``BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST`` (+ ``_UPDATE_GROUP``) so
+    the golden manifest hash is byte-wise identical.
+    """
+    name = "BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST"
+    if enable_update_group:
+        name += "_UPDATE_GROUP"
+
+    device_name = testbed.device_name
+    session_count = _bag011_expected_established_session_count()
+    expected_peer_identity = build_expected_peer_identity()
+    return _build_ebb_full_scale_test_config(
+        testbed=testbed,
+        name=name,
+        profile=profile,
+        enable_update_group=enable_update_group,
+        drain=False,
+        playbooks=[
+            create_bgp_ebb_ebgp_session_oscillations_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                ipv4_session_count=EBGP_PEER_COUNT_V4,
+                ipv6_session_count=EBGP_PEER_COUNT_V6,
+                expected_established_sessions=session_count,
+                profile=profile,
+                expected_peer_identity=expected_peer_identity,
+            ),
+            create_bgp_ebb_ibgp_tornado_plane_oscillations_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                ipv4_sessions_per_plane=IBGP_PEER_SCALE_PER_PLANE,
+                ipv6_sessions_per_plane=IBGP_PEER_SCALE_PER_PLANE,
+                expected_established_sessions=session_count,
+                profile=profile,
+                expected_peer_identity=expected_peer_identity,
+            ),
+            create_bgp_ebb_ebgp_route_oscillations_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                expected_established_sessions=session_count,
+                profile=profile,
+            ),
+            create_bgp_ebb_ibgp_route_oscillations_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                expected_established_sessions=session_count,
+                profile=profile,
+            ),
+        ],
+    )
+
+
+def create_ebb_bag011_bgp_stability_test_config(
+    testbed: Testbed,
+    profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
+    enable_update_group: bool = False,
+) -> TestConfig:
+    """BGP stability conveyor test — Tier 3 IGP instability + nexthop group.
+
+    Extracted verbatim from the legacy
+    ``bag011_ash6_test_config.create_bgp_stability_test_config`` factory.
+    The internal ``TestConfig.name`` field is preserved verbatim as
+    ``BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST`` (+ ``_UPDATE_GROUP``) so
+    the golden manifest hash is byte-wise identical.
+    """
+    name = "BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST"
+    if enable_update_group:
+        name += "_UPDATE_GROUP"
+
+    device_name = testbed.device_name
+    ixia_interface_mimic_bgp_mon = testbed.ixia_ports[2][0]
+    session_count = _bag011_expected_established_session_count()
+    expected_peer_identity = build_expected_peer_identity()
+    return _build_ebb_full_scale_test_config(
+        testbed=testbed,
+        name=name,
+        profile=profile,
+        enable_update_group=enable_update_group,
+        drain=False,
+        playbooks=[
+            create_bgp_ebb_igp_pnh_metric_oscillation_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                local_link=testbed.extras["openr_local_link"],
+                other_link=testbed.extras["openr_other_link"],
+                expected_established_sessions=session_count,
+                profile=profile,
+                expected_peer_identity=expected_peer_identity,
+            ),
+            create_bgp_ebb_igp_instability_unresolvable_pnhs_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                tcp_dump_capture_interface=interface_name_to_short_format(
+                    ixia_interface_mimic_bgp_mon
+                ),
+                local_link=testbed.extras["openr_local_link"],
+                other_link=testbed.extras["openr_other_link"],
+                expected_established_sessions=session_count,
+                profile=profile,
+                expected_peer_identity=expected_peer_identity,
+            ),
+            create_bgp_ebb_nexthop_group_count_threshold_playbook(
+                device_name=device_name,
+                nexthop_group_threshold=_BAG011_NEXTHOP_GROUP_THRESHOLD,
+            ),
+        ],
+    )
+
+
+def create_ebb_bag011_bgp_stage1_test_config(
+    testbed: Testbed,
+    profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
+    enable_update_group: bool = False,
+) -> TestConfig:
+    """Stage-1 consolidated conveyor test — all bag011 playbooks minus pnh_metric_oscillation.
+
+    Extracted verbatim from the legacy
+    ``bag011_ash6_test_config.create_bag011_ash6_stage1_consolidated_test_config``
+    factory. Runs 8 playbooks under one setup phase (restart first, then
+    oscillations, then IGP-instability + nexthop-group). The
+    ``bgp_igp_instability_pnh_metric_oscillation`` playbook is moved to
+    bag010 for cross-device wall-clock balance (both bag010 and bag011 share
+    the same full-scale topology).
+
+    The internal ``TestConfig.name`` field is preserved verbatim as
+    ``BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST`` (+ ``_UPDATE_GROUP``) so the
+    golden manifest hash is byte-wise identical.
+    """
+    name = "BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST"
+    if enable_update_group:
+        name += "_UPDATE_GROUP"
+
+    device_name = testbed.device_name
+    ixia_interface_mimic_bgp_mon = testbed.ixia_ports[2][0]
+    session_count = _bag011_expected_established_session_count()
+    expected_peer_identity = build_expected_peer_identity()
+    return _build_ebb_full_scale_test_config(
+        testbed=testbed,
+        name=name,
+        profile=profile,
+        enable_update_group=enable_update_group,
+        drain=False,
+        playbooks=[
+            create_bgp_ebb_daemon_restart_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                profile=profile,
+                expected_peer_identity=expected_peer_identity,
+            ),
+            create_bgp_ebb_cold_start_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                profile=profile,
+                expected_peer_identity=expected_peer_identity,
+            ),
+            create_bgp_ebb_ebgp_session_oscillations_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                ipv4_session_count=EBGP_PEER_COUNT_V4,
+                ipv6_session_count=EBGP_PEER_COUNT_V6,
+                expected_established_sessions=session_count,
+                profile=profile,
+                expected_peer_identity=expected_peer_identity,
+            ),
+            create_bgp_ebb_ebgp_route_oscillations_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                expected_established_sessions=session_count,
+                profile=profile,
+            ),
+            create_bgp_ebb_ibgp_tornado_plane_oscillations_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                ipv4_sessions_per_plane=IBGP_PEER_SCALE_PER_PLANE,
+                ipv6_sessions_per_plane=IBGP_PEER_SCALE_PER_PLANE,
+                expected_established_sessions=session_count,
+                profile=profile,
+                expected_peer_identity=expected_peer_identity,
+            ),
+            create_bgp_ebb_ibgp_route_oscillations_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                expected_established_sessions=session_count,
+                profile=profile,
+            ),
+            create_bgp_ebb_igp_instability_unresolvable_pnhs_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                tcp_dump_capture_interface=interface_name_to_short_format(
+                    ixia_interface_mimic_bgp_mon
+                ),
+                local_link=testbed.extras["openr_local_link"],
+                other_link=testbed.extras["openr_other_link"],
+                expected_established_sessions=session_count,
+                profile=profile,
+                expected_peer_identity=expected_peer_identity,
+            ),
+            create_bgp_ebb_nexthop_group_count_threshold_playbook(
+                device_name=device_name,
+                nexthop_group_threshold=_BAG011_NEXTHOP_GROUP_THRESHOLD,
             ),
         ],
     )

@@ -28,13 +28,17 @@ from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_periodic_tasks import
 )
 from taac.stages.stage_definitions import (
     create_attribute_churn_stage,
+    create_bgp_igp_instability_unresolvable_pnhs_stage,
     create_bgp_restart_test_stage,
+    create_bgp_session_oscillation_stage,
     create_cold_start_test_stage,
     create_fauu_drain_undrain_stage,
     create_longevity_churn_stage,
     create_multipath_group_oscillation_stage,
+    create_plane_aware_bgp_session_oscillation_stage,
     create_plane_drain_undrain_stage,
     create_revert_route_storm_stage,
+    create_route_oscillations_stage,
     create_route_registry_runtime_update_stage,
     create_route_storm_stage,
     create_steps_stage,
@@ -49,6 +53,9 @@ from taac.steps.step_definitions import (
     create_set_route_filter_step,
     create_tcpdump_step,
 )
+from taac.task_definitions import (
+    create_nexthop_group_poll_periodic_task,
+)
 from taac.utils.hardware_capacity_utils import (
     get_postcheck_thresholds,
     get_precheck_thresholds,
@@ -60,11 +67,17 @@ from taac.test_as_a_config.types import Playbook
 __all__ = [
     "create_bgp_ebb_cold_start_playbook",
     "create_bgp_ebb_daemon_restart_playbook",
+    "create_bgp_ebb_ebgp_route_oscillations_playbook",
+    "create_bgp_ebb_ebgp_session_oscillations_playbook",
     "create_bgp_ebb_fauu_drain_undrain_playbook",
+    "create_bgp_ebb_ibgp_route_oscillations_playbook",
+    "create_bgp_ebb_ibgp_tornado_plane_oscillations_playbook",
+    "create_bgp_ebb_igp_instability_unresolvable_pnhs_playbook",
     "create_bgp_ebb_igp_pnh_metric_oscillation_playbook",
     "create_bgp_ebb_instability_attribute_churn_playbook",
     "create_bgp_ebb_longevity_playbook",
     "create_bgp_ebb_multipath_group_oscillation_playbook",
+    "create_bgp_ebb_nexthop_group_count_threshold_playbook",
     "create_bgp_ebb_plane_drain_undrain_playbook",
     "create_bgp_ebb_route_registry_runtime_update_playbook",
     "create_bgp_ebb_route_storm_playbook",
@@ -1020,5 +1033,465 @@ def create_bgp_ebb_longevity_playbook(
                 test_duration_seconds=duration,
                 churn_interval_seconds=community_churn_frequency,
             )
+        ],
+    )
+
+
+def create_bgp_ebb_ebgp_route_oscillations_playbook(
+    device_name: str,
+    peergroup_ibgp_v6: str,
+    peergroup_ibgp_v4: str,
+    expected_established_sessions: int = 0,
+    profile: BgpPlusPlusProfile = BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
+    cpu_baseline: float = 8.0,
+    memory_threshold: int = Gigabyte.GIG_5.value,
+    cpu_util_terminate_on_error: bool = False,
+    memory_terminate_on_error: bool = False,
+    prefix_pool_regex: str = ".*EBGP.*",
+    prefix_start_index: int = 0,
+    prefix_end_index: int = 500,
+    precheck_thresholds: t.Optional[HardwareCapacityThresholds] = None,
+    postcheck_thresholds: t.Optional[HardwareCapacityThresholds] = None,
+    expected_peer_identity: t.Optional[t.Dict[str, str]] = None,
+    exclude_bgp_mon: bool = True,
+) -> Playbook:
+    """
+    Create a BGP eBGP route oscillations test playbook.
+
+    This playbook tests BGP stability during eBGP route advertisement/withdrawal
+    oscillations by repeatedly advertising and withdrawing prefixes from eBGP peers.
+    """
+    if precheck_thresholds is None:
+        precheck_thresholds = get_precheck_thresholds()
+
+    if postcheck_thresholds is None:
+        postcheck_thresholds = get_postcheck_thresholds()
+
+    osc_checks = get_profile_checks(
+        CheckProfile.OSCILLATION,
+        ProfileContext(
+            peergroup_ibgp_v6=peergroup_ibgp_v6,
+            peergroup_ibgp_v4=peergroup_ibgp_v4,
+            precheck_thresholds=precheck_thresholds,
+            postcheck_thresholds=postcheck_thresholds,
+            expected_established_sessions=expected_established_sessions,
+            cpu_baseline=cpu_baseline,
+            check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
+            expected_peer_identity=expected_peer_identity,
+            exclude_bgp_mon=exclude_bgp_mon,
+            snapshot_skip_uptime=True,
+        ),
+    )
+    return Playbook(
+        name="bgp_ebgp_route_oscillations",
+        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
+        prechecks=osc_checks.prechecks,
+        postchecks=osc_checks.postchecks,
+        snapshot_checks=osc_checks.snapshot_checks,
+        periodic_tasks=create_standard_periodic_tasks(
+            device_name=device_name,
+            memory_threshold=memory_threshold,
+            cpu_util_terminate_on_error=cpu_util_terminate_on_error,
+            memory_terminate_on_error=memory_terminate_on_error,
+        ),
+        stages=[
+            create_route_oscillations_stage(
+                device_name=device_name,
+                prefix_pool_regex=prefix_pool_regex,
+                prefix_start_index=prefix_start_index,
+                prefix_end_index=prefix_end_index,
+            )
+        ],
+    )
+
+
+def create_bgp_ebb_ibgp_route_oscillations_playbook(
+    device_name: str,
+    peergroup_ibgp_v6: str,
+    peergroup_ibgp_v4: str,
+    expected_established_sessions: int = 0,
+    profile: BgpPlusPlusProfile = BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
+    cpu_baseline: float = 8.0,
+    memory_threshold: int = Gigabyte.GIG_5.value,
+    cpu_util_terminate_on_error: bool = False,
+    memory_terminate_on_error: bool = False,
+    prefix_pool_regex: str = ".*IBGP.*",
+    prefix_start_index: int = 0,
+    prefix_end_index: int = 100,
+    precheck_thresholds: t.Optional[HardwareCapacityThresholds] = None,
+    postcheck_thresholds: t.Optional[HardwareCapacityThresholds] = None,
+    expected_peer_identity: t.Optional[t.Dict[str, str]] = None,
+    exclude_bgp_mon: bool = True,
+) -> Playbook:
+    """
+    Create a BGP iBGP route oscillations test playbook.
+
+    This playbook tests BGP stability during iBGP route advertisement/withdrawal
+    oscillations by repeatedly advertising and withdrawing prefixes from iBGP peers.
+    """
+    if precheck_thresholds is None:
+        precheck_thresholds = get_precheck_thresholds()
+
+    if postcheck_thresholds is None:
+        postcheck_thresholds = get_postcheck_thresholds()
+
+    osc_checks = get_profile_checks(
+        CheckProfile.OSCILLATION,
+        ProfileContext(
+            peergroup_ibgp_v6=peergroup_ibgp_v6,
+            peergroup_ibgp_v4=peergroup_ibgp_v4,
+            precheck_thresholds=precheck_thresholds,
+            postcheck_thresholds=postcheck_thresholds,
+            expected_established_sessions=expected_established_sessions,
+            cpu_baseline=cpu_baseline,
+            check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
+            expected_peer_identity=expected_peer_identity,
+            exclude_bgp_mon=exclude_bgp_mon,
+        ),
+    )
+    return Playbook(
+        name="bgp_ibgp_route_oscillations",
+        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
+        prechecks=osc_checks.prechecks,
+        postchecks=osc_checks.postchecks,
+        snapshot_checks=osc_checks.snapshot_checks,
+        periodic_tasks=create_standard_periodic_tasks(
+            device_name=device_name,
+            memory_threshold=memory_threshold,
+            cpu_util_terminate_on_error=cpu_util_terminate_on_error,
+            memory_terminate_on_error=memory_terminate_on_error,
+        ),
+        stages=[
+            create_route_oscillations_stage(
+                device_name=device_name,
+                prefix_pool_regex=prefix_pool_regex,
+                prefix_start_index=prefix_start_index,
+                prefix_end_index=prefix_end_index,
+            )
+        ],
+    )
+
+
+def create_bgp_ebb_igp_instability_unresolvable_pnhs_playbook(
+    device_name: str,
+    peergroup_ibgp_v6: str,
+    peergroup_ibgp_v4: str,
+    tcp_dump_capture_interface: str,
+    local_link: t.Dict[str, t.Any],
+    other_link: t.Dict[str, t.Any],
+    expected_established_sessions: int = 0,
+    profile: BgpPlusPlusProfile = BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
+    cpu_baseline: float = 8.0,
+    memory_threshold: int = Gigabyte.GIG_5.value,
+    cpu_util_terminate_on_error: bool = False,
+    memory_terminate_on_error: bool = False,
+    start_ipv4s: t.Optional[t.List[str]] = None,
+    start_ipv6s: t.Optional[t.List[str]] = None,
+    count: int = 63,
+    step_size: int = 2,
+    precheck_thresholds: t.Optional[HardwareCapacityThresholds] = None,
+    postcheck_thresholds: t.Optional[HardwareCapacityThresholds] = None,
+    expected_peer_identity: t.Optional[t.Dict[str, str]] = None,
+    exclude_bgp_mon: bool = True,
+) -> Playbook:
+    """
+    Create a BGP IGP instability unresolvable PNHs test playbook.
+
+    This playbook tests BGP behavior when protocol next-hops become unresolvable by:
+    1. Setting up BGP instability prerequisites
+    2. Running standard prechecks
+    3. Executing the unresolvable PNHs stage (deleting Open/R routes)
+    4. Running standard postchecks with tcpdump verification for UPDATE messages
+    5. Cleanup: re-injecting deleted routes to restore original state
+    """
+    if start_ipv4s is None:
+        start_ipv4s = [DEFAULT_OPENR_START_IPV4S[0]]
+
+    if start_ipv6s is None:
+        start_ipv6s = [DEFAULT_OPENR_START_IPV6S[0]]
+
+    if precheck_thresholds is None:
+        precheck_thresholds = get_precheck_thresholds()
+
+    if postcheck_thresholds is None:
+        postcheck_thresholds = get_postcheck_thresholds()
+
+    igp_checks = get_profile_checks(
+        CheckProfile.IGP_INSTABILITY,
+        ProfileContext(
+            peergroup_ibgp_v6=peergroup_ibgp_v6,
+            peergroup_ibgp_v4=peergroup_ibgp_v4,
+            precheck_thresholds=precheck_thresholds,
+            postcheck_thresholds=postcheck_thresholds,
+            expected_established_sessions=expected_established_sessions,
+            cpu_baseline=cpu_baseline,
+            check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
+            expected_peer_identity=expected_peer_identity,
+            exclude_bgp_mon=exclude_bgp_mon,
+            tcpdump_expected_message_types=["UPDATE"],
+            tcpdump_unexpected_message_types=[],
+            tcpdump_expected_last_mod_time=1740,  # 29 minutes
+        ),
+    )
+    return Playbook(
+        name="bgp_igp_instability_unresolvable_pnhs_playbook",
+        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
+        prechecks=igp_checks.prechecks,
+        postchecks=igp_checks.postchecks,
+        snapshot_checks=igp_checks.snapshot_checks,
+        periodic_tasks=create_standard_periodic_tasks(
+            device_name=device_name,
+            memory_threshold=memory_threshold,
+            cpu_util_terminate_on_error=cpu_util_terminate_on_error,
+            memory_terminate_on_error=memory_terminate_on_error,
+        ),
+        stages=[
+            create_bgp_igp_instability_unresolvable_pnhs_stage(
+                device_name=device_name,
+                start_ipv4s=start_ipv4s,
+                start_ipv6s=start_ipv6s,
+                tcp_dump_capture_interface=tcp_dump_capture_interface,
+            )
+        ],
+        cleanup_steps=[
+            create_openr_route_action_step(
+                device_name=device_name,
+                start_ipv4s=start_ipv4s,
+                start_ipv6s=start_ipv6s,
+                local_link=local_link,
+                other_link=other_link,
+                action=OpenRRouteAction.INJECT.value,
+                count=count,
+                step=step_size,
+                description="Re-inject Open/R routes to restore deleted routes",
+            ),
+        ],
+    )
+
+
+def create_bgp_ebb_ebgp_session_oscillations_playbook(
+    device_name: str,
+    peergroup_ibgp_v6: str,
+    peergroup_ibgp_v4: str,
+    ipv4_session_count: int,
+    ipv6_session_count: int,
+    expected_established_sessions: int = 0,
+    profile: BgpPlusPlusProfile = BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
+    cpu_baseline: float = 8.0,
+    memory_threshold: int = Gigabyte.GIG_5.value,
+    cpu_util_terminate_on_error: bool = False,
+    memory_terminate_on_error: bool = False,
+    ipv4_peer_regex: str = ".*IPV4_EBGP$",
+    ipv6_peer_regex: str = ".*IPV6_EBGP$",
+    test_duration_seconds: int = 1800,
+    uptime_seconds: int = 30,
+    downtime_seconds: int = 30,
+    sessions_per_cycle: int = 70,
+    precheck_thresholds: t.Optional[HardwareCapacityThresholds] = None,
+    postcheck_thresholds: t.Optional[HardwareCapacityThresholds] = None,
+    expected_peer_identity: t.Optional[t.Dict[str, str]] = None,
+    parent_prefixes_to_ignore: t.Optional[t.List[str]] = None,
+    exclude_bgp_mon: bool = True,
+) -> Playbook:
+    """
+    Create a BGP eBGP session oscillations test playbook.
+
+    Randomly disrupts subsets of eBGP sessions in cycles.
+    """
+    if precheck_thresholds is None:
+        precheck_thresholds = get_precheck_thresholds()
+
+    if postcheck_thresholds is None:
+        postcheck_thresholds = get_postcheck_thresholds()
+
+    osc_checks = get_profile_checks(
+        CheckProfile.OSCILLATION,
+        ProfileContext(
+            peergroup_ibgp_v6=peergroup_ibgp_v6,
+            peergroup_ibgp_v4=peergroup_ibgp_v4,
+            precheck_thresholds=precheck_thresholds,
+            postcheck_thresholds=postcheck_thresholds,
+            expected_established_sessions=expected_established_sessions,
+            cpu_baseline=cpu_baseline,
+            check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
+            expected_peer_identity=expected_peer_identity,
+            parent_prefixes_to_ignore=parent_prefixes_to_ignore,
+            exclude_bgp_mon=exclude_bgp_mon,
+            snapshot_skip_flap=True,
+            snapshot_skip_uptime=True,
+        ),
+    )
+    return Playbook(
+        name="bgp_ebgp_session_oscillations_test_playbook",
+        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
+        prechecks=osc_checks.prechecks,
+        postchecks=osc_checks.postchecks,
+        snapshot_checks=osc_checks.snapshot_checks,
+        periodic_tasks=create_standard_periodic_tasks(
+            device_name=device_name,
+            memory_threshold=memory_threshold,
+            cpu_util_terminate_on_error=cpu_util_terminate_on_error,
+            memory_terminate_on_error=memory_terminate_on_error,
+        ),
+        stages=[
+            create_bgp_session_oscillation_stage(
+                ipv4_peer_regex=ipv4_peer_regex,
+                ipv6_peer_regex=ipv6_peer_regex,
+                test_duration_seconds=test_duration_seconds,
+                uptime_seconds=uptime_seconds,
+                downtime_seconds=downtime_seconds,
+                sessions_per_cycle=sessions_per_cycle,
+                ipv4_session_count=ipv4_session_count,
+                ipv6_session_count=ipv6_session_count,
+            ),
+        ],
+    )
+
+
+def create_bgp_ebb_ibgp_tornado_plane_oscillations_playbook(
+    device_name: str,
+    peergroup_ibgp_v6: str,
+    peergroup_ibgp_v4: str,
+    ipv4_sessions_per_plane: int,
+    ipv6_sessions_per_plane: int,
+    expected_established_sessions: int = 0,
+    profile: BgpPlusPlusProfile = BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
+    cpu_baseline: float = 8.0,
+    memory_threshold: int = Gigabyte.GIG_5.value,
+    cpu_util_terminate_on_error: bool = False,
+    memory_terminate_on_error: bool = False,
+    ipv4_peer_regex: str = ".*IPV4_IBGP.*",
+    ipv6_peer_regex: str = ".*IPV6_IBGP.*",
+    test_duration_seconds: int = 1800,
+    uptime_seconds: int = 30,
+    downtime_seconds: int = 30,
+    sessions_per_plane: int = 16,
+    tornado_planes: t.Optional[t.List[int]] = None,
+    session_type: str = "both",
+    precheck_thresholds: t.Optional[HardwareCapacityThresholds] = None,
+    postcheck_thresholds: t.Optional[HardwareCapacityThresholds] = None,
+    expected_peer_identity: t.Optional[t.Dict[str, str]] = None,
+    parent_prefixes_to_ignore: t.Optional[t.List[str]] = None,
+    exclude_bgp_mon: bool = True,
+) -> Playbook:
+    """
+    Create a BGP iBGP tornado plane oscillations test playbook.
+
+    Disrupts iBGP sessions across tornado planes in cycles.
+    """
+    if tornado_planes is None:
+        tornado_planes = [1, 2, 3, 4]
+
+    if precheck_thresholds is None:
+        precheck_thresholds = get_precheck_thresholds()
+
+    if postcheck_thresholds is None:
+        postcheck_thresholds = get_postcheck_thresholds()
+
+    osc_checks = get_profile_checks(
+        CheckProfile.OSCILLATION,
+        ProfileContext(
+            peergroup_ibgp_v6=peergroup_ibgp_v6,
+            peergroup_ibgp_v4=peergroup_ibgp_v4,
+            precheck_thresholds=precheck_thresholds,
+            postcheck_thresholds=postcheck_thresholds,
+            expected_established_sessions=expected_established_sessions,
+            cpu_baseline=cpu_baseline,
+            check_ibgp_pnh=(profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R),
+            expected_peer_identity=expected_peer_identity,
+            parent_prefixes_to_ignore=parent_prefixes_to_ignore,
+            exclude_bgp_mon=exclude_bgp_mon,
+            snapshot_skip_flap=True,
+            snapshot_skip_uptime=True,
+        ),
+    )
+    return Playbook(
+        name="bgp_ibgp_tornado_plane_oscillations_test_playbook",
+        setup_steps=create_bgp_instability_setup_steps(device_name=device_name),
+        prechecks=osc_checks.prechecks,
+        postchecks=osc_checks.postchecks,
+        snapshot_checks=osc_checks.snapshot_checks,
+        periodic_tasks=create_standard_periodic_tasks(
+            device_name=device_name,
+            memory_threshold=memory_threshold,
+            cpu_util_terminate_on_error=cpu_util_terminate_on_error,
+            memory_terminate_on_error=memory_terminate_on_error,
+        ),
+        stages=[
+            create_plane_aware_bgp_session_oscillation_stage(
+                ipv4_peer_regex=ipv4_peer_regex,
+                ipv6_peer_regex=ipv6_peer_regex,
+                test_duration_seconds=test_duration_seconds,
+                uptime_seconds=uptime_seconds,
+                downtime_seconds=downtime_seconds,
+                sessions_per_plane=sessions_per_plane,
+                ipv4_sessions_per_plane=ipv4_sessions_per_plane,
+                ipv6_sessions_per_plane=ipv6_sessions_per_plane,
+                tornado_planes=tornado_planes,
+                session_type=session_type,
+            ),
+        ],
+    )
+
+
+def create_bgp_ebb_nexthop_group_count_threshold_playbook(
+    device_name: str,
+    nexthop_group_threshold: int = 100,
+    prefix_pool_regex: str = ".*EBGP.*",
+    prefix_start_index: int = 0,
+    prefix_end_index: int = 5000,
+    test_duration_seconds: int = 1200,
+    soak_duration: int = 300,
+    convergence_threshold: int = 600,
+    exclude_bgp_mon: bool = True,
+) -> Playbook:
+    """
+    Create a nexthop group count threshold test playbook.
+
+    Monitors nexthop group counts during eBGP route oscillations and fails
+    if the count meets or exceeds the configured threshold.
+    """
+    # SOAK_NO_PRECHECK has no prechecks (the prechecks field is left unset).
+    soak_checks = get_profile_checks(
+        CheckProfile.SOAK_NO_PRECHECK,
+        ProfileContext(
+            check_bgp_convergence=True,
+            convergence_threshold=convergence_threshold,
+            exclude_bgp_mon=exclude_bgp_mon,
+        ),
+    )
+    return Playbook(
+        name="nexthop_group_count_threshold_playbook",
+        setup_steps=create_bgp_instability_setup_steps(
+            device_name=device_name,
+        ),
+        snapshot_checks=soak_checks.snapshot_checks,
+        periodic_tasks=create_standard_periodic_tasks(
+            device_name=device_name,
+        )
+        + [
+            create_nexthop_group_poll_periodic_task(
+                device_name=device_name,
+                threshold=nexthop_group_threshold,
+            ),
+        ],
+        postchecks=soak_checks.postchecks,
+        stages=[
+            create_route_oscillations_stage(
+                device_name=device_name,
+                prefix_pool_regex=prefix_pool_regex,
+                prefix_start_index=prefix_start_index,
+                prefix_end_index=prefix_end_index,
+                test_duration_seconds=test_duration_seconds,
+                spread=True,
+            ),
+            create_steps_stage(
+                steps=[
+                    create_longevity_step(
+                        duration=soak_duration,
+                        description=f"Soak after final prefix changes for {soak_duration} seconds",
+                    ),
+                ],
+            ),
         ],
     )
