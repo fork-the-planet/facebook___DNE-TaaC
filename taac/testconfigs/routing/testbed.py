@@ -84,6 +84,43 @@ BAG002_SNC1 = Testbed(
     peer_groups=ebb_peer_groups(),
 )
 
+BAG010_ASH6 = Testbed(
+    device_name="bag010.ash6",
+    ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
+    ixia_ports=[
+        ("Ethernet3/36/1", "7/1"),  # eBGP
+        ("Ethernet3/36/2", "7/2"),  # iBGP
+        ("Ethernet3/36/3", "7/3"),  # BGP-MON
+    ],
+    dut_bgp_as=65010,
+    bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    openr_configerator_path="taac/ebb_ci_cd_configs/bag010_ash6_openr_config",
+    peer_groups=ebb_peer_groups(),
+    extras={
+        # OpenR link-config knobs consumed by
+        # ``conveyor_common_tasks.get_common_setup_tasks`` for the bag010.ash6
+        # DUT. Kept in ``extras`` because they are OpenR-specific baseline
+        # attributes and do not fit the generic Testbed fields.
+        "openr_port_channel_member": "Ethernet3/6/1",
+        "openr_port_channel_ipv4": "10.131.97.238/31",
+        "openr_port_channel_link_local": "fe80::eba:a7f:fd02/64",
+        "openr_local_link": {
+            "ipv4": "10.131.97.238",
+            "ipv6": "fe80::eba:a7f:fd02",
+            "ifName": "po100211",
+            "weight": 0,
+            "metric": 10,
+        },
+        "openr_other_link": {
+            "ipv4": "10.131.97.239",
+            "ipv6": "fe80::eba:a7f:fd03",
+            "ifName": "po100211",
+            "weight": 0,
+            "metric": 10,
+        },
+    },
+)
+
 BAG012_ASH6 = Testbed(
     device_name="bag012.ash6",
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
