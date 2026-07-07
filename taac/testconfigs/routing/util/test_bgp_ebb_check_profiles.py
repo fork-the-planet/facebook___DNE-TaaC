@@ -10,13 +10,13 @@ from taac.health_checks.healthcheck_definitions import (
     create_core_dumps_snapshot_check,
 )
 from taac.health_checks.retry_policy import DEFAULT_RETRY_SPEC
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.check_profile_registry import (
+from taac.testconfigs.routing.util.bgp_ebb_check_profiles import (
     CheckProfile,
     get_profile_checks,
     ProfileChecks,
     ProfileContext,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_health_checks import (
+from taac.testconfigs.routing.util.bgp_ebb_health_checks import (
     create_standard_postchecks,
     create_standard_prechecks,
     create_standard_snapshot_checks,

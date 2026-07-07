@@ -33,7 +33,9 @@ scale and wait knobs differ:
 Built from the centralized `build_bgp_dc_test_config` factory.
 """
 
-from taac.testconfigs.routing import build_bgp_dc_test_config
+from taac.testconfigs.routing.fboss_bgp_plus_plus_chronos_node_test_config import (
+    build_bgp_dc_test_config,
+)
 
 
 CHRONOS_NODE_FRAMEWORK_VALIDATION_AGENT_RESTART_QZD1_TEST_CONFIG = build_bgp_dc_test_config(

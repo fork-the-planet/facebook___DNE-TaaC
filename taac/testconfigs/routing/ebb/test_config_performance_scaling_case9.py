@@ -16,13 +16,6 @@ from taac.playbooks.playbook_definitions import (
 from taac.routing.ebb.arista_bgp_plus_plus_performance_scaling_tests.ixia_configs_for_tests import (
     create_ebb_bounded_ecmp_sets_port_configs,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_common_tasks import (
-    _generate_ixia_v4_peer_entries_for_bgpcpp,
-    _generate_ixia_v6_peer_entries_for_bgpcpp,
-)
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_constants import (
-    UPDATE_GROUP_CONFIG,
-)
 from taac.task_definitions import (
     create_arista_daemon_control_task,
     create_interface_ip_configuration_task,
@@ -31,6 +24,13 @@ from taac.task_definitions import (
 )
 from taac.testconfigs.routing.ebb.case1_test_config import (
     _generate_bgpcpp_peers_modification_tasks,
+)
+from taac.testconfigs.routing.util.bgp_ebb_constants import (
+    UPDATE_GROUP_CONFIG,
+)
+from taac.testconfigs.routing.util.bgp_ebb_setup_tasks import (
+    _generate_ixia_v4_peer_entries_for_bgpcpp,
+    _generate_ixia_v6_peer_entries_for_bgpcpp,
 )
 from taac.test_as_a_config.types import Endpoint, TestConfig
 

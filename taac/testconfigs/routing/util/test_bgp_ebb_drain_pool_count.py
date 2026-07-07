@@ -12,7 +12,7 @@ testconfigs). See paste P2391197932 for the original investigation.
 
 import unittest
 
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_constants import (
+from taac.testconfigs.routing.util.bgp_ebb_constants import (
     DRAIN_POOL_PEER_COUNT,
     EBGP_PEER_TO_DRAIN,
     IBGP_DC_PLANE_COUNT,

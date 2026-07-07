@@ -14,7 +14,7 @@ See ``README.md`` §2 "DUT roles and role-defaults helpers".
 def ebb_peer_groups() -> dict[str, str]:
     """Standard EBB BGPCPP peer-group names (bag*, eb0N.lab, jsw002, fsw*).
 
-    Values match ``routing/ebb/ebb_bgp_plus_plus_test_config/ebb_bgp_plus_plus_conveyor/conveyor_constants.py``
+    Values match ``testconfigs/routing/util/bgp_ebb_constants.py``
     (``PEERGROUP_IBGP_V6/V4``, ``PEERGROUP_EBGP_V6/V4``).
     """
     return {

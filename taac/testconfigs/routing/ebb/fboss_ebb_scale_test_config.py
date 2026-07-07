@@ -22,14 +22,6 @@ from taac.health_checks.healthcheck_definitions import (
 from taac.playbooks.playbook_definitions import (
     build_ebb_scale_playbook,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_health_checks import (
-    BGP_STANDARD_POSTCHECKS,
-    BGP_STANDARD_PRECHECKS,
-    BGP_STANDARD_SNAPSHOT_CHECKS,
-)
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ixia_config_for_ebb_scale import (
-    create_ebb_scale_basic_port_configs,
-)
 from taac.stages.stage_definitions import create_steps_stage
 from taac.steps.step_definitions import (
     create_longevity_step,
@@ -49,6 +41,14 @@ from taac.task_definitions import (
     create_run_commands_on_shell_task,
     create_scp_file_template_task,
     create_wait_for_agent_convergence_task,
+)
+from taac.testconfigs.routing.util.bgp_ebb_health_checks import (
+    BGP_STANDARD_POSTCHECKS,
+    BGP_STANDARD_PRECHECKS,
+    BGP_STANDARD_SNAPSHOT_CHECKS,
+)
+from taac.testconfigs.routing.util.bgp_ebb_ixia_config import (
+    create_ebb_scale_basic_port_configs,
 )
 from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import (

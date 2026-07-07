@@ -187,7 +187,7 @@ def create_standard_prechecks(
     # playbook_definitions. Deferring to call-time breaks the cycle. This only
     # surfaced under TAAC_OSS=1, where the internal-module load order that
     # otherwise masks the cycle is absent.
-    from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_constants import (
+    from taac.testconfigs.routing.util.bgp_ebb_constants import (
         IXIA_BGP_MON_IC_PARENT_NETWORK,
     )
 
@@ -387,7 +387,7 @@ def create_standard_postchecks(
     """
     # Lazy import to break a load-time circular import (see
     # create_standard_prechecks); required for TAAC_OSS=1.
-    from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_constants import (
+    from taac.testconfigs.routing.util.bgp_ebb_constants import (
         IXIA_BGP_MON_IC_PARENT_NETWORK,
     )
 
@@ -520,7 +520,7 @@ def create_standard_snapshot_checks(
     """
     # Lazy import to break a load-time circular import (see
     # create_standard_prechecks); required for TAAC_OSS=1.
-    from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_constants import (
+    from taac.testconfigs.routing.util.bgp_ebb_constants import (
         IXIA_BGP_MON_IC_PARENT_NETWORK,
     )
 

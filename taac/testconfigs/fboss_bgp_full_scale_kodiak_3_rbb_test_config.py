@@ -16,7 +16,9 @@ from taac.testconfigs.fboss_solution_tests.fboss_wide_ecmp_test_config import (
 from taac.testconfigs.internal.fboss_bgp_back_pressure_test_config import (
     test_config_back_pressure,
 )
-from taac.testconfigs.routing import build_bgp_dc_test_config
+from taac.testconfigs.routing.fboss_bgp_plus_plus_chronos_node_test_config import (
+    build_bgp_dc_test_config,
+)
 
 
 FBOSS_BGP_FULL_SCALE_KODIAK_3_RBB_TEST_CONFIG_QXS1 = build_bgp_dc_test_config(

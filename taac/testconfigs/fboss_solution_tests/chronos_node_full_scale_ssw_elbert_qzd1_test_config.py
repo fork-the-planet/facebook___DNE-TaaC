@@ -7,7 +7,9 @@ CICD_TC conveyor node binding (per `scripts/triage/dne_taac_checker.py`).
 Built from the centralized `build_bgp_dc_test_config` factory.
 """
 
-from taac.testconfigs.routing import build_bgp_dc_test_config
+from taac.testconfigs.routing.fboss_bgp_plus_plus_chronos_node_test_config import (
+    build_bgp_dc_test_config,
+)
 
 
 # Local SCALE_REDUCED_BGP_PATHS values (inlined from internal_test_configs.py)

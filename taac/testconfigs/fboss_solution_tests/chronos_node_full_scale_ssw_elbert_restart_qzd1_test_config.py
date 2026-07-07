@@ -12,7 +12,9 @@ preserve the original `SCALE_REDUCED_BGP_PATHS` values from `internal_test_confi
 verbatim (inlined at extraction time).
 """
 
-from taac.testconfigs.routing import build_bgp_dc_test_config
+from taac.testconfigs.routing.fboss_bgp_plus_plus_chronos_node_test_config import (
+    build_bgp_dc_test_config,
+)
 
 
 CHRONOS_NODE_FULL_SCALE_SSW_ELBERT_RESTART_QZD1_TEST_CONFIG = build_bgp_dc_test_config(

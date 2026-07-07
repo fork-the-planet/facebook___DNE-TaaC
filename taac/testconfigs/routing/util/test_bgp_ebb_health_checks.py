@@ -12,7 +12,7 @@ recovery race.
 import json
 import unittest
 
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_health_checks import (
+from taac.testconfigs.routing.util.bgp_ebb_health_checks import (
     create_standard_postchecks,
     create_standard_prechecks,
 )

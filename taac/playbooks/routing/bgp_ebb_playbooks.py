@@ -18,14 +18,6 @@ from taac.constants import (
     Gigabyte,
     OpenRRouteAction,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.check_profile_registry import (
-    CheckProfile,
-    get_profile_checks,
-    ProfileContext,
-)
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_periodic_tasks import (
-    create_standard_periodic_tasks,
-)
 from taac.stages.stage_definitions import (
     create_attribute_churn_stage,
     create_bgp_igp_instability_unresolvable_pnhs_stage,
@@ -55,6 +47,14 @@ from taac.steps.step_definitions import (
 )
 from taac.task_definitions import (
     create_nexthop_group_poll_periodic_task,
+)
+from taac.testconfigs.routing.util.bgp_ebb_check_profiles import (
+    CheckProfile,
+    get_profile_checks,
+    ProfileContext,
+)
+from taac.testconfigs.routing.util.bgp_ebb_periodic_tasks import (
+    create_standard_periodic_tasks,
 )
 from taac.utils.hardware_capacity_utils import (
     get_postcheck_thresholds,

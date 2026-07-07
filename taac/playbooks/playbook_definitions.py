@@ -37,7 +37,7 @@ from taac.playbooks.dlb_platform_constants import (
     DLB_RESOURCE_PROFILES,
     DlbAsic,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.check_profile_registry import (
+from taac.testconfigs.routing.util.bgp_ebb_check_profiles import (
     CheckProfile,
     get_profile_checks,
     ProfileContext,
@@ -101,12 +101,12 @@ from taac.routing.dc_routing.bgp_dc.shared_constants import (
     get_ixia_healthcheck_ignore_cpu_and_v4_directional_traffic,
     get_ixia_healthcheck_stable_state,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_health_checks import (
+from taac.testconfigs.routing.util.bgp_ebb_health_checks import (
     BGP_STANDARD_POSTCHECKS,
     BGP_STANDARD_SNAPSHOT_CHECKS,
     create_standard_postchecks,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_periodic_tasks import (
+from taac.testconfigs.routing.util.bgp_ebb_periodic_tasks import (
     create_standard_periodic_tasks,
 )
 from taac.stages.stage_definitions import (

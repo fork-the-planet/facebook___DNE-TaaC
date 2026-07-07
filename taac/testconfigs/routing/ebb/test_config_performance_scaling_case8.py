@@ -21,9 +21,6 @@ from taac.playbooks.playbook_definitions import (
 from taac.routing.ebb.arista_bgp_plus_plus_performance_scaling_tests.ixia_configs_for_tests import (
     create_ebb_performance_scale_basic_port_configs,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_periodic_tasks import (
-    create_standard_periodic_tasks,
-)
 from taac.stages.stage_definitions import create_steps_stage
 from taac.steps.step_definitions import (
     create_sc_8_setup_steps,
@@ -32,6 +29,9 @@ from taac.steps.step_definitions import (
 from taac.task_definitions import (
     create_configure_bgpcpp_startup_task,
     create_replace_bgp_peers_task,
+)
+from taac.testconfigs.routing.util.bgp_ebb_periodic_tasks import (
+    create_standard_periodic_tasks,
 )
 from taac.test_as_a_config.types import Endpoint, TestConfig
 

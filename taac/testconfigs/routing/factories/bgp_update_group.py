@@ -52,17 +52,20 @@ from taac.playbooks.routing.bgp_ug_playbooks import (
     create_ug_backpressure_peer_blocks_down_recover_playbook,
     create_ug_backpressure_withdraw_attr_change_playbook,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_health_checks import (
-    BGP_STANDARD_POSTCHECKS,
-    BGP_STANDARD_PRECHECKS,
-    BGP_STANDARD_SNAPSHOT_CHECKS,
+from taac.stages.stage_definitions import create_steps_stage
+from taac.steps.step_definitions import (
+    create_configure_bgp_peer_tcp_window_size_step,
+    create_custom_step,
+    create_ixia_api_step,
+    create_longevity_step,
+    create_snapshot_per_peer_bgp_rx_stats_step,
+    create_start_stop_bgp_peers_step,
+    create_validation_step,
+    create_verify_per_peer_bgp_rx_asymmetry_step,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_common_tasks import (
-    get_common_setup_tasks,
-    get_teardown_tasks,
-    get_update_packing_setup_tasks,
-)
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_constants import (
+from taac.task_definitions import create_openr_route_action_task
+from taac.testconfigs.routing.testbed import Testbed
+from taac.testconfigs.routing.util.bgp_ebb_constants import (
     BGP_MON_PEER_COUNT,
     BGP_MON_REMOTE_AS,
     DEFAULT_PROFILE,
@@ -97,22 +100,19 @@ from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.c
     PEERGROUP_IBGP_V4,
     PEERGROUP_IBGP_V6,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ixia_config_for_ebb_scale import (
+from taac.testconfigs.routing.util.bgp_ebb_health_checks import (
+    BGP_STANDARD_POSTCHECKS,
+    BGP_STANDARD_PRECHECKS,
+    BGP_STANDARD_SNAPSHOT_CHECKS,
+)
+from taac.testconfigs.routing.util.bgp_ebb_ixia_config import (
     create_ebb_scale_basic_port_configs,
 )
-from taac.stages.stage_definitions import create_steps_stage
-from taac.steps.step_definitions import (
-    create_configure_bgp_peer_tcp_window_size_step,
-    create_custom_step,
-    create_ixia_api_step,
-    create_longevity_step,
-    create_snapshot_per_peer_bgp_rx_stats_step,
-    create_start_stop_bgp_peers_step,
-    create_validation_step,
-    create_verify_per_peer_bgp_rx_asymmetry_step,
+from taac.testconfigs.routing.util.bgp_ebb_setup_tasks import (
+    get_common_setup_tasks,
+    get_teardown_tasks,
+    get_update_packing_setup_tasks,
 )
-from taac.task_definitions import create_openr_route_action_task
-from taac.testconfigs.routing.testbed import Testbed
 from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConfig
 

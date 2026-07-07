@@ -27,7 +27,18 @@ from taac.constants import (
     DEFAULT_OPENR_START_IPV6S,
     OpenRRouteAction,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_constants import (
+from taac.task_definitions import (
+    create_arista_create_file_from_config_task,
+    create_arista_daemon_control_task,
+    create_deploy_tls_certs_task,
+    create_interface_ip_cleanup_task,
+    create_interface_ip_configuration_task,
+    create_openr_route_action_task,
+    create_run_commands_on_shell_task,
+    create_set_bgp_setting_config_task,
+    create_validate_bgpcpp_config_on_device_task,
+)
+from taac.testconfigs.routing.util.bgp_ebb_constants import (
     ACL_COMMANDS,
     BGP_MON_PEER_COUNT,
     BGPCPP_DAEMONS,
@@ -66,17 +77,6 @@ from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.c
     OPENR_PORT_CHANNEL_LINK_LOCAL,
     OPENR_PORT_CHANNEL_MEMBER,
     UPDATE_GROUP_CONFIG,
-)
-from taac.task_definitions import (
-    create_arista_create_file_from_config_task,
-    create_arista_daemon_control_task,
-    create_deploy_tls_certs_task,
-    create_interface_ip_cleanup_task,
-    create_interface_ip_configuration_task,
-    create_openr_route_action_task,
-    create_run_commands_on_shell_task,
-    create_set_bgp_setting_config_task,
-    create_validate_bgpcpp_config_on_device_task,
 )
 from taac.test_as_a_config.types import Task
 

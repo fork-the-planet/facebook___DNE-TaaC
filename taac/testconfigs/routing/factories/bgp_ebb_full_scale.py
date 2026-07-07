@@ -34,12 +34,16 @@ from taac.playbooks.routing.bgp_ebb_playbooks import (
     create_bgp_ebb_route_registry_runtime_update_playbook,
     create_bgp_ebb_route_storm_playbook,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_common_tasks import (
-    build_expected_peer_identity,
-    get_common_setup_tasks,
-    get_teardown_tasks,
+from taac.task_definitions import (
+    create_arista_create_file_from_config_task,
+    create_arista_daemon_control_task,
+    create_interface_ip_cleanup_task,
+    create_interface_ip_configuration_task,
+    create_openr_route_action_task,
+    create_run_commands_on_shell_task,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_constants import (
+from taac.testconfigs.routing.testbed import Testbed
+from taac.testconfigs.routing.util.bgp_ebb_constants import (
     BGP_MON_PEER_COUNT,
     BGP_MON_REMOTE_AS,
     DEFAULT_PROFILE,
@@ -72,18 +76,14 @@ from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.c
     PEERGROUP_IBGP_V4,
     PEERGROUP_IBGP_V6,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ixia_config_for_ebb_scale import (
+from taac.testconfigs.routing.util.bgp_ebb_ixia_config import (
     create_ebb_scale_basic_port_configs,
 )
-from taac.task_definitions import (
-    create_arista_create_file_from_config_task,
-    create_arista_daemon_control_task,
-    create_interface_ip_cleanup_task,
-    create_interface_ip_configuration_task,
-    create_openr_route_action_task,
-    create_run_commands_on_shell_task,
+from taac.testconfigs.routing.util.bgp_ebb_setup_tasks import (
+    build_expected_peer_identity,
+    get_common_setup_tasks,
+    get_teardown_tasks,
 )
-from taac.testconfigs.routing.testbed import Testbed
 from taac.utils.arista_utils import interface_name_to_short_format
 from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConfig

@@ -10,25 +10,6 @@ See ../README.md §3.
 """
 
 from taac.constants import BgpPlusPlusProfile
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_common_tasks import (
-    build_per_iteration_factory_v4_capable,
-    get_update_packing_setup_tasks,
-)
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_constants import (
-    EBGP_PEER_COUNT_V6,
-    EBGP_REMOTE_AS,
-    IBGP_PEER_SCALE_PER_PLANE,
-    IBGP_REMOTE_AS,
-    IXIA_EBGP_IC_PARENT_NETWORK_V4,
-    IXIA_EBGP_IC_PARENT_NETWORK_V6,
-    IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE1,
-    IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
-    IXIA_IPV4_START_OFFSET,
-    PEERGROUP_EBGP_V4,
-    PEERGROUP_EBGP_V6,
-    PEERGROUP_IBGP_V4,
-    PEERGROUP_IBGP_V6,
-)
 from taac.testconfigs.routing.ebb.test_config_performance_scaling_case1 import (
     test_config_for_bgp_plus_plus_on_ebb_arista_performance_scaling,
 )
@@ -45,6 +26,25 @@ from taac.testconfigs.routing.ebb.test_config_update_packing import (
     test_config_bgp_update_packing_validation,
 )
 from taac.testconfigs.routing.testbed import Testbed
+from taac.testconfigs.routing.util.bgp_ebb_constants import (
+    EBGP_PEER_COUNT_V6,
+    EBGP_REMOTE_AS,
+    IBGP_PEER_SCALE_PER_PLANE,
+    IBGP_REMOTE_AS,
+    IXIA_EBGP_IC_PARENT_NETWORK_V4,
+    IXIA_EBGP_IC_PARENT_NETWORK_V6,
+    IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE1,
+    IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
+    IXIA_IPV4_START_OFFSET,
+    PEERGROUP_EBGP_V4,
+    PEERGROUP_EBGP_V6,
+    PEERGROUP_IBGP_V4,
+    PEERGROUP_IBGP_V6,
+)
+from taac.testconfigs.routing.util.bgp_ebb_setup_tasks import (
+    build_per_iteration_factory_v4_capable,
+    get_update_packing_setup_tasks,
+)
 from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import DirectIxiaConnection
 

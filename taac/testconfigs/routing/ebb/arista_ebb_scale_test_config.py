@@ -27,18 +27,6 @@ from taac.health_checks.healthcheck_definitions import (
 from taac.playbooks.playbook_definitions import (
     build_arista_ebb_scale_playbook,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_health_checks import (
-    create_standard_postchecks,
-    create_standard_prechecks,
-    create_standard_snapshot_checks,
-)
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_periodic_tasks import (
-    create_longevity_periodic_tasks,
-    create_standard_periodic_tasks,
-)
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ixia_config_for_ebb_scale import (
-    create_ebb_scale_basic_port_configs,
-)
 from taac.stages.stage_definitions import (
     create_attribute_churn_stage,
     create_bgp_igp_instability_unresolvable_pnhs_stage,
@@ -65,6 +53,18 @@ from taac.steps.step_definitions import (
     create_tcpdump_step,
 )
 from taac.task_definitions import create_openr_route_action_task
+from taac.testconfigs.routing.util.bgp_ebb_health_checks import (
+    create_standard_postchecks,
+    create_standard_prechecks,
+    create_standard_snapshot_checks,
+)
+from taac.testconfigs.routing.util.bgp_ebb_ixia_config import (
+    create_ebb_scale_basic_port_configs,
+)
+from taac.testconfigs.routing.util.bgp_ebb_periodic_tasks import (
+    create_longevity_periodic_tasks,
+    create_standard_periodic_tasks,
+)
 from taac.utils.arista_utils import interface_name_to_short_format
 from taac.utils.hardware_capacity_utils import (
     get_postcheck_thresholds,

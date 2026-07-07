@@ -25,11 +25,6 @@ from taac.health_checks.healthcheck_definitions import (
     create_service_restart_check,
     create_system_cpu_load_average_check,
 )
-from taac.routing.ebb.ebb_bgp_plus_plus_test_config.common_health_checks import (
-    BGP_STANDARD_POSTCHECKS,
-    BGP_STANDARD_PRECHECKS,
-    BGP_STANDARD_SNAPSHOT_CHECKS,
-)
 from taac.stages.stage_definitions import create_steps_stage
 from taac.steps.step_definitions import (
     create_advertise_withdraw_prefixes_step,
@@ -55,6 +50,11 @@ from taac.steps.step_definitions import (
     create_verify_fast_peer_queue_shallower_step,
     create_verify_ixia_bgp_rx_stats_delta_step,
     create_verify_ug_queue_recovered_step,
+)
+from taac.testconfigs.routing.util.bgp_ebb_health_checks import (
+    BGP_STANDARD_POSTCHECKS,
+    BGP_STANDARD_PRECHECKS,
+    BGP_STANDARD_SNAPSHOT_CHECKS,
 )
 from taac.test_as_a_config.types import (
     Playbook,
