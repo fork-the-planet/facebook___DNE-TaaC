@@ -19,6 +19,19 @@ from taac.constants import (
 from taac.playbooks.routing.bgp_ebb_playbooks import (
     create_bgp_ebb_cold_start_playbook,
     create_bgp_ebb_daemon_restart_playbook,
+    create_bgp_ebb_fauu_drain_undrain_playbook,
+    create_bgp_ebb_igp_pnh_metric_oscillation_playbook,
+    create_bgp_ebb_instability_attribute_churn_playbook,
+    create_bgp_ebb_longevity_playbook,
+    create_bgp_ebb_multipath_group_oscillation_playbook,
+    create_bgp_ebb_plane_drain_undrain_playbook,
+    create_bgp_ebb_route_registry_runtime_update_playbook,
+    create_bgp_ebb_route_storm_playbook,
+)
+from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_common_tasks import (
+    build_expected_peer_identity,
+    get_common_setup_tasks,
+    get_teardown_tasks,
 )
 from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_constants import (
     BGP_MON_PEER_COUNT,
@@ -363,6 +376,412 @@ def create_ebb_cold_start_and_daemon_restart_test_config(
                 peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
                 peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
                 profile=profile,
+            ),
+        ],
+    )
+
+
+# =============================================================================
+# Shared helper for the BAG010_ASH6 full-scale conveyor family
+# =============================================================================
+# Longevity soak duration (seconds). Temporarily reduced from 8h (28800s) to
+# 4h; restore to 28800 to return to the full 8h soak.
+_BAG010_LONGEVITY_DURATION_SECONDS = 14400  # 4h
+
+
+def _build_ebb_full_scale_test_config(
+    testbed: Testbed,
+    name: str,
+    playbooks: list,
+    profile: BgpPlusPlusProfile,
+    enable_update_group: bool,
+    drain: bool,
+) -> TestConfig:
+    """Assemble a byte-wise-identical bag010.ash6 conveyor TestConfig.
+
+    Reproduces the legacy ``bag010_ash6_test_config._build_test_config``
+    helper: builds ``get_common_setup_tasks`` + ``get_teardown_tasks``
+    from ``conveyor_common_tasks``, wires the EBB-scale IXIA topology
+    via ``create_ebb_scale_basic_port_configs``, and returns the
+    ``TestConfig`` verbatim so the golden manifest hashes for
+    ``BAG010_ASH6_BGP_DRAIN_CONVEYOR_TEST`` /
+    ``BAG010_ASH6_BGP_RUNTIME_UPDATE_CONVEYOR_TEST`` /
+    ``BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_CONFIG`` (+ ``_UPDATE_GROUP``
+    siblings) are preserved.
+    """
+    device_name = testbed.device_name
+    ixia_chassis_ip = testbed.ixia_chassis_ip
+    ixia_interface_mimic_ebgp, ixia_port_ebgp = testbed.ixia_ports[0]
+    ixia_interface_mimic_ibgp, ixia_port_ibgp = testbed.ixia_ports[1]
+    ixia_interface_mimic_bgp_mon, ixia_port_bgp_mon = testbed.ixia_ports[2]
+
+    assert testbed.dut_bgp_as is not None, "testbed must have dut_bgp_as"
+    assert testbed.bgpcpp_configerator_path is not None, (
+        "testbed must have bgpcpp_configerator_path"
+    )
+
+    extras = testbed.extras
+    setup_tasks = get_common_setup_tasks(
+        device_name=device_name,
+        bgp_asn=testbed.dut_bgp_as,
+        ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
+        ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+        ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
+        bgpcpp_configerator_path=testbed.bgpcpp_configerator_path,
+        profile=profile,
+        openr_configerator_path=testbed.openr_configerator_path,
+        openr_port_channel_member=extras["openr_port_channel_member"],
+        openr_port_channel_ipv4=extras["openr_port_channel_ipv4"],
+        openr_port_channel_link_local=extras["openr_port_channel_link_local"],
+        openr_local_link=extras["openr_local_link"],
+        openr_other_link=extras["openr_other_link"],
+        enable_update_group=enable_update_group,
+    )
+    teardown_tasks = get_teardown_tasks(
+        ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
+        ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+        ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
+        device_name=device_name,
+    )
+
+    return TestConfig(
+        name=name,
+        skip_ixia_protocol_verification=True,
+        log_collection_timeout=600,
+        basset_pool="dne.test",
+        endpoints=[
+            Endpoint(
+                name=device_name,
+                dut=True,
+                ixia_ports=[
+                    ixia_interface_mimic_ebgp,
+                    ixia_interface_mimic_ibgp,
+                    ixia_interface_mimic_bgp_mon,
+                ],
+                direct_ixia_connections=[
+                    DirectIxiaConnection(
+                        interface=ixia_interface_mimic_ebgp,
+                        ixia_chassis_ip=ixia_chassis_ip,
+                        ixia_port=ixia_port_ebgp,
+                    ),
+                    DirectIxiaConnection(
+                        interface=ixia_interface_mimic_ibgp,
+                        ixia_chassis_ip=ixia_chassis_ip,
+                        ixia_port=ixia_port_ibgp,
+                    ),
+                    DirectIxiaConnection(
+                        interface=ixia_interface_mimic_bgp_mon,
+                        ixia_chassis_ip=ixia_chassis_ip,
+                        ixia_port=ixia_port_bgp_mon,
+                    ),
+                ],
+            ),
+        ],
+        host_os_type_map={device_name: taac_types.DeviceOsType.ARISTA_FBOSS},
+        startup_checks=[],
+        setup_tasks=setup_tasks,
+        teardown_tasks=teardown_tasks,
+        basic_port_configs=create_ebb_scale_basic_port_configs(
+            device_name=device_name,
+            ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
+            ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+            ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
+            ebgp_peer_count_v6=EBGP_PEER_COUNT_V6,
+            ebgp_peer_count_v4=EBGP_PEER_COUNT_V4,
+            ebgp_peer_to_drain=EBGP_PEER_TO_DRAIN,
+            ibgp_peer_scale_per_plane=IBGP_PEER_SCALE_PER_PLANE,
+            ibgp_peer_to_drain_per_plane=IBGP_PEER_TO_DRAIN_PER_PLANE,
+            drain=drain,
+            bgp_mon_peer_count=BGP_MON_PEER_COUNT,
+            ebgp_remote_as=EBGP_REMOTE_AS,
+            ibgp_remote_as=IBGP_REMOTE_AS,
+            bgp_mon_remote_as=BGP_MON_REMOTE_AS,
+            ixia_ebgp_ic_parent_network_v6=IXIA_EBGP_IC_PARENT_NETWORK_V6,
+            ixia_ebgp_ic_parent_network_v4=IXIA_EBGP_IC_PARENT_NETWORK_V4,
+            ixia_ibgp_ic_parent_network_v6_dc_plane1=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
+            ixia_ibgp_ic_parent_network_v6_dc_plane2=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE2,
+            ixia_ibgp_ic_parent_network_v6_dc_plane3=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE3,
+            ixia_ibgp_ic_parent_network_v6_dc_plane4=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE4,
+            ixia_ibgp_ic_parent_network_v6_mp_plane1=IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE1,
+            ixia_ibgp_ic_parent_network_v6_mp_plane2=IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE2,
+            ixia_ibgp_ic_parent_network_v6_mp_plane3=IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE3,
+            ixia_ibgp_ic_parent_network_v6_mp_plane4=IXIA_IBGP_IC_PARENT_NETWORK_V6_MP_PLANE4,
+            ixia_ibgp_ic_parent_network_v4_dc_plane1=IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE1,
+            ixia_ibgp_ic_parent_network_v4_dc_plane2=IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE2,
+            ixia_ibgp_ic_parent_network_v4_dc_plane3=IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE3,
+            ixia_ibgp_ic_parent_network_v4_dc_plane4=IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE4,
+            ixia_ibgp_ic_parent_network_v4_mp_plane1=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE1,
+            ixia_ibgp_ic_parent_network_v4_mp_plane2=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE2,
+            ixia_ibgp_ic_parent_network_v4_mp_plane3=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE3,
+            ixia_ibgp_ic_parent_network_v4_mp_plane4=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE4,
+            ixia_bgp_mon_ic_parent_network=IXIA_BGP_MON_IC_PARENT_NETWORK,
+            profile=profile,
+        ),
+        playbooks=playbooks,
+    )
+
+
+def _bag010_expected_established_session_count() -> int:
+    """Established-session baseline for bag010.ash6 full-scale topology.
+
+    Total sessions across all peer types minus BGP MON. BGP MON peers
+    (ASN 64001) legitimately stay IDLE intermittently on bag010 post-
+    restart / cold-start, and the upstream bgpcpp configerator config does
+    not always bring them back. Excluding them from BGP session-establish
+    checks avoids spurious flakes while preserving the iBGP/eBGP signal.
+    """
+    total_session_count = (
+        EBGP_PEER_COUNT_V6
+        + EBGP_PEER_COUNT_V4
+        + BGP_MON_PEER_COUNT
+        + IBGP_PEER_SCALE_PER_PLANE * 4  # 4 DC-site devices, IPv4 remote EB
+        + IBGP_PEER_SCALE_PER_PLANE * 4  # 4 DC-site devices, IPv6 remote EB
+        + IBGP_PEER_SCALE_PER_PLANE * 4  # 4 MP-site devices, IPv4 remote MP
+        + IBGP_PEER_SCALE_PER_PLANE * 4  # 4 MP-site devices, IPv6 remote MP
+    )
+    return total_session_count - BGP_MON_PEER_COUNT
+
+
+def create_ebb_instability_test_config(
+    testbed: Testbed,
+    profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
+    enable_update_group: bool = False,
+) -> TestConfig:
+    """BGP++ instability conveyor test (attribute-churn + route-storm).
+
+    Extracted verbatim from the legacy
+    ``bag010_ash6_test_config.create_bag010_ash6_instability_test_config``
+    factory. TestConfig ``name`` field is preserved verbatim
+    (``BAG010_ASH6_BGP_INSTABILITY_CONVEYOR_TEST`` (+ ``_UPDATE_GROUP``)).
+    """
+    name = "BAG010_ASH6_BGP_INSTABILITY_CONVEYOR_TEST"
+    if enable_update_group:
+        name += "_UPDATE_GROUP"
+
+    device_name = testbed.device_name
+    ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
+    session_count = _bag010_expected_established_session_count()
+    return _build_ebb_full_scale_test_config(
+        testbed=testbed,
+        name=name,
+        profile=profile,
+        enable_update_group=enable_update_group,
+        drain=False,
+        playbooks=[
+            create_bgp_ebb_instability_attribute_churn_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                total_session_count=session_count,
+                profile=profile,
+            ),
+            create_bgp_ebb_route_storm_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                total_session_count=session_count,
+                ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+                profile=profile,
+            ),
+        ],
+    )
+
+
+def create_ebb_runtime_update_test_config(
+    testbed: Testbed,
+    profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
+    enable_update_group: bool = False,
+) -> TestConfig:
+    """BGP++ runtime-update conveyor test (prefix-list + multipath group).
+
+    Extracted verbatim from the legacy
+    ``bag010_ash6_test_config.create_bag010_ash6_runtime_update_test_config``
+    factory.
+    """
+    name = "BAG010_ASH6_BGP_RUNTIME_UPDATE_CONVEYOR_TEST"
+    if enable_update_group:
+        name += "_UPDATE_GROUP"
+
+    device_name = testbed.device_name
+    session_count = _bag010_expected_established_session_count()
+    return _build_ebb_full_scale_test_config(
+        testbed=testbed,
+        name=name,
+        profile=profile,
+        enable_update_group=enable_update_group,
+        drain=False,
+        playbooks=[
+            create_bgp_ebb_route_registry_runtime_update_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                expected_established_sessions=session_count,
+                profile=profile,
+            ),
+            create_bgp_ebb_multipath_group_oscillation_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                expected_established_sessions=session_count,
+                profile=profile,
+            ),
+        ],
+    )
+
+
+def create_ebb_drain_test_config(
+    testbed: Testbed,
+    profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
+    enable_update_group: bool = False,
+) -> TestConfig:
+    """BGP++ drain conveyor test (FAUU + Plane drain/undrain).
+
+    Extracted verbatim from the legacy
+    ``bag010_ash6_test_config.create_bag010_ash6_drain_test_config``
+    factory. Soft-drain (origin/local-pref attribute drain/undrain in the
+    stages) runs on the full peer set; the carved session-drain pool
+    (``drain=True``) is unused by these playbooks, so ``drain=False`` keeps
+    all peers established and pre/post-test session counts verify.
+    """
+    name = "BAG010_ASH6_BGP_DRAIN_CONVEYOR_TEST"
+    if enable_update_group:
+        name += "_UPDATE_GROUP"
+
+    device_name = testbed.device_name
+    ixia_interface_mimic_ebgp = testbed.ixia_ports[0][0]
+    ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
+    ixia_interface_mimic_bgp_mon = testbed.ixia_ports[2][0]
+    session_count = _bag010_expected_established_session_count()
+    return _build_ebb_full_scale_test_config(
+        testbed=testbed,
+        name=name,
+        profile=profile,
+        enable_update_group=enable_update_group,
+        drain=False,
+        playbooks=[
+            create_bgp_ebb_fauu_drain_undrain_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                expected_established_sessions=session_count,
+                profile=profile,
+                tcp_dump_capture_interface_ebgp=ixia_interface_mimic_ebgp,
+                tcp_dump_capture_interface_bgpmon=ixia_interface_mimic_bgp_mon,
+                tcp_dump_capture_interface_ibgp=ixia_interface_mimic_ibgp,
+            ),
+            create_bgp_ebb_plane_drain_undrain_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                expected_established_sessions=session_count,
+                profile=profile,
+                tcp_dump_capture_interface_ebgp=ixia_interface_mimic_ebgp,
+                tcp_dump_capture_interface_bgpmon=ixia_interface_mimic_bgp_mon,
+                tcp_dump_capture_interface_ibgp=ixia_interface_mimic_ibgp,
+            ),
+        ],
+    )
+
+
+def create_ebb_stage1_consolidated_test_config(
+    testbed: Testbed,
+    profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
+    enable_update_group: bool = False,
+) -> TestConfig:
+    """Stage-1 consolidated conveyor test — all non-longevity bag010 playbooks.
+
+    Extracted verbatim from the legacy
+    ``bag010_ash6_test_config.create_bag010_ash6_stage1_consolidated_test_config``
+    factory. Runs 5 playbooks under one setup phase:
+    attribute-churn, route-storm, prefix-list runtime update, multipath
+    oscillation, and pnh_metric_oscillation (moved from bag011 for
+    cross-device balance).
+    """
+    name = "BAG010_ASH6_BGP_STAGE1_CONVEYOR_TEST"
+    if enable_update_group:
+        name += "_UPDATE_GROUP"
+
+    device_name = testbed.device_name
+    ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
+    session_count = _bag010_expected_established_session_count()
+    expected_peer_identity = build_expected_peer_identity()
+    return _build_ebb_full_scale_test_config(
+        testbed=testbed,
+        name=name,
+        profile=profile,
+        enable_update_group=enable_update_group,
+        drain=False,
+        playbooks=[
+            create_bgp_ebb_instability_attribute_churn_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                total_session_count=session_count,
+                profile=profile,
+            ),
+            create_bgp_ebb_route_storm_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                total_session_count=session_count,
+                ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+                profile=profile,
+            ),
+            create_bgp_ebb_route_registry_runtime_update_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                expected_established_sessions=session_count,
+                profile=profile,
+            ),
+            create_bgp_ebb_multipath_group_oscillation_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                expected_established_sessions=session_count,
+                profile=profile,
+            ),
+            create_bgp_ebb_igp_pnh_metric_oscillation_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
+                peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
+                local_link=testbed.extras["openr_local_link"],
+                other_link=testbed.extras["openr_other_link"],
+                expected_established_sessions=session_count,
+                profile=profile,
+                expected_peer_identity=expected_peer_identity,
+            ),
+        ],
+    )
+
+
+def create_ebb_longevity_test_config(
+    testbed: Testbed,
+    profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
+    enable_update_group: bool = False,
+) -> TestConfig:
+    """BGP++ longevity soak conveyor test (4h, community churn every 60s).
+
+    Extracted verbatim from the legacy
+    ``bag010_ash6_test_config.create_bag010_ash6_longevity_test_config``
+    factory. Longevity soak duration is temporarily reduced from 8h to 4h
+    (see ``_BAG010_LONGEVITY_DURATION_SECONDS``); restore to 28800 to
+    return to the full 8h soak.
+    """
+    name = "BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_CONFIG"
+    if enable_update_group:
+        name += "_UPDATE_GROUP"
+
+    return _build_ebb_full_scale_test_config(
+        testbed=testbed,
+        name=name,
+        profile=profile,
+        enable_update_group=enable_update_group,
+        drain=False,
+        playbooks=[
+            create_bgp_ebb_longevity_playbook(
+                device_name=testbed.device_name,
+                duration=_BAG010_LONGEVITY_DURATION_SECONDS,
             ),
         ],
     )

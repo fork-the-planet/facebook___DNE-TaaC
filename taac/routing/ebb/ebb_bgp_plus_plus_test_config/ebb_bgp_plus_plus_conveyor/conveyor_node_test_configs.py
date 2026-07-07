@@ -18,8 +18,6 @@ module directly.
 
 from taac.testconfigs.routing.cicd_ebb_int_tc import (
     BAG002_SNC1_CONVEYOR_TEST_CONFIG,
-)
-from taac.testconfigs.routing.ebb.bag010_ash6_test_config import (
     BAG010_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG,
     BAG010_ASH6_BGP_STAGE1_CONVEYOR_TEST_UPDATE_GROUP_CONFIG,
     BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_CONFIG,

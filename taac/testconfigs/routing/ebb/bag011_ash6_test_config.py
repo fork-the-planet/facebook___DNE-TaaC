@@ -61,13 +61,13 @@ from taac.playbooks.playbook_definitions import (
     create_bgp_ebgp_session_oscillations_playbook,
     create_bgp_ibgp_route_oscillations_playbook,
     create_bgp_ibgp_tornado_plane_oscillations_playbook,
-    create_bgp_igp_instability_pnh_metric_oscillation_playbook,
     create_bgp_igp_instability_unresolvable_pnhs_playbook,
     create_nexthop_group_count_threshold_playbook,
 )
 from taac.playbooks.routing.bgp_ebb_playbooks import (
     create_bgp_ebb_cold_start_playbook as create_bgp_cold_start_playbook,
     create_bgp_ebb_daemon_restart_playbook as create_bgp_daemon_restart_playbook,
+    create_bgp_ebb_igp_pnh_metric_oscillation_playbook as create_bgp_igp_instability_pnh_metric_oscillation_playbook,
 )
 from taac.routing.ebb.ebb_bgp_plus_plus_test_config.ebb_bgp_plus_plus_conveyor.conveyor_common_tasks import (
     build_expected_peer_identity,
