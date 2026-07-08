@@ -193,6 +193,61 @@ from taac.test_as_a_config.types import (
 )
 
 
+def create_agent_restart_playbook(
+    wedge_agent_restart_no_of_interations: int = 10,
+) -> Playbook:
+    """BGP_DC ``test_agent_restart`` playbook — wedge_agent restart loop.
+
+    Wraps the single Playbook that ``get_restart_playbooks`` used to inline.
+    Kept byte-identical for the golden manifest.
+    """
+    from taac.health_checks.constants import (
+        SERVICES_TO_MONITOR_DURING_AGENT_RESTART,
+    )
+    from taac.testconfigs.routing.util.bgp_dc_healthchecks import (
+        AGENT_RESTART_STEPS,
+    )
+
+    return Playbook(
+        name="test_agent_restart",
+        postchecks=[
+            create_service_restart_check(
+                services=SERVICES_TO_MONITOR_DURING_AGENT_RESTART
+            ),
+        ],
+        stages=[
+            create_steps_stage(
+                iteration=wedge_agent_restart_no_of_interations,
+                steps=AGENT_RESTART_STEPS,
+            ),
+        ],
+    )
+
+
+def create_bgp_restart_playbook() -> Playbook:
+    """BGP_DC ``test_bgp_restart`` playbook — BGP daemon restart loop.
+
+    Wraps the single Playbook that ``get_restart_playbooks`` used to inline.
+    Kept byte-identical for the golden manifest.
+    """
+    from taac.health_checks.constants import (
+        SERVICES_TO_MONITOR_DURING_BGP_RESTART,
+    )
+    from taac.testconfigs.routing.util.bgp_dc_stages import (
+        BGP_RESTART_STAGE,
+    )
+
+    return Playbook(
+        name="test_bgp_restart",
+        postchecks=[
+            create_service_restart_check(
+                services=SERVICES_TO_MONITOR_DURING_BGP_RESTART
+            ),
+        ],
+        stages=[BGP_RESTART_STAGE],
+    )
+
+
 def get_restart_playbooks(
     device_name: str,
     wedge_agent_restart_no_of_interations=10,
@@ -201,57 +256,17 @@ def get_restart_playbooks(
     """
     Returns a list of service restart playbooks (BGP_DC).
 
-    These playbooks test the DUT's ability to handle repeated service
-    restarts (both wedge_agent and BGP daemon) without traffic loss
-    or session disruption.
-
-    Args:
-        device_name: The hostname of the device under test (DUT).
-            Used to generate device-specific health checks.
-        wedge_agent_restart_no_of_interations: Number of times to restart
-            the wedge_agent in the agent restart test. Defaults to 10.
-        **kwargs: Additional device parameters (ignored, for compatibility
-            with the registry pattern).
-
-    Returns:
-        list[Playbook]: List of Playbook objects to be assembled by the
-            main test config.
+    Composer for the two individual playbook factories
+    ``create_agent_restart_playbook`` and ``create_bgp_restart_playbook``.
+    Retained for backward compatibility with the
+    ``PLAYBOOK_CATEGORY_REGISTRY`` dispatch pattern in
+    ``factories/bgp_dc_chronos_node.py``.
     """
-    from taac.health_checks.constants import (
-        SERVICES_TO_MONITOR_DURING_AGENT_RESTART,
-        SERVICES_TO_MONITOR_DURING_BGP_RESTART,
-    )
-    from taac.testconfigs.routing.util.bgp_dc_healthchecks import (
-        AGENT_RESTART_STEPS,
-    )
-    from taac.testconfigs.routing.util.bgp_dc_stages import (
-        BGP_RESTART_STAGE,
-    )
-
     return [
-        Playbook(
-            name="test_agent_restart",
-            postchecks=[
-                create_service_restart_check(
-                    services=SERVICES_TO_MONITOR_DURING_AGENT_RESTART
-                ),
-            ],
-            stages=[
-                create_steps_stage(
-                    iteration=wedge_agent_restart_no_of_interations,
-                    steps=AGENT_RESTART_STEPS,
-                ),
-            ],
+        create_agent_restart_playbook(
+            wedge_agent_restart_no_of_interations=wedge_agent_restart_no_of_interations,
         ),
-        Playbook(
-            name="test_bgp_restart",
-            postchecks=[
-                create_service_restart_check(
-                    services=SERVICES_TO_MONITOR_DURING_BGP_RESTART
-                ),
-            ],
-            stages=[BGP_RESTART_STAGE],
-        ),
+        create_bgp_restart_playbook(),
     ]
 
 
