@@ -93,9 +93,6 @@ from taac.testconfigs.routing.util.bgp_ebb_constants import (
     PEERGROUP_IBGP_V4,
     PEERGROUP_IBGP_V6,
 )
-from taac.testconfigs.routing.util.bgp_ebb_lab_wiring import (
-    _lab_device_wiring,
-)
 from taac.testconfigs.routing.util.bgp_ebb_periodic_tasks import (
     create_standard_periodic_tasks,
 )
@@ -929,7 +926,7 @@ def create_bgp_ebb_characteristic_constant_attribute_storage_test_config(
     ``eb03_arista_high_diversity_test_config.py`` wrapper when invoked with
     ``EB03_LAB_ASH6`` and its wrapper defaults; DUT identity + IXIA port map
     + host_driver_args + oss_mock_device_data are derived from ``testbed``
-    via ``_lab_device_wiring``.
+    directly (populated on the lab Testbed instances as first-class fields).
     """
     if ebgp_peer_counts is None:
         ebgp_peer_counts = [8, 16, 32, 64, 128]
@@ -939,7 +936,8 @@ def create_bgp_ebb_characteristic_constant_attribute_storage_test_config(
     device_name = testbed.device_name
     ebgp_iface, ebgp_port = testbed.ixia_ports[0]
 
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     resolved_direct_ixia_connections = (
         direct_ixia_connections
@@ -1030,7 +1028,8 @@ def create_bgp_ebb_characteristic_constant_attribute_storage_varying_combination
     ebgp_iface, ebgp_port = testbed.ixia_ports[0]
     ibgp_iface, ibgp_port = testbed.ixia_ports[1]
 
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     resolved_direct_ixia_connections = (
         direct_ixia_connections
@@ -1133,7 +1132,8 @@ def create_bgp_ebb_characteristic_queue_memory_monitor_test_config(
     ebgp_iface, _ebgp_port = testbed.ixia_ports[0]
     ibgp_iface, _ibgp_port = testbed.ixia_ports[1]
 
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
 
     ssh_password: str | None = None
@@ -2935,7 +2935,8 @@ def create_bgp_ebb_characteristic_separable_policy_test_config(
     device_name = testbed.device_name
     ebgp_iface, ebgp_port = testbed.ixia_ports[0]
 
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     resolved_direct_ixia_connections = (
         direct_ixia_connections
@@ -3020,7 +3021,8 @@ def create_bgp_ebb_characteristic_update_packing_test_config(
     ebgp_iface, ebgp_port = testbed.ixia_ports[0]
     ibgp_iface, ibgp_port = testbed.ixia_ports[1]
 
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     resolved_direct_ixia_connections = (
         direct_ixia_connections

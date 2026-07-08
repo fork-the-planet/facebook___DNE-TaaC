@@ -69,7 +69,6 @@ from taac.testconfigs.routing.util.bgp_ebb_constants import (
 )
 from taac.testconfigs.routing.util.bgp_ebb_lab_wiring import (
     _direct_ixia_conns_two_port,
-    _lab_device_wiring,
 )
 from taac.testconfigs.routing.util.bgp_ebb_periodic_tasks import (
     create_standard_periodic_tasks,
@@ -143,14 +142,13 @@ def create_bgp_ebb_scaling_performance_test_config(
     ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
     max_n = max(egress_peer_counts)
 
-    derived_host_driver_args, derived_oss_mock_device_data = _lab_device_wiring(testbed)
     resolved_host_driver_args = (
-        host_driver_args if host_driver_args is not None else derived_host_driver_args
+        host_driver_args if host_driver_args is not None else testbed.host_driver_args
     )
     resolved_oss_mock_device_data = (
         oss_mock_device_data
         if oss_mock_device_data is not None
-        else derived_oss_mock_device_data
+        else testbed.oss_mock_device_data
     )
     resolved_host_os_type_map = (
         host_os_type_map
@@ -256,7 +254,8 @@ def create_bgp_ebb_scaling_transient_memory_route_scale_test_config(
     device_name = testbed.device_name
     ixia_interface_mimic_ebgp = testbed.ixia_ports[0][0]
     ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     direct_ixia_connections = _direct_ixia_conns_two_port(testbed)
 
@@ -417,7 +416,8 @@ def create_bgp_ebb_scaling_transient_memory_peer_scale_test_config(
     device_name = testbed.device_name
     ixia_interface_mimic_ebgp = testbed.ixia_ports[0][0]
     ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     direct_ixia_connections = _direct_ixia_conns_two_port(testbed)
 
@@ -540,7 +540,8 @@ def create_bgp_ebb_scaling_route_churn_test_config(
     device_name = testbed.device_name
     ixia_interface_mimic_ebgp = testbed.ixia_ports[0][0]
     ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     direct_ixia_connections = _direct_ixia_conns_two_port(testbed)
 
@@ -865,7 +866,8 @@ def create_bgp_ebb_scaling_route_churn_prefix_test_config(
     device_name = testbed.device_name
     ixia_interface_mimic_ebgp = testbed.ixia_ports[0][0]
     ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     direct_ixia_connections = _direct_ixia_conns_two_port(testbed)
 
@@ -1037,7 +1039,8 @@ def create_bgp_ebb_scaling_bounded_ecmp_sets_test_config(
     device_name = testbed.device_name
     ixia_interface_mimic_ebgp = testbed.ixia_ports[0][0]
     ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     resolved_host_os_type_map = (
         host_os_type_map
         if host_os_type_map is not None

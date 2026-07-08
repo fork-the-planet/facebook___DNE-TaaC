@@ -12,9 +12,13 @@ See ``README.md`` §2 for the framework rules.
 
 from __future__ import annotations
 
+import json
+import os
+import typing as t
 from dataclasses import dataclass, field
 
 from taac.testconfigs.routing.role_defaults import ebb_peer_groups
+from taac.test_as_a_config import types as taac_types
 
 
 VALID_USAGES: frozenset[str] = frozenset({"cicd", "qual", "adhoc", "retired"})
@@ -59,6 +63,21 @@ class Testbed:
 
     # ─── Lab auth ─────────────────────────────────────────────────────────
     lab_device_password_env_var: str | None = None
+    # SSH user for lab boxes (``svc-netcastle_bot`` is not authorized on
+    # ebXX.lab.ash6 / bgp.eb.test.ash6). None for production / conveyor
+    # testbeds, where Netcastle uses its own default SSH identity.
+    ssh_user: str | None = None
+    # Precomputed ``TestConfig.host_driver_args`` payload for lab boxes.
+    # Populated at Testbed construction time from the shared lab-password
+    # env var (``TAAC_EBB_LAB_DEVICE_PASSWORD``, falling back to
+    # ``"dnepit"``). None for production / conveyor testbeds where
+    # ``netwhoami`` returns a valid record.
+    host_driver_args: dict[str, str] | None = None
+    # Precomputed ``TestConfig.oss_mock_device_data`` payload for lab
+    # boxes; ``netwhoami`` returns ``#INVALID#`` for lab devices, so
+    # ``get_common_setup_tasks`` needs a synthesized ``MockDeviceInfo``.
+    # None for production / conveyor testbeds.
+    oss_mock_device_data: dict[str, taac_types.MockDeviceInfo] | None = None
 
     # ─── Named parameter maps — BGP topology ──────────────────────────────
     peer_groups: dict = field(default_factory=dict)
@@ -86,6 +105,55 @@ class Testbed:
 
 _EBB_BGPCPP_PATH = "taac/ebb_ci_cd_configs/ebb_full_scale_bgpcpp_config"
 _ASH6_IXIA_CHASSIS = "2401:db00:2066:303b::3001"
+
+
+# ─── Lab-wiring helpers (used by the ebXX.lab.ash6 + bgp.eb.test.ash6 boxes) ───
+# These produce the ``host_driver_args`` / ``oss_mock_device_data`` payloads that
+# the retired ``util/bgp_ebb_lab_wiring._lab_device_wiring`` helper used to
+# synthesize at factory-call time. Byte-identical outputs preserved: password
+# read via ``os.environ.get(env_var, "dnepit")`` (env-var lookup runs at Testbed
+# construction / module-import time; TAAC test processes do not mutate the
+# password env var after import).
+
+
+def _lab_host_driver_args(
+    device_name: str,
+    *,
+    password_env: str = "TAAC_EBB_LAB_DEVICE_PASSWORD",
+    password_default: str = "dnepit",  # pragma: allowlist secret
+    extra_kwargs: dict[str, t.Any] | None = None,
+) -> dict[str, str]:
+    driver_kwargs: dict[str, t.Any] = {
+        "username": "admin",
+        "password": os.environ.get(password_env, password_default),
+    }
+    if extra_kwargs:
+        driver_kwargs.update(extra_kwargs)
+    return {device_name: json.dumps(driver_kwargs)}
+
+
+def _lab_oss_mock_device_data(
+    device_name: str,
+    *,
+    network_type: str | None = None,
+) -> dict[str, taac_types.MockDeviceInfo]:
+    mock_kwargs: dict[str, t.Any] = {
+        "name": device_name,
+        "hardware": "ARISTA_7516",
+        "role": "EB",
+        "operating_system": "EOS",
+        "dc": "ash6",
+        "region": "ash",
+        "asset_id": 12345,
+        "asic": "JERICHO",
+        "routing_protocol": "BGP",
+        "dc_type": "ONE",
+        "network_area": "BACKBONE",
+        "network_area_type": "BACKBONE",
+    }
+    if network_type is not None:
+        mock_kwargs["network_type"] = network_type
+    return {device_name: taac_types.MockDeviceInfo(**mock_kwargs)}
 
 
 # ─── BAG conveyor testbeds ────────────────────────────────────────────────
@@ -290,8 +358,14 @@ EB01_LAB_ASH6 = Testbed(
     dut_bgp_as=64981,
     bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
     lab_device_password_env_var="TAAC_EBB_LAB_DEVICE_PASSWORD",
+    ssh_user="admin",
+    host_driver_args=_lab_host_driver_args("eb01.lab.ash6"),
+    oss_mock_device_data=_lab_oss_mock_device_data("eb01.lab.ash6", network_type="EBB"),
     peer_groups=ebb_peer_groups(),
     extras={
+        # Retained for ``factories/bgp_update_group.py`` which still reads
+        # these keys inline (Wave 2 candidate: fold into the promoted
+        # ``host_driver_args`` / ``oss_mock_device_data`` fields).
         "lab_admin_username": "admin",
         "lab_admin_password_default": "dnepit",  # pragma: allowlist secret
         "mock_device_hardware": "ARISTA_7516",
@@ -317,8 +391,14 @@ EB02_LAB_ASH6 = Testbed(
     dut_bgp_as=64981,
     bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
     lab_device_password_env_var="TAAC_EBB_LAB_DEVICE_PASSWORD",
+    ssh_user="admin",
+    host_driver_args=_lab_host_driver_args("eb02.lab.ash6"),
+    oss_mock_device_data=_lab_oss_mock_device_data("eb02.lab.ash6", network_type="EBB"),
     peer_groups=ebb_peer_groups(),
     extras={
+        # Retained for ``factories/bgp_update_group.py`` which still reads
+        # these keys inline (Wave 2 candidate: fold into the promoted
+        # ``host_driver_args`` / ``oss_mock_device_data`` fields).
         "lab_admin_username": "admin",
         "lab_admin_password_default": "dnepit",  # pragma: allowlist secret
         "mock_device_hardware": "ARISTA_7516",
@@ -344,8 +424,14 @@ EB03_LAB_ASH6 = Testbed(
     dut_bgp_as=64981,
     bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
     lab_device_password_env_var="TAAC_EBB_LAB_DEVICE_PASSWORD",
+    ssh_user="admin",
+    host_driver_args=_lab_host_driver_args("eb03.lab.ash6"),
+    oss_mock_device_data=_lab_oss_mock_device_data("eb03.lab.ash6", network_type="EBB"),
     peer_groups=ebb_peer_groups(),
     extras={
+        # Retained for ``factories/bgp_update_group.py`` which still reads
+        # these keys inline (Wave 2 candidate: fold into the promoted
+        # ``host_driver_args`` / ``oss_mock_device_data`` fields).
         "lab_admin_username": "admin",
         "lab_admin_password_default": "dnepit",  # pragma: allowlist secret
         "mock_device_hardware": "ARISTA_7516",
@@ -372,8 +458,16 @@ EB04_LAB_ASH6 = Testbed(
     dut_bgp_as=64981,
     bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
     lab_device_password_env_var="TAAC_EBB_LAB_DEVICE_PASSWORD",
+    ssh_user="admin",
+    host_driver_args=_lab_host_driver_args("eb04.lab.ash6"),
+    # NOTE: legacy eb04 source omits ``network_type`` on MockDeviceInfo,
+    # unlike eb01/eb03 which set ``network_type="EBB"``. Preserved verbatim.
+    oss_mock_device_data=_lab_oss_mock_device_data("eb04.lab.ash6"),
     peer_groups=ebb_peer_groups(),
     extras={
+        # Retained for ``factories/bgp_update_group.py`` which still reads
+        # these keys inline (Wave 2 candidate: fold into the promoted
+        # ``host_driver_args`` / ``oss_mock_device_data`` fields).
         "lab_admin_username": "admin",
         "lab_admin_password_default": "dnepit",  # pragma: allowlist secret
         "mock_device_hardware": "ARISTA_7516",
@@ -383,8 +477,6 @@ EB04_LAB_ASH6 = Testbed(
         "mock_device_region": "ash",
         "mock_device_asset_id": 12345,
         "mock_device_network_area": "BACKBONE",
-        # NOTE: legacy eb04 source omits ``network_type`` on MockDeviceInfo,
-        # unlike eb01/eb03 which set ``network_type="EBB"``. Preserved verbatim.
     },
 )
 
@@ -405,14 +497,25 @@ EB_TEST_DEVICE = Testbed(
     dut_bgp_as=64981,
     bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
     lab_device_password_env_var="TAAC_EBB_LAB_DEVICE_PASSWORD",
+    ssh_user="admin",
+    # Extra host-driver JSON kwarg beyond the standard username/password
+    # pair — routes the BGP++ thrift RPC to a specific IPv6 address on
+    # the dev testbed (device's regular loopback is not reachable from
+    # devservers).
+    host_driver_args=_lab_host_driver_args(
+        "bgp.eb.test.ash6",
+        extra_kwargs={"bgp_ip": "2401:db00:2066:304a::1001"},
+    ),
+    oss_mock_device_data=_lab_oss_mock_device_data(
+        "bgp.eb.test.ash6", network_type="EBB"
+    ),
     peer_groups=ebb_peer_groups(),
     extras={
+        # Retained for ``factories/bgp_update_group.py`` which still reads
+        # these keys inline (Wave 2 candidate: fold into the promoted
+        # ``host_driver_args`` / ``oss_mock_device_data`` fields).
         "lab_admin_username": "admin",
         "lab_admin_password_default": "dnepit",  # pragma: allowlist secret
-        # Extra host-driver JSON kwarg beyond the standard username/password
-        # pair — routes the BGP++ thrift RPC to a specific IPv6 address on
-        # the dev testbed (device's regular loopback is not reachable from
-        # devservers).
         "host_driver_extra_kwargs": {
             "bgp_ip": "2401:db00:2066:304a::1001",
         },

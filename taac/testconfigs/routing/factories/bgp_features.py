@@ -78,9 +78,6 @@ from taac.task_definitions import (
     create_run_commands_on_shell_task,
     create_set_peer_group_enforce_first_as_task,
 )
-from taac.testconfigs.routing.factories.bgp_ebb_scaling import (
-    _lab_device_wiring,
-)
 from taac.testconfigs.routing.testbed import Testbed
 from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConfig
@@ -98,10 +95,11 @@ __all__ = [
 def _feature_ssh_password(testbed: Testbed) -> str:
     """Return the lab SSH password for ``testbed``.
 
-    Uses the testbed's declared password env-var (matches ``_lab_device_wiring``
-    which drives ``host_driver_args``); falls back to ``"dnepit"`` when the
-    env var is unset -- byte-identical with the legacy wrappers whose
-    ``_LAB_DEVICE_PASSWORD`` also fell back to ``"dnepit"``.
+    Uses the testbed's declared password env-var (matches the
+    ``testbed.host_driver_args`` payload built at Testbed construction);
+    falls back to ``"dnepit"`` when the env var is unset -- byte-identical
+    with the legacy wrappers whose ``_LAB_DEVICE_PASSWORD`` also fell back
+    to ``"dnepit"``.
     """
     env_var = testbed.lab_device_password_env_var or "TAAC_EBB_LAB_DEVICE_PASSWORD"
     return os.environ.get(env_var, "dnepit")  # pragma: allowlist secret
@@ -157,7 +155,8 @@ def create_bgp_feature_fast_reset_test_config(
     ixia_interfaces_ebgp = [ebgp_iface]
     ssh_password = _feature_ssh_password(testbed)
 
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     direct_ixia_connections = [
         DirectIxiaConnection(
@@ -640,7 +639,8 @@ def create_bgp_feature_weight_test_config(
     ixia_interface_ibgp = ibgp_iface
     ssh_password = _feature_ssh_password(testbed)
 
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     direct_ixia_connections = [
         DirectIxiaConnection(
@@ -1099,7 +1099,8 @@ def create_bgp_feature_well_known_communities_test_config(
     ixia_interface_ibgp = ibgp_iface
     ssh_password = _feature_ssh_password(testbed)
 
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     direct_ixia_connections = [
         DirectIxiaConnection(
@@ -1456,7 +1457,8 @@ def create_bgp_feature_enforce_first_as_test_config(
     ixia_interface_ibgp = ibgp_iface
     ssh_password = _feature_ssh_password(testbed)
 
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     direct_ixia_connections = [
         DirectIxiaConnection(
@@ -1973,7 +1975,8 @@ def create_bgp_feature_med_test_config(
     ixia_interface_ibgp = ibgp_iface
     ssh_password = _feature_ssh_password(testbed)
 
-    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_driver_args = testbed.host_driver_args
+    oss_mock_device_data = testbed.oss_mock_device_data
     host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
     direct_ixia_connections = [
         DirectIxiaConnection(
