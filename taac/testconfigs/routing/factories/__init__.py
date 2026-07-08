@@ -15,6 +15,7 @@ from taac.testconfigs.routing.factories import (  # noqa: F401
     bgp_dc_chronos_node,
     bgp_ebb_characteristic,
     bgp_ebb_full_scale,
+    bgp_features,
     bgp_update_group,
     cte_ucmp,
 )

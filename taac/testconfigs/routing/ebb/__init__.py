@@ -50,9 +50,6 @@ from taac.testconfigs.routing.ebb.eb03_arista_high_diversity_test_config import 
 from taac.testconfigs.routing.ebb.eb03_arista_mimic_ebb_test_full_scale_with_open_r_test_config import (
     EB03_ARISTA_MIMIC_EBB_TEST_FULL_SCALE_WITH_OPEN_R_TEST_CONFIG,
 )
-from taac.testconfigs.routing.ebb.eb03_arista_well_known_community_test_config import (
-    EB03_ARISTA_WELL_KNOWN_COMMUNITY_TEST_CONFIG,
-)
 from taac.testconfigs.routing.ebb.eb04_arista_bgp_plus_plus_separable_policy_1_peer_test_config import (
     EB04_ARISTA_BGP_PLUS_PLUS_SEPARABLE_POLICY_1_PEER_TEST_CONFIG,
 )
@@ -84,14 +81,8 @@ from taac.testconfigs.routing.ebb.qzd_single_node_topology_mimic_ebb_test_full_s
 from taac.testconfigs.routing.ebb.test_config_bgp_enforce_first_as_feature import (
     test_config_for_bgp_enforce_first_as_feature,
 )
-from taac.testconfigs.routing.ebb.test_config_bgp_fast_reset_feature import (
-    test_config_for_bgp_fast_reset_feature,
-)
 from taac.testconfigs.routing.ebb.test_config_bgp_med_feature import (
     test_config_for_bgp_med_feature,
-)
-from taac.testconfigs.routing.ebb.test_config_bgp_weight_feature import (
-    test_config_for_bgp_weight_feature,
 )
 from taac.testconfigs.routing.ebb.test_config_performance_scaling_case2 import (
     test_config_constant_attribute_storage_on_eos,
@@ -126,7 +117,6 @@ __all__ = [
     "EB02_ARISTA_CONSTANT_ATTRIBUTE_STORAGE_VARYING_COMBINATIONS_TEST_CONFIG",
     "EB03_ARISTA_HIGH_DIVERSITY_TEST_CONFIG",
     "EB03_ARISTA_MIMIC_EBB_TEST_FULL_SCALE_WITH_OPEN_R_TEST_CONFIG",
-    "EB03_ARISTA_WELL_KNOWN_COMMUNITY_TEST_CONFIG",
     "EB04_ARISTA_BGP_PLUS_PLUS_SEPARABLE_POLICY_1_PEER_TEST_CONFIG",
     "EB04_ARISTA_BGP_QUEUE_MEMORY_MONITOR_IPV6_50EBGP_25IBGP_WITH_FLAPPING_TEST_CONFIG",
     "EB04_ARISTA_MIMIC_EBB_TEST_FULL_SCALE_WITH_OPEN_R_TEST_CONFIG",
@@ -143,9 +133,7 @@ __all__ = [
     "test_config_constant_attribute_storage_on_eos",
     "test_config_constant_attribute_storage_varying_combinations_on_eos",
     "test_config_for_bgp_enforce_first_as_feature",
-    "test_config_for_bgp_fast_reset_feature",
     "test_config_for_bgp_med_feature",
-    "test_config_for_bgp_weight_feature",
     "test_config_for_bgp_plus_plus_on_ebb_arista_separable_policy",
     "test_config_to_verify_computational_load_of_bgp_plus_plus",
     "test_config_to_verify_constant_attribute_storage",
