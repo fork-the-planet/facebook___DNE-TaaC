@@ -78,12 +78,6 @@ from taac.testconfigs.routing.ebb.qzd_single_node_topology_mimic_ebb_test_full_s
 from taac.testconfigs.routing.ebb.qzd_single_node_topology_mimic_ebb_test_full_scale_test_config import (
     QZD_SINGLE_NODE_TOPOLOGY_MIMIC_EBB_TEST_FULL_SCALE_TEST_CONFIG,
 )
-from taac.testconfigs.routing.ebb.test_config_bgp_enforce_first_as_feature import (
-    test_config_for_bgp_enforce_first_as_feature,
-)
-from taac.testconfigs.routing.ebb.test_config_bgp_med_feature import (
-    test_config_for_bgp_med_feature,
-)
 from taac.testconfigs.routing.ebb.test_config_performance_scaling_case2 import (
     test_config_constant_attribute_storage_on_eos,
     test_config_constant_attribute_storage_varying_combinations_on_eos,
@@ -132,8 +126,6 @@ __all__ = [
     "test_config_bgp_update_packing_validation",
     "test_config_constant_attribute_storage_on_eos",
     "test_config_constant_attribute_storage_varying_combinations_on_eos",
-    "test_config_for_bgp_enforce_first_as_feature",
-    "test_config_for_bgp_med_feature",
     "test_config_for_bgp_plus_plus_on_ebb_arista_separable_policy",
     "test_config_to_verify_computational_load_of_bgp_plus_plus",
     "test_config_to_verify_constant_attribute_storage",

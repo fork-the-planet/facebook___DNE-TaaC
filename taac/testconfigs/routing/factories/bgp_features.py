@@ -1,23 +1,28 @@
 # (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
 # pyre-unsafe
-"""BGP feature testconfig factories (fast-reset / weight / well-known-communities).
+"""BGP feature testconfig factories (fast-reset / weight / well-known-communities / enforce-first-as / MED).
 
 Wave 5B.1 — moved from
 ``testconfigs/routing/ebb/test_config_bgp_fast_reset_feature.py``,
 ``testconfigs/routing/ebb/test_config_bgp_weight_feature.py`` and
-``testconfigs/routing/ebb/test_config_well_known_communities.py``. Each new
-factory takes ``(testbed: Testbed, *, name: str, ...)`` and returns a
-``TestConfig`` whose serialized form is byte-wise identical to the legacy
-factory outputs (golden manifest hashes preserved verbatim). DUT identity
+``testconfigs/routing/ebb/test_config_well_known_communities.py``. Wave 5B.2
+extends with ``create_bgp_feature_enforce_first_as_test_config`` (from
+``test_config_bgp_enforce_first_as_feature.py``) and
+``create_bgp_feature_med_test_config`` (from
+``test_config_bgp_med_feature.py``). Each factory takes
+``(testbed: Testbed, *, name: str, ...)`` and returns a ``TestConfig`` whose
+serialized form is byte-wise identical to the legacy factory outputs
+(golden manifest hashes preserved verbatim). DUT identity
 (``device_name``, IXIA port map, direct_ixia_connections, lab
 host_driver_args, oss_mock_device_data, host_os_type_map) is derived from
 ``testbed``; the remaining workload knobs stay as kwargs with defaults
 matching the legacy eb03.lab.ash6 wrappers.
 
 Playbook factories (``build_fast_reset_playbook``,
-``build_bgp_weight_playbook``, ``build_bgp_well_known_community_playbook``)
-are imported from ``playbook_definitions`` verbatim so the playbook
-snapshot manifest ``__module__`` filter still picks them up.
+``build_bgp_weight_playbook``, ``build_bgp_well_known_community_playbook``,
+``build_enforce_first_as_playbook``, ``build_bgp_med_playbook``) are
+imported from ``playbook_definitions`` verbatim so the playbook snapshot
+manifest ``__module__`` filter still picks them up.
 
 See ../README.md §3.
 """
@@ -32,12 +37,20 @@ from taac.health_checks.healthcheck_definitions import (
     create_next_hop_count_check,
 )
 from taac.playbooks.playbook_definitions import (
+    build_bgp_med_playbook,
     build_bgp_weight_playbook,
     build_bgp_well_known_community_playbook,
+    build_enforce_first_as_playbook,
     build_fast_reset_playbook,
+)
+from taac.routing.ebb.arista_feature_testing.ixia_configs_for_enforce_first_as_test import (
+    create_enforce_first_as_test_basic_port_configs,
 )
 from taac.routing.ebb.arista_feature_testing.ixia_configs_for_fast_reset_test import (
     create_fast_reset_test_basic_port_configs,
+)
+from taac.routing.ebb.arista_feature_testing.ixia_configs_for_med_test import (
+    create_med_test_basic_port_configs,
 )
 from taac.routing.ebb.arista_feature_testing.ixia_configs_for_weight_test import (
     create_weight_test_basic_port_configs,
@@ -48,18 +61,22 @@ from taac.routing.ebb.arista_feature_testing.ixia_configs_for_well_known_communi
 from taac.stages.stage_definitions import create_steps_stage
 from taac.steps.step_definitions import (
     create_advertise_withdraw_prefixes_step,
+    create_bgp_prefixes_med_value_step,
     create_custom_step,
     create_ixia_device_group_toggle_step,
+    create_ixia_packet_capture_step,
     create_longevity_step,
     create_run_task_step,
 )
 from taac.task_definitions import (
     create_add_bgp_weight_policy_task,
+    create_disable_med_comparison_task,
     create_invoke_ixia_api_task,
     create_ixia_enable_disable_bgp_prefixes_task,
     create_replace_bgp_peers_task,
     create_restore_bgp_peers_task,
     create_run_commands_on_shell_task,
+    create_set_peer_group_enforce_first_as_task,
 )
 from taac.testconfigs.routing.factories.bgp_ebb_scaling import (
     _lab_device_wiring,
@@ -70,7 +87,9 @@ from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConf
 
 
 __all__ = [
+    "create_bgp_feature_enforce_first_as_test_config",
     "create_bgp_feature_fast_reset_test_config",
+    "create_bgp_feature_med_test_config",
     "create_bgp_feature_weight_test_config",
     "create_bgp_feature_well_known_communities_test_config",
 ]
@@ -1383,5 +1402,1570 @@ def create_bgp_feature_well_known_communities_test_config(
         ),
         playbooks=[
             playbook_community_filter,
+        ],
+    )
+
+
+# =============================================================================
+# BGP enforce_first_as (legacy test_config_bgp_enforce_first_as_feature)
+# =============================================================================
+
+
+def create_bgp_feature_enforce_first_as_test_config(
+    testbed: Testbed,
+    *,
+    name: str,
+    ebgp_remote_as: int = 65334,
+    wrong_first_as: int = 65000,
+    ixia_ebgp_ic_parent_network_v6: str = "2401:db00:e50d:11:8",
+    ixia_ebgp_ic_parent_network_v4: str = "10.163.28",
+    ibgp_local_as: int = 64981,
+    ixia_ibgp_ic_parent_network_v6: str = "2401:db00:e50d:11:9",
+    ixia_ibgp_ic_parent_network_v4: str = "10.164.28",
+    peer_groups: list[str] | None = None,
+    ssh_user: str = "admin",
+    ebgp_peer_count_valid: int = 10,
+    ebgp_peer_count_invalid: int = 10,
+    ibgp_peer_count: int = 10,
+    prefix_count: int = 500,
+    ebgp_route_acceptance_communities: list[str] | None = None,
+    test_address_families: list[str] | None = None,
+    convergence_wait_seconds: int = 120,
+    log_collection_timeout: int | None = None,
+) -> TestConfig:
+    """BGP enforce_first_as TestConfig -- Arista BGP++ security feature test.
+
+    Byte-wise identical to the legacy
+    ``test_config_bgp_enforce_first_as_feature.test_config_for_bgp_enforce_first_as_feature``
+    factory invoked from the ``ARISTA_BGP_ENFORCE_FIRST_AS_FEATURE_TEST``
+    wrapper on ``eb03.lab.ash6``. DUT identity + IXIA port map + lab host
+    wiring are derived from ``testbed``; the remaining workload knobs keep
+    the wrapper's default values.
+    """
+    if ebgp_route_acceptance_communities is None:
+        ebgp_route_acceptance_communities = ["65529:39744"]
+    if test_address_families is None:
+        test_address_families = ["ipv6"]
+    if peer_groups is None:
+        peer_groups = ["EB-FA-V6"]
+
+    device_name = testbed.device_name
+    ebgp_iface, ebgp_port = testbed.ixia_ports[0]
+    ibgp_iface, ibgp_port = testbed.ixia_ports[1]
+    ixia_interface_ebgp = ebgp_iface
+    ixia_interface_ibgp = ibgp_iface
+    ssh_password = _feature_ssh_password(testbed)
+
+    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
+    direct_ixia_connections = [
+        DirectIxiaConnection(
+            interface=ebgp_iface,
+            ixia_chassis_ip=testbed.ixia_chassis_ip,
+            ixia_port=ebgp_port,
+        ),
+        DirectIxiaConnection(
+            interface=ibgp_iface,
+            ixia_chassis_ip=testbed.ixia_chassis_ip,
+            ixia_port=ibgp_port,
+        ),
+    ]
+
+    num_afs = len(test_address_families)
+    total_ebgp_peers = (ebgp_peer_count_valid + ebgp_peer_count_invalid) * num_afs
+    total_ibgp_peers = ibgp_peer_count * num_afs
+    total_peers = total_ebgp_peers + total_ibgp_peers
+    total_ebgp_per_af = ebgp_peer_count_valid + ebgp_peer_count_invalid
+
+    expected_valid_routes = prefix_count * ebgp_peer_count_valid * num_afs
+    expected_invalid_routes = prefix_count * ebgp_peer_count_invalid * num_afs
+
+    valid_prefix_filters: list[str] = []
+    invalid_prefix_filters: list[str] = []
+    if "ipv6" in test_address_families:
+        valid_prefix_filters.append("2001:db8:10")
+        invalid_prefix_filters.append("2001:db8:20")
+    if "ipv4" in test_address_families:
+        valid_prefix_filters.append("10.1")
+        invalid_prefix_filters.append("10.2")
+
+    peer_group_configs = []
+    if "ipv6" in test_address_families:
+        peer_group_configs.append(
+            {
+                "peer_group_name": "EB-FA-V6",
+                "remote_as": ebgp_remote_as,
+                "base_network": ixia_ebgp_ic_parent_network_v6,
+                "is_v6": True,
+                "peer_count": total_ebgp_per_af,
+                "description_prefix": "eBGP V6 Peer",
+            }
+        )
+        peer_group_configs.append(
+            {
+                "peer_group_name": "EB-EB-V6",
+                "remote_as": ibgp_local_as,
+                "base_network": ixia_ibgp_ic_parent_network_v6,
+                "is_v6": True,
+                "peer_count": ibgp_peer_count,
+                "description_prefix": "iBGP V6 Listener",
+            }
+        )
+    if "ipv4" in test_address_families:
+        peer_group_configs.append(
+            {
+                "peer_group_name": "EB-FA-V4",
+                "remote_as": ebgp_remote_as,
+                "base_network": ixia_ebgp_ic_parent_network_v4,
+                "is_v6": False,
+                "peer_count": total_ebgp_per_af,
+                "description_prefix": "eBGP V4 Peer",
+            }
+        )
+        peer_group_configs.append(
+            {
+                "peer_group_name": "EB-EB-V4",
+                "remote_as": ibgp_local_as,
+                "base_network": ixia_ibgp_ic_parent_network_v4,
+                "is_v6": False,
+                "peer_count": ibgp_peer_count,
+                "description_prefix": "iBGP V4 Listener",
+            }
+        )
+
+    setup_tasks = [
+        create_replace_bgp_peers_task(
+            hostname=device_name,
+            peer_configs=peer_group_configs,
+        ),
+        create_ixia_enable_disable_bgp_prefixes_task(
+            enable=False,
+            prefix_pool_regex="PREFIX_POOL_.*",
+            prefix_start_index=0,
+        ),
+    ]
+
+    def _mk_set_enforce_first_as_step(
+        enable: bool,
+        description: str | None = None,
+    ):
+        action = "Enable" if enable else "Disable"
+        if description is None:
+            description = f"{action} enforce_first_as on peer groups: {peer_groups}"
+        return create_run_task_step(
+            task_name="set_peer_group_enforce_first_as",
+            params_dict={
+                "hostname": device_name,
+                "peer_groups": peer_groups,
+                "enforce_first_as": enable,
+                "ssh_user": ssh_user,
+                "ssh_password": ssh_password,
+                "reload_bgp": True,
+            },
+            description=description,
+        )
+
+    return TestConfig(
+        name=name,
+        skip_ixia_protocol_verification=True,
+        log_collection_timeout=log_collection_timeout,
+        basset_pool="dne.test",
+        endpoints=[
+            Endpoint(
+                name=device_name,
+                dut=True,
+                ixia_ports=[ixia_interface_ebgp, ixia_interface_ibgp],
+                direct_ixia_connections=direct_ixia_connections,
+            ),
+        ],
+        host_driver_args=host_driver_args,
+        oss_mock_device_data=oss_mock_device_data,
+        host_os_type_map=host_os_type_map,
+        startup_checks=[],
+        setup_tasks=setup_tasks,
+        teardown_tasks=[
+            create_invoke_ixia_api_task(
+                api_name="toggle_device_groups",
+                args_dict={
+                    "enable": False,
+                    "device_group_name_regex": ".*",
+                },
+            ),
+            create_restore_bgp_peers_task(
+                hostname=device_name,
+            ),
+            create_set_peer_group_enforce_first_as_task(
+                hostname=device_name,
+                peer_groups=peer_groups,
+                enforce_first_as=False,
+                ssh_user=ssh_user,
+                ssh_password=ssh_password,
+            ),
+        ],
+        basic_port_configs=create_enforce_first_as_test_basic_port_configs(
+            device_name=device_name,
+            ixia_interface_ebgp=ixia_interface_ebgp,
+            ebgp_peer_count_valid=ebgp_peer_count_valid,
+            ebgp_peer_count_invalid=ebgp_peer_count_invalid,
+            ebgp_remote_as=ebgp_remote_as,
+            wrong_first_as=wrong_first_as,
+            ixia_ebgp_ic_parent_network_v6=ixia_ebgp_ic_parent_network_v6,
+            ixia_ebgp_ic_parent_network_v4=ixia_ebgp_ic_parent_network_v4,
+            ixia_interface_ibgp=ixia_interface_ibgp,
+            ibgp_peer_count=ibgp_peer_count,
+            ibgp_local_as=ibgp_local_as,
+            ixia_ibgp_ic_parent_network_v6=ixia_ibgp_ic_parent_network_v6,
+            ixia_ibgp_ic_parent_network_v4=ixia_ibgp_ic_parent_network_v4,
+            prefix_count=prefix_count,
+            ebgp_route_acceptance_communities=ebgp_route_acceptance_communities,
+            test_address_families=test_address_families,
+        ),
+        playbooks=[
+            build_enforce_first_as_playbook(
+                name="BGP_Enforce_First_AS_Test_Phase0_Feature_Disabled",
+                setup_steps=[
+                    _mk_set_enforce_first_as_step(
+                        enable=False,
+                        description="Disable enforce_first_as for Phase 0 test",
+                    ),
+                    create_ixia_device_group_toggle_step(
+                        enable=True,
+                        device_group_name_regex=".*",
+                        description="Enable all BGP peer device groups",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_EBGP_VALID_AS$",
+                        prefix_start_index=0,
+                        description="Advertise routes from VALID AS group",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_EBGP_INVALID_AS$",
+                        prefix_start_index=0,
+                        description="Advertise routes from INVALID AS group",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[
+                    create_bgp_session_establish_check(
+                        expected_established_sessions_static=total_peers,
+                        check_id="verify_all_bgp_sessions_established_phase0",
+                    ),
+                ],
+                snapshot_checks=[
+                    create_bgp_session_snapshot_check(
+                        skip_flap_check=True, skip_uptime_check=True
+                    ),
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for BGP convergence ({convergence_wait_seconds}s)",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_enforce_first_as_routes",
+                                    "hostname": device_name,
+                                    "enforce_first_as_enabled": False,
+                                    "valid_prefix_filters": valid_prefix_filters,
+                                    "invalid_prefix_filters": invalid_prefix_filters,
+                                    "expected_valid_route_count": expected_valid_routes,
+                                    "expected_invalid_route_count": expected_invalid_routes,
+                                },
+                                description="Verify ALL routes accepted (enforce_first_as disabled)",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_enforce_first_as_playbook(
+                name="BGP_Enforce_First_AS_Test_Phase1_Feature_Enabled",
+                setup_steps=[
+                    create_ixia_device_group_toggle_step(
+                        enable=True,
+                        device_group_name_regex=".*",
+                        description="Enable all BGP peer device groups",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_EBGP_VALID_AS$",
+                        prefix_start_index=0,
+                        description="Advertise routes from VALID AS group",
+                    ),
+                    create_custom_step(
+                        params_dict={
+                            "custom_step_name": "get_enforce_first_as_rejects_baseline",
+                            "hostname": device_name,
+                        },
+                        description="Get baseline enforce_first_as reject count",
+                    ),
+                    _mk_set_enforce_first_as_step(
+                        enable=True,
+                        description="Enable enforce_first_as for Phase 1 test",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[
+                    create_bgp_session_establish_check(
+                        expected_established_sessions_static=total_peers,
+                        check_id="verify_all_bgp_sessions_established_phase1",
+                    ),
+                ],
+                snapshot_checks=[
+                    create_bgp_session_snapshot_check(
+                        skip_flap_check=True, skip_uptime_check=True
+                    ),
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[
+                    create_bgp_rib_fib_consistency_check(),
+                ],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_advertise_withdraw_prefixes_step(
+                                device_name=device_name,
+                                advertise=False,
+                                prefix_pool_regex="PREFIX_POOL_.*_EBGP_INVALID_AS$",
+                                prefix_start_index=0,
+                                description="Withdraw INVALID AS routes",
+                            ),
+                            create_longevity_step(
+                                duration=30,
+                                description="Wait for withdrawal (30s)",
+                            ),
+                            create_advertise_withdraw_prefixes_step(
+                                device_name=device_name,
+                                advertise=True,
+                                prefix_pool_regex="PREFIX_POOL_.*_EBGP_INVALID_AS$",
+                                prefix_start_index=0,
+                                description="Re-advertise INVALID AS routes",
+                            ),
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for BGP convergence ({convergence_wait_seconds}s)",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_enforce_first_as_routes",
+                                    "hostname": device_name,
+                                    "enforce_first_as_enabled": True,
+                                    "valid_prefix_filters": valid_prefix_filters,
+                                    "invalid_prefix_filters": invalid_prefix_filters,
+                                    "expected_valid_route_count": expected_valid_routes,
+                                    "expected_invalid_route_count": 0,
+                                },
+                                description="Verify only VALID routes accepted (enforce_first_as enabled)",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_enforce_first_as_rejects_increased",
+                                    "hostname": device_name,
+                                    "min_rejects": 1,
+                                },
+                                description="Verify enforce_first_as reject counter increased",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_enforce_first_as_playbook(
+                name="BGP_Enforce_First_AS_Test_Phase2_Readvertise_Invalid",
+                setup_steps=[
+                    create_ixia_device_group_toggle_step(
+                        enable=True,
+                        device_group_name_regex=".*",
+                        description="Enable all BGP peer device groups",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_EBGP_VALID_AS$",
+                        prefix_start_index=0,
+                        description="Advertise routes from VALID AS group",
+                    ),
+                    _mk_set_enforce_first_as_step(
+                        enable=True,
+                        description="Enable enforce_first_as for Phase 2 test",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=False,
+                        prefix_pool_regex="PREFIX_POOL_.*_EBGP_INVALID_AS$",
+                        prefix_start_index=0,
+                        description="Withdraw INVALID AS routes",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[],
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=30,
+                                description="Wait for withdrawal (30s)",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "get_enforce_first_as_rejects_baseline",
+                                    "hostname": device_name,
+                                },
+                                description="Get current enforce_first_as reject count",
+                            ),
+                            create_advertise_withdraw_prefixes_step(
+                                device_name=device_name,
+                                advertise=True,
+                                prefix_pool_regex="PREFIX_POOL_.*_EBGP_INVALID_AS$",
+                                prefix_start_index=0,
+                                description="Re-advertise INVALID AS routes",
+                            ),
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for re-advertisement ({convergence_wait_seconds}s)",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_enforce_first_as_routes",
+                                    "hostname": device_name,
+                                    "enforce_first_as_enabled": True,
+                                    "valid_prefix_filters": valid_prefix_filters,
+                                    "invalid_prefix_filters": invalid_prefix_filters,
+                                    "expected_valid_route_count": expected_valid_routes,
+                                    "expected_invalid_route_count": 0,
+                                },
+                                description="Verify INVALID routes still rejected after re-advertise",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_enforce_first_as_rejects_increased",
+                                    "hostname": device_name,
+                                    "min_rejects": 1,
+                                },
+                                description="Verify reject counter increased again",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_enforce_first_as_playbook(
+                name="BGP_Enforce_First_AS_Test_Phase3_Feature_Disabled_Again",
+                setup_steps=[
+                    create_ixia_device_group_toggle_step(
+                        enable=True,
+                        device_group_name_regex=".*",
+                        description="Enable all BGP peer device groups",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_EBGP_VALID_AS$",
+                        prefix_start_index=0,
+                        description="Advertise routes from VALID AS group",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_EBGP_INVALID_AS$",
+                        prefix_start_index=0,
+                        description="Advertise routes from INVALID AS group",
+                    ),
+                    _mk_set_enforce_first_as_step(
+                        enable=False,
+                        description="Disable enforce_first_as for Phase 3 test",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[],
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[
+                    create_bgp_rib_fib_consistency_check(),
+                ],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for BGP convergence ({convergence_wait_seconds}s)",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_enforce_first_as_routes",
+                                    "hostname": device_name,
+                                    "enforce_first_as_enabled": False,
+                                    "valid_prefix_filters": valid_prefix_filters,
+                                    "invalid_prefix_filters": invalid_prefix_filters,
+                                    "expected_valid_route_count": expected_valid_routes,
+                                    "expected_invalid_route_count": expected_invalid_routes,
+                                },
+                                description="Verify ALL routes accepted again (enforce_first_as disabled)",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
+# =============================================================================
+# BGP MED (legacy test_config_bgp_med_feature)
+# =============================================================================
+
+
+def create_bgp_feature_med_test_config(
+    testbed: Testbed,
+    *,
+    name: str,
+    ebgp_remote_as: int = 65334,
+    ixia_ebgp_ic_parent_network_v6: str = "2401:db00:e50d:11:8",
+    ixia_ebgp_ic_parent_network_v4: str = "10.163.28",
+    ibgp_local_as: int = 64981,
+    ixia_ibgp_ic_parent_network_v6: str = "2401:db00:e50d:11:9",
+    ixia_ibgp_ic_parent_network_v4: str = "10.164.28",
+    ssh_user: str = "admin",
+    ebgp_peer_count_group1: int = 50,
+    ebgp_peer_count_group2: int = 50,
+    ibgp_peer_count: int = 50,
+    prefix_count: int = 100,
+    med_low: int = 10,
+    med_high: int = 100,
+    ebgp_route_acceptance_communities: list[str] | None = None,
+    test_address_families: list[str] | None = None,
+    convergence_wait_seconds: int = 120,
+    log_collection_timeout: int | None = None,
+) -> TestConfig:
+    """BGP MED (Multi-Exit Discriminator) TestConfig -- Arista BGP++ feature test.
+
+    Byte-wise identical to the legacy
+    ``test_config_bgp_med_feature.test_config_for_bgp_med_feature`` factory
+    invoked from the ``ARISTA_BGP_MED_FEATURE_TEST`` wrapper on
+    ``eb03.lab.ash6``. DUT identity + IXIA port map + lab host wiring are
+    derived from ``testbed``; the remaining workload knobs keep the
+    wrapper's default values (test_address_families = ["ipv6", "ipv4"]).
+    """
+    if ebgp_route_acceptance_communities is None:
+        ebgp_route_acceptance_communities = ["65529:39744"]
+    if test_address_families is None:
+        test_address_families = ["ipv6", "ipv4"]
+
+    device_name = testbed.device_name
+    ebgp_iface, ebgp_port = testbed.ixia_ports[0]
+    ibgp_iface, ibgp_port = testbed.ixia_ports[1]
+    ixia_interface_ebgp = ebgp_iface
+    ixia_interface_ibgp = ibgp_iface
+    ssh_password = _feature_ssh_password(testbed)
+
+    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
+    direct_ixia_connections = [
+        DirectIxiaConnection(
+            interface=ebgp_iface,
+            ixia_chassis_ip=testbed.ixia_chassis_ip,
+            ixia_port=ebgp_port,
+        ),
+        DirectIxiaConnection(
+            interface=ibgp_iface,
+            ixia_chassis_ip=testbed.ixia_chassis_ip,
+            ixia_port=ibgp_port,
+        ),
+    ]
+
+    num_afs = len(test_address_families)
+    total_ebgp_peers = (ebgp_peer_count_group1 + ebgp_peer_count_group2) * num_afs
+    total_ibgp_peers = ibgp_peer_count * num_afs
+    total_peers = total_ebgp_peers + total_ibgp_peers
+    total_ebgp_per_af = ebgp_peer_count_group1 + ebgp_peer_count_group2
+
+    peer_groups = []
+    if "ipv6" in test_address_families:
+        peer_groups.append(
+            {
+                "peer_group_name": "EB-FA-V6",
+                "remote_as": ebgp_remote_as,
+                "base_network": ixia_ebgp_ic_parent_network_v6,
+                "is_v6": True,
+                "peer_count": total_ebgp_per_af,
+                "description_prefix": "eBGP V6 Peer",
+            }
+        )
+        peer_groups.append(
+            {
+                "peer_group_name": "EB-EB-V6",
+                "remote_as": ibgp_local_as,
+                "base_network": ixia_ibgp_ic_parent_network_v6,
+                "is_v6": True,
+                "peer_count": ibgp_peer_count,
+                "description_prefix": "iBGP V6 Listener",
+            }
+        )
+    if "ipv4" in test_address_families:
+        peer_groups.append(
+            {
+                "peer_group_name": "EB-FA-V4",
+                "remote_as": ebgp_remote_as,
+                "base_network": ixia_ebgp_ic_parent_network_v4,
+                "is_v6": False,
+                "peer_count": total_ebgp_per_af,
+                "description_prefix": "eBGP V4 Peer",
+            }
+        )
+        peer_groups.append(
+            {
+                "peer_group_name": "EB-EB-V4",
+                "remote_as": ibgp_local_as,
+                "base_network": ixia_ibgp_ic_parent_network_v4,
+                "is_v6": False,
+                "peer_count": ibgp_peer_count,
+                "description_prefix": "iBGP V4 Listener",
+            }
+        )
+
+    setup_tasks = [
+        create_replace_bgp_peers_task(
+            hostname=device_name,
+            peer_configs=peer_groups,
+        ),
+        create_ixia_enable_disable_bgp_prefixes_task(
+            enable=False,
+            prefix_pool_regex="PREFIX_POOL_.*",
+            prefix_start_index=0,
+        ),
+    ]
+
+    def _mk_enable_med_comparison_step(
+        description: str = "Enable MED comparison in BGP++ settings",
+    ):
+        return create_run_task_step(
+            task_name="enable_med_comparison",
+            params_dict={
+                "hostname": device_name,
+                "enable_med_missing_as_worst": False,
+                "ssh_user": ssh_user,
+                "ssh_password": ssh_password,
+                "reload_bgp": True,
+            },
+            description=description,
+        )
+
+    def _mk_disable_med_comparison_step(
+        description: str = "Disable MED comparison in BGP++ settings",
+    ):
+        return create_run_task_step(
+            task_name="disable_med_comparison",
+            params_dict={
+                "hostname": device_name,
+                "ssh_user": ssh_user,
+                "ssh_password": ssh_password,
+                "reload_bgp": True,
+            },
+            description=description,
+        )
+
+    def _mk_enable_med_missing_as_worst_step(
+        description: str = "Enable 'treat missing MED as worst' in BGP++ settings",
+    ):
+        return create_run_task_step(
+            task_name="enable_med_comparison",
+            params_dict={
+                "hostname": device_name,
+                "enable_med_missing_as_worst": True,
+                "ssh_user": ssh_user,
+                "ssh_password": ssh_password,
+                "reload_bgp": True,
+            },
+            description=description,
+        )
+
+    def _mk_disable_med_missing_as_worst_step(
+        description: str = "Disable 'treat missing MED as worst' in BGP++ settings",
+    ):
+        return create_run_task_step(
+            task_name="enable_med_comparison",
+            params_dict={
+                "hostname": device_name,
+                "enable_med_missing_as_worst": False,
+                "ssh_user": ssh_user,
+                "ssh_password": ssh_password,
+                "reload_bgp": True,
+            },
+            description=description,
+        )
+
+    return TestConfig(
+        name=name,
+        skip_ixia_protocol_verification=True,
+        log_collection_timeout=log_collection_timeout,
+        basset_pool="dne.test",
+        endpoints=[
+            Endpoint(
+                name=device_name,
+                dut=True,
+                ixia_ports=[ixia_interface_ebgp, ixia_interface_ibgp],
+                direct_ixia_connections=direct_ixia_connections,
+            ),
+        ],
+        host_driver_args=host_driver_args,
+        oss_mock_device_data=oss_mock_device_data,
+        host_os_type_map=host_os_type_map,
+        startup_checks=[],
+        setup_tasks=setup_tasks,
+        teardown_tasks=[
+            create_invoke_ixia_api_task(
+                api_name="toggle_device_groups",
+                args_dict={
+                    "enable": False,
+                    "device_group_name_regex": ".*",
+                },
+            ),
+            create_restore_bgp_peers_task(
+                hostname=device_name,
+            ),
+            create_disable_med_comparison_task(
+                hostname=device_name,
+                ssh_user=ssh_user,
+                ssh_password=ssh_password,
+            ),
+        ],
+        basic_port_configs=create_med_test_basic_port_configs(
+            device_name=device_name,
+            ixia_interface_ebgp=ixia_interface_ebgp,
+            ebgp_peer_count_group1=ebgp_peer_count_group1,
+            ebgp_peer_count_group2=ebgp_peer_count_group2,
+            ebgp_remote_as=ebgp_remote_as,
+            ixia_ebgp_ic_parent_network_v6=ixia_ebgp_ic_parent_network_v6,
+            ixia_ebgp_ic_parent_network_v4=ixia_ebgp_ic_parent_network_v4,
+            ixia_interface_ibgp=ixia_interface_ibgp,
+            ibgp_peer_count=ibgp_peer_count,
+            ibgp_local_as=ibgp_local_as,
+            ixia_ibgp_ic_parent_network_v6=ixia_ibgp_ic_parent_network_v6,
+            ixia_ibgp_ic_parent_network_v4=ixia_ibgp_ic_parent_network_v4,
+            prefix_count=prefix_count,
+            ebgp_route_acceptance_communities=ebgp_route_acceptance_communities,
+            test_address_families=test_address_families,
+        ),
+        playbooks=[
+            build_bgp_med_playbook(
+                name="BGP_MED_Test_Phase0_MED_Comparison_Disabled",
+                setup_steps=[
+                    _mk_disable_med_comparison_step(
+                        description="Disable MED comparison for Phase 0 ECMP test"
+                    ),
+                    create_ixia_device_group_toggle_step(
+                        enable=True,
+                        device_group_name_regex=".*",
+                        description="Enable all BGP peer device groups",
+                    ),
+                    create_bgp_prefixes_med_value_step(
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_HIGH$",
+                        prefix_start_index=0,
+                        med_value=med_high,
+                        description=f"Set MED {med_high} on HIGH MED prefix pools",
+                    ),
+                    create_bgp_prefixes_med_value_step(
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW$",
+                        prefix_start_index=0,
+                        med_value=med_low,
+                        description=f"Set MED {med_low} on LOW MED prefix pools",
+                    ),
+                    create_bgp_prefixes_med_value_step(
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW_VS_NOMED$",
+                        prefix_start_index=0,
+                        med_value=med_low,
+                        description=f"Set MED {med_low} on LOW MED vs NOMED prefix pools",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_HIGH$",
+                        prefix_start_index=0,
+                        description=f"Advertise routes from eBGP Group 1 (MED {med_high})",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW$",
+                        prefix_start_index=0,
+                        description=f"Advertise routes from eBGP Group 2 (MED {med_low})",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[
+                    create_bgp_session_establish_check(
+                        expected_established_sessions_static=total_peers,
+                        check_id="verify_all_bgp_sessions_established_phase0",
+                    ),
+                ],
+                snapshot_checks=[
+                    create_bgp_session_snapshot_check(
+                        skip_flap_check=True, skip_uptime_check=True
+                    ),
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[
+                    create_next_hop_count_check(
+                        min_nexthop_count=2,
+                        prefix_subnets=["2001:db8:3000::/48", "10.200.0.0/16"],
+                        check_id="verify_ecmp_med_ignored",
+                    ),
+                ],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for BGP convergence ({convergence_wait_seconds}s)",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_ignored",
+                                    "hostname": device_name,
+                                    "prefix_filter": "2001:db8:3000::",
+                                    "expected_med_low": med_low,
+                                    "expected_med_high": med_high,
+                                },
+                                description="Verify MED is IGNORED - both MED values should be in RIB (ECMP)",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_bgp_med_playbook(
+                name="BGP_MED_Test_Phase1_Both_Groups_Active",
+                setup_steps=[
+                    _mk_enable_med_comparison_step(
+                        description="Enable MED comparison for best path selection"
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[
+                    create_bgp_session_establish_check(
+                        expected_established_sessions_static=total_peers,
+                        check_id="verify_all_bgp_sessions_established",
+                    ),
+                ],
+                snapshot_checks=[
+                    create_bgp_session_snapshot_check(
+                        skip_flap_check=True, skip_uptime_check=True
+                    ),
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[
+                    create_bgp_session_establish_check(
+                        expected_established_sessions_static=total_peers,
+                        check_id="verify_bgp_sessions_after_advertisement",
+                    ),
+                ],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for BGP convergence ({convergence_wait_seconds}s)",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_best_path",
+                                    "hostname": device_name,
+                                    "expected_med": med_low,
+                                    "prefix_filter": "2001:db8:3000::",
+                                },
+                                description=f"Verify routes with MED {med_low} are selected as best",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_bgp_med_playbook(
+                name="BGP_MED_Test_Phase2_LowMED_Withdrawn",
+                setup_steps=[
+                    create_ixia_packet_capture_step(
+                        device_name=device_name,
+                        interface=ixia_interface_ibgp,
+                        mode="start",
+                        capture_filter="tcp port 179",
+                        capture_id="phase2_med_capture",
+                        description="Start capture on iBGP interface for Phase 2",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=False,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW$",
+                        prefix_start_index=0,
+                        description=f"Withdraw routes from eBGP Group 2 (MED {med_low})",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[],
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[
+                    create_bgp_rib_fib_consistency_check(),
+                ],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for withdrawal convergence ({convergence_wait_seconds}s)",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="stop",
+                                capture_id="phase2_med_capture",
+                                description="Stop capture on iBGP interface",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="save",
+                                capture_id="phase2_med_capture",
+                                pcap_filename="bgp_med_phase2.pcap",
+                                description="Save Phase 2 packet capture",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_best_path",
+                                    "hostname": device_name,
+                                    "expected_med": med_high,
+                                    "prefix_filter": "2001:db8:3000::",
+                                },
+                                description=f"Verify routes with MED {med_high} are now best",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_in_pcap",
+                                    "pcap_filename": "bgp_med_phase2.pcap",
+                                    "expected_med": med_high,
+                                    "min_updates_with_med": 1,
+                                },
+                                description=f"Verify MED {med_high} in PCAP sent to iBGP",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_bgp_med_playbook(
+                name="BGP_MED_Test_Phase3_LowMED_Readvertised",
+                setup_steps=[
+                    create_ixia_packet_capture_step(
+                        device_name=device_name,
+                        interface=ixia_interface_ibgp,
+                        mode="start",
+                        capture_filter="tcp port 179",
+                        capture_id="phase3_med_capture",
+                        description="Start capture on iBGP interface for Phase 3",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW$",
+                        prefix_start_index=0,
+                        description=f"Re-advertise routes from eBGP Group 2 (MED {med_low})",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[],
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[
+                    create_bgp_rib_fib_consistency_check(),
+                ],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for re-advertisement convergence ({convergence_wait_seconds}s)",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="stop",
+                                capture_id="phase3_med_capture",
+                                description="Stop capture on iBGP interface",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="save",
+                                capture_id="phase3_med_capture",
+                                pcap_filename="bgp_med_phase3.pcap",
+                                description="Save Phase 3 packet capture",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_best_path",
+                                    "hostname": device_name,
+                                    "expected_med": med_low,
+                                    "prefix_filter": "2001:db8:3000::",
+                                },
+                                description=f"Verify routes with MED {med_low} are best again",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_in_pcap",
+                                    "pcap_filename": "bgp_med_phase3.pcap",
+                                    "expected_med": med_low,
+                                    "min_updates_with_med": 1,
+                                },
+                                description=f"Verify MED {med_low} in PCAP sent to iBGP",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_bgp_med_playbook(
+                name="BGP_MED_Test_Phase4_MED_Vs_NoMED",
+                setup_steps=[
+                    _mk_enable_med_missing_as_worst_step(
+                        description="Enable 'missing MED as worst' for MED vs No-MED test"
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=False,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_HIGH$",
+                        prefix_start_index=0,
+                        description="Withdraw high MED routes",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=False,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW$",
+                        prefix_start_index=0,
+                        description="Withdraw low MED routes",
+                    ),
+                    create_ixia_packet_capture_step(
+                        device_name=device_name,
+                        interface=ixia_interface_ibgp,
+                        mode="start",
+                        capture_filter="tcp port 179",
+                        capture_id="phase4_med_capture",
+                        description="Start capture on iBGP interface for Phase 4",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_NO_MED$",
+                        prefix_start_index=0,
+                        description="Advertise routes with no MED (default)",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW_VS_NOMED",
+                        prefix_start_index=0,
+                        description=f"Advertise same routes with MED {med_low}",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[],
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[
+                    create_bgp_rib_fib_consistency_check(),
+                ],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for convergence ({convergence_wait_seconds}s)",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="stop",
+                                capture_id="phase4_med_capture",
+                                description="Stop capture on iBGP interface",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="save",
+                                capture_id="phase4_med_capture",
+                                pcap_filename="bgp_med_phase4.pcap",
+                                description="Save Phase 4 packet capture",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_best_path",
+                                    "hostname": device_name,
+                                    "expected_med": med_low,
+                                    "prefix_filter": "2001:db8:4000::",
+                                },
+                                description=f"Verify routes with explicit MED {med_low} vs no MED",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_in_pcap",
+                                    "pcap_filename": "bgp_med_phase4.pcap",
+                                    "expected_med": med_low,
+                                    "min_updates_with_med": 1,
+                                },
+                                description=f"Verify MED {med_low} in PCAP sent to iBGP",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_bgp_med_playbook(
+                name="BGP_MED_Test_Phase4a_NoMED_As_Zero",
+                setup_steps=[
+                    create_ixia_packet_capture_step(
+                        device_name=device_name,
+                        interface=ixia_interface_ibgp,
+                        mode="start",
+                        capture_filter="tcp port 179",
+                        capture_id="phase4a_med_capture",
+                        description="Start capture on iBGP interface for Phase 4a",
+                    ),
+                    _mk_disable_med_missing_as_worst_step(
+                        description="Reset 'missing MED as worst' to false - no-MED treated as 0"
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[],
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[
+                    create_bgp_rib_fib_consistency_check(),
+                ],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for convergence after config change ({convergence_wait_seconds}s)",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="stop",
+                                capture_id="phase4a_med_capture",
+                                description="Stop capture on iBGP interface",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="save",
+                                capture_id="phase4a_med_capture",
+                                pcap_filename="bgp_med_phase4a.pcap",
+                                description="Save Phase 4a packet capture",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_best_path",
+                                    "hostname": device_name,
+                                    "expected_med": 0,
+                                    "prefix_filter": "2001:db8:4000::",
+                                },
+                                description="Verify no-MED (treated as 0) beats explicit MED > 0",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_bgp_med_playbook(
+                name="BGP_MED_Test_Phase4b_MED_Zero_Best",
+                setup_steps=[
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=False,
+                        prefix_pool_regex="PREFIX_POOL_.*_NO_MED$",
+                        prefix_start_index=0,
+                        description="Withdraw no-MED routes",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=False,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW_VS_NOMED",
+                        prefix_start_index=0,
+                        description="Withdraw MED low vs no-MED routes",
+                    ),
+                    create_bgp_prefixes_med_value_step(
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW$",
+                        prefix_start_index=0,
+                        med_value=0,
+                        description="Set explicit MED=0 on LOW MED prefix pools",
+                    ),
+                    create_ixia_packet_capture_step(
+                        device_name=device_name,
+                        interface=ixia_interface_ibgp,
+                        mode="start",
+                        capture_filter="tcp port 179",
+                        capture_id="phase4b_med_capture",
+                        description="Start capture on iBGP interface for Phase 4b",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_HIGH$",
+                        prefix_start_index=0,
+                        description=f"Advertise routes with MED {med_high}",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW$",
+                        prefix_start_index=0,
+                        description="Advertise routes with explicit MED=0",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[],
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[
+                    create_bgp_rib_fib_consistency_check(),
+                ],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for convergence ({convergence_wait_seconds}s)",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="stop",
+                                capture_id="phase4b_med_capture",
+                                description="Stop capture on iBGP interface",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="save",
+                                capture_id="phase4b_med_capture",
+                                pcap_filename="bgp_med_phase4b.pcap",
+                                description="Save Phase 4b packet capture",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_best_path",
+                                    "hostname": device_name,
+                                    "expected_med": 0,
+                                    "prefix_filter": "2001:db8:3000::",
+                                },
+                                description="Verify explicit MED=0 beats higher MED values",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_in_pcap",
+                                    "pcap_filename": "bgp_med_phase4b.pcap",
+                                    "expected_med": 0,
+                                    "min_updates_with_med": 1,
+                                },
+                                description="Verify MED=0 in PCAP sent to iBGP",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_bgp_med_playbook(
+                name="BGP_MED_Test_Phase4c_MED_Ordering",
+                setup_steps=[
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=False,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW$",
+                        prefix_start_index=0,
+                        description="Withdraw MED=0 routes",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=False,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_HIGH$",
+                        prefix_start_index=0,
+                        description="Withdraw MED high routes",
+                    ),
+                    create_bgp_prefixes_med_value_step(
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW$",
+                        prefix_start_index=0,
+                        med_value=med_low,
+                        description=f"Reset MED to {med_low} on LOW MED prefix pools",
+                    ),
+                    create_bgp_prefixes_med_value_step(
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_HIGH$",
+                        prefix_start_index=0,
+                        med_value=50,
+                        description="Set MED=50 on HIGH MED prefix pools",
+                    ),
+                    create_ixia_packet_capture_step(
+                        device_name=device_name,
+                        interface=ixia_interface_ibgp,
+                        mode="start",
+                        capture_filter="tcp port 179",
+                        capture_id="phase4c_med_capture",
+                        description="Start capture on iBGP interface for Phase 4c",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_HIGH$",
+                        prefix_start_index=0,
+                        description="Advertise routes with MED=50",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW$",
+                        prefix_start_index=0,
+                        description=f"Advertise routes with MED={med_low}",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[],
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[
+                    create_bgp_rib_fib_consistency_check(),
+                ],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for convergence ({convergence_wait_seconds}s)",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="stop",
+                                capture_id="phase4c_med_capture",
+                                description="Stop capture on iBGP interface",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="save",
+                                capture_id="phase4c_med_capture",
+                                pcap_filename="bgp_med_phase4c.pcap",
+                                description="Save Phase 4c packet capture",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_best_path",
+                                    "hostname": device_name,
+                                    "expected_med": med_low,
+                                    "prefix_filter": "2001:db8:3000::",
+                                },
+                                description=f"Verify MED={med_low} beats MED=50",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_in_pcap",
+                                    "pcap_filename": "bgp_med_phase4c.pcap",
+                                    "expected_med": med_low,
+                                    "min_updates_with_med": 1,
+                                },
+                                description=f"Verify MED {med_low} in PCAP sent to iBGP",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_bgp_med_playbook(
+                name="BGP_MED_Test_Phase4d_Restore_MED_Values",
+                setup_steps=[
+                    create_bgp_prefixes_med_value_step(
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_HIGH$",
+                        prefix_start_index=0,
+                        med_value=med_high,
+                        description=f"Reset MED to {med_high} on HIGH MED prefix pools",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=False,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW$",
+                        prefix_start_index=0,
+                        description="Withdraw MED low routes",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=False,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_HIGH$",
+                        prefix_start_index=0,
+                        description="Withdraw MED high routes",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[],
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=30,
+                                description="Wait for cleanup (30s)",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_bgp_med_playbook(
+                name="BGP_MED_Test_Phase5_ECMP_Equal_MED",
+                setup_steps=[
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=False,
+                        prefix_pool_regex="PREFIX_POOL_.*_MED_LOW_VS_NOMED",
+                        prefix_start_index=0,
+                        description="Withdraw MED low vs no-MED routes",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_NO_MED$",
+                        prefix_start_index=0,
+                        description="Advertise routes from Group 1 with no MED",
+                    ),
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=True,
+                        prefix_pool_regex="PREFIX_POOL_.*_NO_MED_G2",
+                        prefix_start_index=0,
+                        description="Advertise same routes from Group 2 with no MED",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[],
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[
+                    create_bgp_rib_fib_consistency_check(),
+                    create_next_hop_count_check(
+                        min_nexthop_count=2,
+                        prefix_subnets=["2001:db8:4000::/48", "10.250.0.0/16"],
+                        check_id="verify_ecmp_equal_med",
+                    ),
+                ],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for convergence ({convergence_wait_seconds}s)",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            build_bgp_med_playbook(
+                name="BGP_MED_Test_Phase6_Verify_MED_Sent_To_IBGP",
+                setup_steps=[
+                    create_advertise_withdraw_prefixes_step(
+                        device_name=device_name,
+                        advertise=False,
+                        prefix_pool_regex="PREFIX_POOL_.*",
+                        prefix_start_index=0,
+                        description="Withdraw all routes to reset state",
+                    ),
+                ],
+                periodic_tasks=[],
+                prechecks=[
+                    create_bgp_session_establish_check(
+                        expected_established_sessions_static=total_peers,
+                        check_id="verify_bgp_sessions_before_capture",
+                    ),
+                ],
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                ],
+                postchecks=[],
+                stages=[
+                    create_steps_stage(
+                        iteration=1,
+                        steps=[
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="start",
+                                capture_filter="tcp port 179",
+                                capture_id="med_ibgp_capture",
+                                description="Start capture on iBGP interface for MED verification",
+                            ),
+                            create_longevity_step(
+                                duration=5,
+                                description="Wait for capture to initialize (5s)",
+                            ),
+                            create_advertise_withdraw_prefixes_step(
+                                device_name=device_name,
+                                advertise=True,
+                                prefix_pool_regex="PREFIX_POOL_.*_MED_LOW$",
+                                prefix_start_index=0,
+                                description=f"Advertise routes with MED {med_low}",
+                            ),
+                            create_longevity_step(
+                                duration=convergence_wait_seconds,
+                                description=f"Wait for routes to propagate to iBGP ({convergence_wait_seconds}s)",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="stop",
+                                capture_id="med_ibgp_capture",
+                                description="Stop capture on iBGP interface",
+                            ),
+                            create_ixia_packet_capture_step(
+                                device_name=device_name,
+                                interface=ixia_interface_ibgp,
+                                mode="save",
+                                capture_id="med_ibgp_capture",
+                                pcap_filename="bgp_med_ibgp.pcap",
+                                description="Save iBGP packet capture",
+                            ),
+                            create_custom_step(
+                                params_dict={
+                                    "custom_step_name": "verify_bgp_med_in_pcap",
+                                    "pcap_filename": "bgp_med_ibgp.pcap",
+                                    "expected_med": med_low,
+                                    "min_updates_with_med": 1,
+                                },
+                                description="Verify MED attribute is present in BGP updates to iBGP",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
         ],
     )
