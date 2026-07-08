@@ -1,87 +1,28 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
+# (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
 # pyre-unsafe
+"""BGP-DC chronos_node factory (Wave 3B).
+
+Absorbed from the pre-Wave-3B module
+``testconfigs/routing/fboss_bgp_plus_plus_chronos_node_test_config.py``
+(which is being removed as part of this migration). Two public factory
+surfaces live here:
+
+* ``build_bgp_dc_test_config`` — the legacy 90-arg builder. Preserved
+  verbatim so byte-for-byte-identical TestConfigs continue to fall out
+  of every catalog binding + external consumer (kodiak RBB, the deleted
+  ``internal_test_configs.py`` inline list, etc.).
+
+* ``create_bgp_dc_chronos_node_test_config(testbed, *, name, **overrides)``
+  — the framework-shaped wrapper. Fills in per-testbed knobs from
+  ``Testbed.extras`` and the factory-wide chronos defaults, then delegates
+  to ``build_bgp_dc_test_config`` so both paths emit identical output.
+
+The playbook-assembly + playbook-category-registry lives on this module too
+(``get_bgp_dc_playbooks`` + ``PLAYBOOK_CATEGORY_REGISTRY``) and stays
+unchanged from the pre-Wave-3B source; Wave 3C-3E will split them further.
 """
-BGP DC Main Test Configuration — FBOSS BGP++ Chronos Node
-===========================================================
 
-This is the main entry point for the BGP DC test suite. It assembles
-playbooks from the split playbook files and constructs the full conveyor
-test configuration via ``build_bgp_dc_test_config`` — a BGP-DC-specific
-test config builder defined in this file (no IXIA traffic items, no
-traffic-loss health checks, no hardcoded hardening-specific playbook
-defaults).
-
-FILE STRUCTURE:
----------------
-After the Phase 3 testconfig migration, the test config file lives under
-`testconfigs/routing/` and the supporting playbook helpers stay in
-`routing/dc_routing/bgp_dc/`:
-
-    testconfigs/routing/
-    └── fboss_bgp_plus_plus_chronos_node_test_config.py   (this file)
-                                            # Main entry point that imports playbooks from
-                                            # the bgp_dc helpers and assembles them into the
-                                            # conveyor test configuration.
-
-    routing/dc_routing/bgp_dc/
-    ├── __init__.py
-    ├── common.py                           # Shared constants, durations, building blocks,
-    │                                       # sequences, stages, steps, and helper functions.
-    │                                       # Import from here when writing new playbook files.
-    │
-    ├── restart_playbooks.py                # Agent restart and BGP restart playbooks.
-    │                                       # Pure restart tests (no churn/flap).
-    │
-    ├── longevity_playbooks.py              # Longevity, prefix/session flap, device group
-    │                                       # toggle, and convergence playbooks.
-    │                                       # All sustained-churn and steady-state tests.
-    │
-    └── platform_hardening_playbooks.py     # Platform hardening tests — OOM, L2 table
-                                            # overflows, ECMP limits, CPU queue overload,
-                                            # malformed packets, service crash/restart combos.
-                                            # These are OPTIONAL — only included when
-                                            # playbook_categories includes "platform_hardening".
-
-HOW PLAYBOOKS ARE ASSEMBLED:
------------------------------
-1. Each playbook file exposes a get_*_playbooks(**kwargs) function.
-2. All getters are registered in PLAYBOOK_CATEGORY_REGISTRY with a
-   category name (e.g., "restart", "longevity", "platform_hardening").
-3. get_bgp_dc_playbooks() iterates the selected categories and calls
-   each getter with the device parameters (**kwargs).
-4. build_bgp_dc_test_config() assembles the playbooks and constructs
-   the conveyor TestConfig in a single call.
-
-SELECTING WHICH PLAYBOOKS TO RUN:
------------------------------------
-There are two filtering mechanisms, applied in sequence:
-
-1. playbook_categories (broad selection by file/category):
-       playbook_categories=["restart"]                          → only restart
-       playbook_categories=["restart", "longevity"]             → restart + longevity
-       playbook_categories=["restart", "platform_hardening"]    → restart + hardening
-       playbook_categories=None                                 → ALL categories (default)
-
-2. playbooks_selected (cherry-pick individual tests by name):
-       playbooks_selected=["test_agent_restart", "test_bgp_restart"]
-
-ADDING NEW TESTS:
------------------
-If you are adding a new test:
-
-1. Decide which playbook file it belongs to:
-   - Pure restart tests → restart_playbooks.py
-   - Longevity, churn, flap, convergence tests → longevity_playbooks.py
-   - Platform hardening (OOM, overflows, crashes) → platform_hardening_playbooks.py
-   - Entirely new category? Create a new file (e.g., my_feature_playbooks.py)
-     and add a get_my_feature_playbooks(**kwargs) function, then:
-       a. Import it in this file.
-       b. Add it to PLAYBOOK_CATEGORY_REGISTRY.
-
-2. Import shared building blocks from common.py (not from other playbook files).
-
-3. Add your playbook to the appropriate get_*_playbooks() function.
-"""
+from __future__ import annotations
 
 import json
 
@@ -104,6 +45,7 @@ from taac.task_definitions import (
     create_run_commands_on_shell_task,
     create_wait_for_agent_convergence_task,
 )
+from taac.testconfigs.routing.testbed import Testbed
 from taac.testconfigs.routing.util.bgp_dc_tc_checks import (
     _apply_tc_checks_to_playbooks,
     _PERMIT_ALL_POLICY_TERM,
@@ -118,29 +60,8 @@ from taac.test_as_a_config.types import TestConfig
 # Playbook Category Registry
 # =============================================================================
 # Maps category names to their getter functions. Each getter accepts **kwargs
-# and extracts the parameters it needs. This allows a uniform calling pattern:
-#
-#     getter(**device_params)
-#
-# USAGE:
-#   To run only restart playbooks for a test config, pass:
-#       playbook_categories=["restart"]
-#
-#   To run restart + longevity (no platform hardening):
-#       playbook_categories=["restart", "longevity"]
-#
-#   To run everything including platform hardening:
-#       playbook_categories=["restart", "longevity", "platform_hardening"]
-#
-#   To run everything (default — all categories in registry order):
-#       playbook_categories=None  (or omit the parameter)
-#
-# ADDING A NEW CATEGORY:
-#   1. Create a new playbook file (e.g., my_feature_playbooks.py) with a
-#      get_my_feature_playbooks(**kwargs) function.
-#   2. Import it above.
-#   3. Add an entry here: "my_feature": get_my_feature_playbooks
-#
+# and extracts the parameters it needs. See the pre-Wave-3B module docstring
+# for the historical rationale + how to add a new category.
 PLAYBOOK_CATEGORY_REGISTRY = {
     "restart": get_restart_playbooks,
     "longevity": get_longevity_playbooks,
@@ -153,37 +74,13 @@ def get_bgp_dc_playbooks(
     wedge_agent_restart_no_of_interations=None,
     **device_params,
 ):
-    """
-    Assembles the list of bgp_dc playbooks for a conveyor run.
+    """Assemble the list of bgp_dc playbooks for a conveyor run.
 
-    This function collects playbooks from the registered playbook files
-    and returns them in execution order. The order matters because
-    conveyor runs playbooks sequentially.
-
-    Each getter function in PLAYBOOK_CATEGORY_REGISTRY accepts **kwargs
-    and extracts only the parameters it needs:
-      - get_restart_playbooks needs: device_name, wedge_agent_restart_no_of_interations
-      - get_longevity_playbooks needs: device_name
-      - get_platform_hardening_playbooks needs: device_name, ixia_downlink_interface,
-        good_ndp_entries_downlink, rogue_ndp_entries, ecmp_group_limit, etc.
-
-    Args:
-        playbook_categories: Optional list of category names to include.
-            Valid categories are defined in PLAYBOOK_CATEGORY_REGISTRY.
-            If None, all categories are included in registry order.
-
-            Examples:
-                playbook_categories=["restart"]                          → only restart
-                playbook_categories=["longevity"]                        → only longevity
-                playbook_categories=["restart", "platform_hardening"]    → restart + hardening
-                playbook_categories=None                                 → all (default)
-
-        **device_params: Device-specific parameters passed through to
-            each getter function. Each getter extracts what it needs
-            and ignores the rest via **kwargs.
-
-    Returns:
-        list[Playbook]: Ordered list of playbooks for the test run.
+    Iterates ``PLAYBOOK_CATEGORY_REGISTRY`` in insertion order (or the
+    caller-supplied subset), calling each getter with the shared device
+    params. The ``wedge_agent_restart_no_of_interations`` knob is routed
+    only to the restart getter — passing it to
+    ``get_platform_hardening_playbooks`` would perturb an unrelated default.
     """
     if playbook_categories is None:
         playbook_categories = list(PLAYBOOK_CATEGORY_REGISTRY.keys())
@@ -300,13 +197,11 @@ def build_bgp_dc_test_config(
     convergence_wait_timeout=None,
     convergence_wait_interval=None,
 ):
-    """
-    Build the full conveyor test configuration for a BGP++ Chronos node.
+    """Build the full conveyor test configuration for a BGP++ Chronos node.
 
-    Assembles playbooks from the split playbook files, optionally filters
-    them by category or by name, and constructs the BGP-DC TestConfig
-    (no IXIA traffic items, no traffic-loss health checks, no hardcoded
-    hardening playbook defaults).
+    Preserved verbatim (signature + body) from the pre-Wave-3B module so
+    every existing consumer path produces byte-for-byte-identical output.
+    Byte-identity is enforced by the golden manifest test.
     """
     # Collect device-specific params to forward to the playbook getters.
     # Each getter accepts **kwargs and extracts only the parameters it needs.
@@ -1184,3 +1079,109 @@ def build_bgp_dc_test_config(
             tc_snapshot_checks=tc_snapshot_checks,
         ),
     )
+
+
+# =============================================================================
+# Framework-shaped wrapper (Wave 3B)
+# =============================================================================
+
+# Shared BGP-DC chronos scale + tagging defaults. Every full-scale chronos
+# binding used these values before Wave 3B (verified across all 4
+# pre-migration bindings). The FRAMEWORK_VALIDATION binding overrides
+# select subsets to reduce scale for its smoke-test profile. Deliberately
+# ``str`` for the two peer-route limits and ``int`` everywhere else, to
+# match how the legacy source spelled them.
+_CHRONOS_DEFAULTS = {
+    "prefix_limit": "75000",
+    "per_peer_max_route_limit": "25000",
+    "downlink_peer_count": 20,
+    "uplink_peer_count": 20,
+    "rogue_peer_count": 20,
+    "ixia_downlink_prefix_count_v6": 10000,
+    "ixia_uplink_prefix_count_v6": 10000,
+    "ixia_rogue_prefix_count_v6": 17500,
+    "ixia_downlink_prefix_count_v4": 7500,
+    "ixia_uplink_prefix_count_v4": 7500,
+    "ixia_rogue_prefix_count_v4": 17500,
+    "downlink_peer_tag": "RSW",
+    "uplink_peer_tag": "SSW",
+    "ecmp_group_limit": 1520,
+    "good_ndp_entries_uplink": 250,
+    "good_ndp_entries_downlink": 200,
+    "rogue_ndp_entries": 10000,
+    "good_arp_entries": 500,
+    "rogue_arp_entries": 1500,
+    "good_mac_entry_count": 100,
+    "rogue_mac_entry_count": 200,
+    "bgp_induced_ecmp_group_count": 50,
+    "basset_pool": "dne.test",
+}
+
+# ``extras`` keys pulled from Testbed. Ordering doesn't matter; the mapping
+# just enumerates every knob the wrapper resolves from Testbed.extras.
+_TESTBED_EXTRA_KEYS = (
+    "ixia_downlink_interface",
+    "ixia_uplink_interface",
+    "ixia_rogue_interface",
+    "peergroup_uplink_mimic_v6",
+    "peergroup_uplink_mimic_v4",
+    "peergroup_downlink_mimic_v6",
+    "peergroup_downlink_mimic_v4",
+    "peergroup_rogue_mimic_v6",
+    "peergroup_rogue_mimic_v4",
+    "route_map_uplink_ingress",
+    "route_map_uplink_egress",
+    "route_map_downlink_ingress",
+    "route_map_downlink_egress",
+    "route_map_rogue_ingress",
+    "route_map_rogue_egress",
+    "ixia_downlink_ic_parent_network_v6",
+    "ixia_uplink_ic_parent_network_v6",
+    "ixia_rogue_ic_parent_network_v6",
+    "ixia_downlink_ic_parent_network_v4",
+    "ixia_uplink_ic_parent_network_v4",
+    "ixia_rogue_ic_parent_network_v4",
+    "good_ndp_entry_network_v6",
+    "rogue_ndp_entry_network_v6",
+    "good_arp_entry_network_v4",
+    "rogue_arp_entry_network_v4",
+    "ixia_uplink_good_ndp_network",
+    "ixia_downlink_good_ndp_network",
+    "remote_downlink_as_4byte",
+    "remote_uplink_as_4byte",
+    "remote_rogue_as_4byte",
+    "is_uplink_peer_confed",
+    "is_downlink_peer_confed",
+    "is_rogue_peer_confed",
+    "ixia_downlink_communities",
+    "ixia_uplink_communities",
+)
+
+
+def create_bgp_dc_chronos_node_test_config(
+    testbed: Testbed,
+    *,
+    name: str,
+    **overrides,
+) -> TestConfig:
+    """Build a BGP-DC chronos_node TestConfig from a Testbed + per-binding overrides.
+
+    Wave-3B wrapper around :func:`build_bgp_dc_test_config`. Pulls every
+    per-testbed knob from ``testbed.extras`` (see ``_TESTBED_EXTRA_KEYS``),
+    layers the shared chronos scale defaults from ``_CHRONOS_DEFAULTS`` on
+    top, then applies ``**overrides`` (playbook selections + any scale
+    tweaks) last. The final dict is unpacked into the legacy 90-arg builder,
+    so output is byte-for-byte-identical to the pre-Wave-3B path.
+    """
+    kwargs: dict = {
+        "test_config_name": name,
+        "device_name": testbed.device_name,
+        "local_mac_address": testbed.mac_address,
+    }
+    for key in _TESTBED_EXTRA_KEYS:
+        if key in testbed.extras:
+            kwargs[key] = testbed.extras[key]
+    for key, value in _CHRONOS_DEFAULTS.items():
+        kwargs.setdefault(key, value)
+    kwargs.update(overrides)
+    return build_bgp_dc_test_config(**kwargs)

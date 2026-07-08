@@ -506,3 +506,151 @@ QZD_LAB = Testbed(
         "dut_iface_ibgp": "eth9/16/1",
     },
 )
+
+
+# ─── BGP-DC chronos_node testbeds (Wave 3B) ───────────────────────────────
+# Consumed by ``factories/bgp_dc_chronos_node.py`` — single-DUT BGP++ DC
+# configs assembled through ``create_bgp_dc_chronos_node_test_config``. The
+# BGP-DC factory ignores ``ixia_ports`` (physical chassis-port mapping is
+# discovered at runtime rather than pinned in the testconfig), so the DUT
+# interface names for downlink / uplink / rogue live in ``extras`` where the
+# factory reads them. ``extras`` also carries the SSW-vs-FSW peer-group
+# names, route-map identifiers, IXIA parent-network prefixes, ASNs, confed
+# flags, and per-testbed IXIA BGP communities — every knob that varies by
+# testbed but not by binding.
+
+# Shared IXIA parent networks / hardening baselines. Every BGP-DC chronos
+# binding pins the same downlink/uplink/rogue IPv6+IPv4 parent prefixes and
+# NDP-stressor networks (verified across all 4 pre-migration bindings). Kept
+# as a module-level dict so each Testbed inherits the same values without
+# repeating them.
+_BGP_DC_CHRONOS_SHARED_EXTRAS = {
+    "ixia_downlink_ic_parent_network_v6": "2401:db00:e50d:11:8",
+    "ixia_uplink_ic_parent_network_v6": "2401:db00:e50d:11:9",
+    "ixia_rogue_ic_parent_network_v6": "2401:db00:e50d:11:10",
+    "ixia_downlink_ic_parent_network_v4": "10.163.28",
+    "ixia_uplink_ic_parent_network_v4": "10.164.28",
+    "ixia_rogue_ic_parent_network_v4": "10.165.28",
+    "good_ndp_entry_network_v6": "2401:db00:e50d:11:9",
+    "rogue_ndp_entry_network_v6": "2401:db00:e50d:11:8",
+    "good_arp_entry_network_v4": "192.168",
+    "rogue_arp_entry_network_v4": "193.168",
+    "ixia_uplink_good_ndp_network": "2401:db00:e50d:1101:9",
+    "ixia_downlink_good_ndp_network": "2401:db00:e50d:1101:8",
+}
+
+SSW_ELBERT_QZD1 = Testbed(
+    device_name="ssw001.s002.f01.qzd1",
+    ixia_chassis_ip="",
+    mac_address="c2:18:50:9c:1f:1d",
+    extras={
+        **_BGP_DC_CHRONOS_SHARED_EXTRAS,
+        "ixia_downlink_interface": "eth7/16/1",
+        "ixia_uplink_interface": "eth8/16/1",
+        "ixia_rogue_interface": "eth9/16/1",
+        "peergroup_uplink_mimic_v6": "PEERGROUP_SSW_FADU_V6",
+        "peergroup_uplink_mimic_v4": "PEERGROUP_SSW_FADU_V4",
+        "peergroup_downlink_mimic_v6": "PEERGROUP_SSW_FSW_V6",
+        "peergroup_downlink_mimic_v4": "PEERGROUP_SSW_FSW_V4",
+        # Rogue peer-group re-uses the uplink identifiers (per pre-migration source).
+        "peergroup_rogue_mimic_v6": "PEERGROUP_SSW_FADU_V6",
+        "peergroup_rogue_mimic_v4": "PEERGROUP_SSW_FADU_V4",
+        "route_map_uplink_ingress": "PROPAGATE_SSW_FADU_IN",
+        "route_map_uplink_egress": "PROPAGATE_SSW_FADU_OUT",
+        "route_map_downlink_ingress": "PROPAGATE_SSW_FSW_IN",
+        "route_map_downlink_egress": "PROPAGATE_SSW_FSW_OUT",
+        # Rogue route-map re-uses the uplink ingress + downlink egress (per source).
+        "route_map_rogue_ingress": "PROPAGATE_SSW_FADU_IN",
+        "route_map_rogue_egress": "PROPAGATE_SSW_FSW_OUT",
+        "remote_downlink_as_4byte": 65409,
+        "remote_uplink_as_4byte": 65271,
+        "remote_rogue_as_4byte": 2500,
+        "is_uplink_peer_confed": "False",
+        "is_downlink_peer_confed": "False",
+        "is_rogue_peer_confed": "False",
+        "ixia_downlink_communities": [
+            "65529:34814",
+            "65441:131",
+        ],
+        "ixia_uplink_communities": [
+            "65441:261",
+        ],
+    },
+)
+
+FSW_FUJI_QZD1 = Testbed(
+    device_name="fsw002.p006.f01.qzd1",
+    ixia_chassis_ip="",
+    mac_address="c2:18:50:9c:13:f8",
+    extras={
+        **_BGP_DC_CHRONOS_SHARED_EXTRAS,
+        "ixia_downlink_interface": "eth8/16/1",
+        # Fuji uplink is on eth9/14/1 — the odd port-index (out of the /16/1
+        # sibling pattern) is verbatim from the pre-migration source.
+        "ixia_uplink_interface": "eth9/14/1",
+        "ixia_rogue_interface": "eth9/16/1",
+        "peergroup_uplink_mimic_v6": "PEERGROUP_FSW_SSW_V6",
+        "peergroup_uplink_mimic_v4": "PEERGROUP_FSW_SSW_V4",
+        "peergroup_downlink_mimic_v6": "PEERGROUP_FSW_RSW_V6",
+        "peergroup_downlink_mimic_v4": "PEERGROUP_FSW_RSW_V4",
+        "peergroup_rogue_mimic_v6": "PEERGROUP_FSW_SSW_V6",
+        "peergroup_rogue_mimic_v4": "PEERGROUP_FSW_SSW_V4",
+        "route_map_uplink_ingress": "PROPAGATE_FSW_SSW_IN",
+        "route_map_uplink_egress": "PROPAGATE_FSW_SSW_OUT",
+        "route_map_downlink_ingress": "PROPAGATE_FSW_RSW_IN",
+        "route_map_downlink_egress": "PROPAGATE_FSW_RSW_OUT",
+        "route_map_rogue_ingress": "PROPAGATE_FSW_SSW_IN",
+        "route_map_rogue_egress": "PROPAGATE_FSW_RSW_OUT",
+        # FSW uplink terminates on the ASH6 SSW plane (AS 65000); downlink is
+        # a private RSW pool (AS 2000); rogue re-uses the rogue AS reservation.
+        "remote_downlink_as_4byte": 2000,
+        "remote_uplink_as_4byte": 65000,
+        "remote_rogue_as_4byte": 2500,
+        "is_uplink_peer_confed": "False",
+        "is_downlink_peer_confed": "True",
+        "is_rogue_peer_confed": "False",
+        "ixia_downlink_communities": [
+            "65441:194",
+            "65441:9001",
+            "65441:9002",
+            "65441:9003",
+            "65441:9004",
+            "65441:9005",
+        ],
+        "ixia_uplink_communities": [
+            "65441:196",
+            "65441:9001",
+            "65441:9002",
+            "65441:9003",
+            "65441:9004",
+            "65441:9005",
+        ],
+    },
+)
+
+# ``FSW_P001_QZD1`` and ``FSW_P006_QZD1`` are declared for
+# ``testconfigs/fboss_solution_tests/chronos_node_{fsw_p001_qzd1,
+# full_scale_p006_qzd1}_test_config.py`` — configs built by
+# ``test_config_for_bgp_and_fboss_platform_hardening_in_conveyor`` (a
+# traffic-carrying sibling factory that lives outside this Wave's scope).
+# No rogue-interface port and no rogue peer-group / route-map / community
+# entries because that factory does not exercise the rogue path.
+FSW_P001_QZD1 = Testbed(
+    device_name="fsw001.p001.f01.qzd1",
+    ixia_chassis_ip="",
+    mac_address="fe:59:c0:46:07:94",
+    extras={
+        "ixia_downlink_interface": "eth8/16/1",
+        "ixia_uplink_interface": "eth9/16/1",
+    },
+)
+
+FSW_P006_QZD1 = Testbed(
+    device_name="fsw001.p006.f01.qzd1",
+    ixia_chassis_ip="",
+    mac_address="c2:18:50:b7:0a:46",
+    extras={
+        "ixia_downlink_interface": "eth8/16/1",
+        "ixia_uplink_interface": "eth9/16/1",
+    },
+)

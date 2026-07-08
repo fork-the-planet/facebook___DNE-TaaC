@@ -12,6 +12,7 @@ See ../README.md §3 for the factory contract.
 """
 
 from taac.testconfigs.routing.factories import (  # noqa: F401
+    bgp_dc_chronos_node,
     bgp_ebb_characteristic,
     bgp_ebb_full_scale,
     bgp_update_group,

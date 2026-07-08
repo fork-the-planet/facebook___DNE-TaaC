@@ -16,7 +16,7 @@ from taac.testconfigs.fboss_solution_tests.fboss_wide_ecmp_test_config import (
 from taac.testconfigs.internal.fboss_bgp_back_pressure_test_config import (
     test_config_back_pressure,
 )
-from taac.testconfigs.routing.fboss_bgp_plus_plus_chronos_node_test_config import (
+from taac.testconfigs.routing.factories.bgp_dc_chronos_node import (
     build_bgp_dc_test_config,
 )
 
