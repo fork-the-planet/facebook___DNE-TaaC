@@ -24,26 +24,10 @@ from taac.testconfigs.routing.ebb.fboss_ebb_scale_test_config import (
     test_config_for_bgp_plus_plus_ebb,
     test_config_for_bgp_plus_plus_ebb_with_bgp_mon,
 )
-from taac.testconfigs.routing.ebb.fsw001_qzb_single_node_topology_mimic_ebb_test_full_scale_mon_test_config import (
-    FSW001_QZB_SINGLE_NODE_TOPOLOGY_MIMIC_EBB_TEST_FULL_SCALE_MON_TEST_CONFIG,
-)
-from taac.testconfigs.routing.ebb.fsw_qzb_single_node_topology_mimic_ebb_test_full_scale_test_config import (
-    FSW_QZB_SINGLE_NODE_TOPOLOGY_MIMIC_EBB_TEST_FULL_SCALE_TEST_CONFIG,
-)
-from taac.testconfigs.routing.ebb.qzd_single_node_topology_mimic_ebb_test_full_scale_fsw002_test_config import (
-    QZD_SINGLE_NODE_TOPOLOGY_MIMIC_EBB_TEST_FULL_SCALE_FSW002_TEST_CONFIG,
-)
-from taac.testconfigs.routing.ebb.qzd_single_node_topology_mimic_ebb_test_full_scale_test_config import (
-    QZD_SINGLE_NODE_TOPOLOGY_MIMIC_EBB_TEST_FULL_SCALE_TEST_CONFIG,
-)
 
 __all__ = [
     "CASE1_TEST_CONFIG",
     "CASE2_TEST_CONFIG",
-    "FSW001_QZB_SINGLE_NODE_TOPOLOGY_MIMIC_EBB_TEST_FULL_SCALE_MON_TEST_CONFIG",
-    "FSW_QZB_SINGLE_NODE_TOPOLOGY_MIMIC_EBB_TEST_FULL_SCALE_TEST_CONFIG",
-    "QZD_SINGLE_NODE_TOPOLOGY_MIMIC_EBB_TEST_FULL_SCALE_FSW002_TEST_CONFIG",
-    "QZD_SINGLE_NODE_TOPOLOGY_MIMIC_EBB_TEST_FULL_SCALE_TEST_CONFIG",
     "test_config_for_bgp_plus_plus_ebb",
     "test_config_for_bgp_plus_plus_ebb_with_bgp_mon",
     "test_config_for_bgp_plus_plus_on_ebb_arista_with_bgp_mon",
