@@ -19,7 +19,6 @@ kwargs with defaults matching the legacy eb02.lab.ash6 wrappers.
 See ../README.md §3.
 """
 
-import json
 import os
 import typing as t
 
@@ -64,12 +63,13 @@ from taac.task_definitions import (
     create_run_commands_on_shell_task,
     create_validate_bgpcpp_config_on_device_task,
 )
-from taac.testconfigs.routing.ebb.case1_test_config import (
-    _generate_bgpcpp_peers_modification_tasks,
-)
 from taac.testconfigs.routing.testbed import Testbed
 from taac.testconfigs.routing.util.bgp_ebb_constants import (
     UPDATE_GROUP_CONFIG,
+)
+from taac.testconfigs.routing.util.bgp_ebb_lab_wiring import (
+    _direct_ixia_conns_two_port,
+    _lab_device_wiring,
 )
 from taac.testconfigs.routing.util.bgp_ebb_periodic_tasks import (
     create_standard_periodic_tasks,
@@ -77,6 +77,9 @@ from taac.testconfigs.routing.util.bgp_ebb_periodic_tasks import (
 from taac.testconfigs.routing.util.bgp_ebb_setup_tasks import (
     _generate_ixia_v4_peer_entries_for_bgpcpp,
     _generate_ixia_v6_peer_entries_for_bgpcpp,
+)
+from taac.testconfigs.routing.util.bgpcpp_peers_modification import (
+    _generate_bgpcpp_peers_modification_tasks,
 )
 from taac.test_as_a_config import types as taac_types
 from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConfig
@@ -89,86 +92,9 @@ _RUN_BGPCPP_SCRIPT_PATH = "/usr/sbin/run_bgpcpp.sh"
 _BGPCPP_CONFIG_PATH = "/mnt/flash/bgpcpp_config"
 
 
-# ─── testbed → DUT-wiring helpers ─────────────────────────────────────────
-
-
-def _lab_device_wiring(
-    testbed: Testbed,
-) -> tuple[dict[str, str] | None, dict[str, taac_types.MockDeviceInfo] | None]:
-    """Return ``(host_driver_args, oss_mock_device_data)`` for ``testbed``.
-
-    Lab boxes (EB02_LAB_ASH6 / EB03_LAB_ASH6 / EB04_LAB_ASH6 / EB_TEST_DEVICE)
-    carry admin/password creds + MockDeviceInfo fields on ``testbed.extras``
-    because ``svc-netcastle_bot`` is not authorized and ``netwhoami`` returns
-    ``#INVALID#`` for them. Non-lab testbeds (bag012 / bag010 / etc.) leave
-    ``extras`` empty of those keys; return ``(None, None)`` so the resulting
-    ``TestConfig`` matches the legacy factory output for those DUTs.
-    """
-    if "lab_admin_username" not in testbed.extras:
-        return None, None
-    lab_password_env = (
-        testbed.lab_device_password_env_var or "TAAC_EBB_LAB_DEVICE_PASSWORD"
-    )
-    lab_admin_username = testbed.extras["lab_admin_username"]
-    lab_admin_password_default = testbed.extras.get(
-        "lab_admin_password_default",
-        "dnepit",  # pragma: allowlist secret
-    )
-    lab_password = os.environ.get(lab_password_env, lab_admin_password_default)
-    device_name = testbed.device_name
-    # Merge in any per-testbed host_driver_extra_kwargs (e.g. EB_TEST_DEVICE
-    # sets ``bgp_ip`` for a non-loopback thrift target). Insertion order
-    # matters: username/password first (matches legacy wrapper JSON layout),
-    # extras appended in the order declared on the testbed.
-    driver_kwargs: dict[str, t.Any] = {
-        "username": lab_admin_username,
-        "password": lab_password,
-    }
-    driver_kwargs.update(testbed.extras.get("host_driver_extra_kwargs", {}))
-    host_driver_args = {device_name: json.dumps(driver_kwargs)}
-    # Preserve the legacy MockDeviceInfo layout used by the eb02/eb03/eb04
-    # ``performance_scaling_*`` wrappers. ``network_type`` is only emitted
-    # when the extras dict has the key -- eb04's legacy source omits it.
-    mock_kwargs: dict[str, t.Any] = {
-        "name": device_name,
-        "hardware": testbed.extras.get("mock_device_hardware", "ARISTA_7516"),
-        "role": testbed.extras.get("mock_device_role", "EB"),
-        "operating_system": "EOS",
-        "dc": testbed.extras.get("mock_device_dc", "ash6"),
-        "region": testbed.extras.get("mock_device_region", "ash"),
-        "asset_id": testbed.extras.get("mock_device_asset_id", 12345),
-        "asic": testbed.extras.get("mock_device_asic", "JERICHO"),
-        "routing_protocol": "BGP",
-        "dc_type": "ONE",
-        "network_area": testbed.extras.get("mock_device_network_area", "BACKBONE"),
-        "network_area_type": "BACKBONE",
-    }
-    if "mock_device_network_type" in testbed.extras:
-        mock_kwargs["network_type"] = testbed.extras["mock_device_network_type"]
-    oss_mock_device_data = {device_name: taac_types.MockDeviceInfo(**mock_kwargs)}
-    return host_driver_args, oss_mock_device_data
-
-
-def _direct_ixia_conns_two_port(testbed: Testbed) -> list[DirectIxiaConnection]:
-    """Two ``DirectIxiaConnection`` entries (eBGP + iBGP) derived from testbed.
-
-    Matches the layout the case1/3/4/6/9 legacy factories use: only the first
-    two ``testbed.ixia_ports`` entries are wired (BGP-MON is unused).
-    """
-    ebgp_iface, ebgp_port = testbed.ixia_ports[0]
-    ibgp_iface, ibgp_port = testbed.ixia_ports[1]
-    return [
-        DirectIxiaConnection(
-            interface=ebgp_iface,
-            ixia_chassis_ip=testbed.ixia_chassis_ip,
-            ixia_port=ebgp_port,
-        ),
-        DirectIxiaConnection(
-            interface=ibgp_iface,
-            ixia_chassis_ip=testbed.ixia_chassis_ip,
-            ixia_port=ibgp_port,
-        ),
-    ]
+# ─── testbed → DUT-wiring helpers hoisted to util/bgp_ebb_lab_wiring.py ───
+# to break a circular import with bgp_ebb_characteristic.py (see that file's
+# imports and util/bgp_ebb_lab_wiring.py docstring).
 
 
 # =============================================================================

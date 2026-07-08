@@ -74,7 +74,6 @@ from taac.task_definitions import (
     create_wait_for_agent_convergence_task,
 )
 from taac.testconfigs.routing.factories.bgp_ebb_scaling import (
-    _lab_device_wiring,
     create_bgp_ebb_scaling_bounded_ecmp_sets_test_config,
     create_bgp_ebb_scaling_performance_test_config,
 )
@@ -93,6 +92,9 @@ from taac.testconfigs.routing.util.bgp_ebb_constants import (
     PEERGROUP_EBGP_V6,
     PEERGROUP_IBGP_V4,
     PEERGROUP_IBGP_V6,
+)
+from taac.testconfigs.routing.util.bgp_ebb_lab_wiring import (
+    _lab_device_wiring,
 )
 from taac.testconfigs.routing.util.bgp_ebb_periodic_tasks import (
     create_standard_periodic_tasks,

@@ -20,8 +20,6 @@ Interface IP Addressing:
 All parameters are configurable via function arguments with defaults from constants.py.
 """
 
-import base64 as _b64_mod
-import json
 import typing as t
 from ipaddress import IPv4Address
 
@@ -82,107 +80,11 @@ from taac.task_definitions import (
     create_interface_ip_configuration_task,
     create_run_commands_on_shell_task,
 )
+from taac.testconfigs.routing.util.bgpcpp_peers_modification import (
+    _generate_bgpcpp_peers_modification_tasks,
+)
 from taac.test_as_a_config import types as taac_types
-from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, Task, TestConfig
-
-
-# =============================================================================
-# Helper: Generate bgpcpp_config modification tasks
-# =============================================================================
-def _generate_bgpcpp_peers_modification_tasks(
-    bgpcpp_device: str,
-    router_id: t.Optional[str],
-    peers: t.List[t.Dict[str, t.Any]],
-    config_path: str = BGPCPP_CONFIG_PATH,
-    local_as_4_byte: t.Optional[int] = None,
-) -> t.List[Task]:
-    """
-    Generate tasks to modify the deployed bgpcpp_config.
-
-    The base bgpcpp_config is first deployed from configerator (with all
-    peer_groups, policies, communities, localprefs, etc.). These tasks
-    replace ONLY the 'peers' and 'router_id' fields, preserving
-    everything else (including local_as_4_byte from the base config,
-    unless local_as_4_byte is explicitly provided for iBGP scenarios).
-
-    Uses base64 encoding to avoid shell command length limits — the 282
-    peers JSON is ~50KB which exceeds EOS shell limits when passed inline.
-
-    Args:
-        bgpcpp_device: BGP++ device hostname
-        router_id: BGP router ID for bag012
-        peers: List of peer dicts to replace in the config
-        config_path: Path to bgpcpp_config on the device
-        local_as_4_byte: If provided, override BGP++ AS (e.g., 65013 for
-            Case 2 iBGP). If None, keep the base config's value (64981).
-
-    Returns:
-        List of Task objects (write peers file + run python3 merge script)
-    """
-    peers_json = json.dumps(peers)
-    peers_b64 = _b64_mod.b64encode(peers_json.encode()).decode()
-
-    # Chunk the base64 string into 20KB pieces to avoid EOS shell limits
-    chunk_size = 20000
-    chunks = [
-        peers_b64[i : i + chunk_size] for i in range(0, len(peers_b64), chunk_size)
-    ]
-
-    tasks = []
-
-    # Step 1: Write base64-encoded peers in chunks to a temp file
-    chunk_cmds = []
-    for i, chunk in enumerate(chunks):
-        if i == 0:
-            chunk_cmds.append(f"bash echo '{chunk}' > /tmp/peers.b64")
-        else:
-            chunk_cmds.append(f"bash echo '{chunk}' >> /tmp/peers.b64")
-    # Decode the base64 file to JSON
-    chunk_cmds.append("bash base64 -d /tmp/peers.b64 > /tmp/experiment_peers.json")
-    chunk_cmds.append("bash rm -f /tmp/peers.b64")
-
-    tasks.append(
-        create_run_commands_on_shell_task(
-            hostname=bgpcpp_device,
-            cmds=chunk_cmds,
-            ixia_needed=True,
-        )
-    )
-
-    # Step 2: Short python3 script reads peers from temp file and merges
-    local_as_line = ""
-    if local_as_4_byte is not None:
-        local_as_line = f"c['local_as_4_byte']={local_as_4_byte}; "
-    # router_id is optional: when None we preserve the deployed config's
-    # router_id (matching the legacy in-shell peer-replace behavior, which
-    # only swapped the 'peers' field and never touched router_id).
-    router_id_line = ""
-    if router_id is not None:
-        router_id_line = f"c['router_id']='{router_id}'; "
-    merge_script = (
-        f'python3 -c "'
-        f"import json; "
-        f"f=open('{config_path}'); c=json.load(f); f.close(); "
-        f"p=open('/tmp/experiment_peers.json'); "
-        f"c['peers']=json.load(p); p.close(); "
-        f"{router_id_line}"
-        f"{local_as_line}"
-        f"f=open('{config_path}','w'); "
-        f"json.dump(c,f,indent=2); f.close(); "
-        f"print('Updated peers:',len(c['peers']),"
-        f"'router_id:',c['router_id'],"
-        f"'local_as_4_byte:',c.get('local_as_4_byte'))"
-        f'"'
-    )
-    tasks.append(
-        create_run_commands_on_shell_task(
-            hostname=bgpcpp_device,
-            cmds=[f"bash {merge_script}"],
-            ixia_needed=True,
-        )
-    )
-
-    return tasks
+from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConfig
 
 
 def _generate_peer_entries_for_interconnect(

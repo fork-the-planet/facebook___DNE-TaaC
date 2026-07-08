@@ -80,12 +80,6 @@ from taac.testconfigs.routing.util.bgp_ebb_constants import (
 )
 from taac.test_as_a_config.types import Task
 
-# Lazy import — `_generate_bgpcpp_peers_modification_tasks` lives in
-# `testconfigs.routing.ebb.case1_test_config`. Importing it at module load time creates
-# a circular import once any other `testconfigs/routing/ebb/*` test config (e.g.,
-# `bag010_ash6_test_config`) imports `conveyor_common_tasks`, because that
-# import chain re-enters `testconfigs.routing.ebb.__init__`. Defer to call time.
-
 BGPCPP_CONFIG_PATH = "/mnt/flash/bgpcpp_config"
 
 # Thrift ACL files on device where intern userid should be added for auth
@@ -1523,7 +1517,7 @@ def get_update_packing_setup_tasks(
             start_offset=v4_peer_start_offset,
         )
 
-    from taac.testconfigs.routing.ebb.case1_test_config import (
+    from taac.testconfigs.routing.util.bgpcpp_peers_modification import (
         _generate_bgpcpp_peers_modification_tasks,
     )
 

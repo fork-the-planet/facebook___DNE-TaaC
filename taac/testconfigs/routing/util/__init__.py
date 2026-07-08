@@ -21,6 +21,8 @@ from taac.testconfigs.routing.util import (  # noqa: F401
     bgp_ebb_constants,
     bgp_ebb_health_checks,
     bgp_ebb_ixia_config,
+    bgp_ebb_lab_wiring,
     bgp_ebb_periodic_tasks,
     bgp_ebb_setup_tasks,
+    bgpcpp_peers_modification,
 )
