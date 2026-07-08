@@ -130,6 +130,20 @@ EB02_ARISTA_BGP_PLUS_PLUS_SEPARABLE_POLICY_1_PEER_TEST_CONFIG = (
 )
 
 
+# ─── EB04 -- separable policy case 8 (no ssh_user, factory defaults) ──────
+# Wave 5E.1 -- migrated from
+# ``testconfigs/routing/ebb/eb04_arista_bgp_plus_plus_separable_policy_1_peer_test_config.py``.
+# Legacy wrapper wired a single EBGP ``DirectIxiaConnection`` (Ethernet3/1/1
+# card 6/7), matched by ``EB04_LAB_ASH6.ixia_ports[0]`` so the factory
+# default reproduces the same list. ``TestConfig.name`` preserved verbatim.
+EB04_ARISTA_BGP_PLUS_PLUS_SEPARABLE_POLICY_1_PEER_TEST_CONFIG = (
+    create_bgp_ebb_characteristic_separable_policy_test_config(
+        EB04_LAB_ASH6,
+        name="EB04_ARISTA_BGP_PLUS_PLUS_SEPARABLE_POLICY_1_PEER",
+    )
+)
+
+
 # ─── EB02 -- BGP UPDATE message packing validation ────────────────────────
 EB02_ARISTA_BGP_UPDATE_PACKING_VALIDATION_TEST_CONFIG = (
     create_bgp_ebb_characteristic_update_packing_test_config(
@@ -145,6 +159,7 @@ __all__ = [
     "EB02_ARISTA_BGP_UPDATE_PACKING_VALIDATION_TEST_CONFIG",
     "EB02_ARISTA_CONSTANT_ATTRIBUTE_STORAGE_VARYING_COMBINATIONS_TEST_CONFIG",
     "EB03_ARISTA_HIGH_DIVERSITY_TEST_CONFIG",
+    "EB04_ARISTA_BGP_PLUS_PLUS_SEPARABLE_POLICY_1_PEER_TEST_CONFIG",
     "EB04_ARISTA_BGP_QUEUE_MEMORY_MONITOR_IPV6_50EBGP_25IBGP_WITH_FLAPPING_TEST_CONFIG",
     "EB_TEST_DEVICE_BGP_QUEUE_MEMORY_MONITOR_IPV6_50EBGP_25IBGP_WITH_FLAPPING_TEST_CONFIG",
 ]
