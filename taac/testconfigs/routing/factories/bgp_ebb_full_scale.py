@@ -793,7 +793,7 @@ def _bag011_expected_established_session_count() -> int:
     return total_session_count - BGP_MON_PEER_COUNT
 
 
-def create_ebb_bag011_bgp_restart_test_config(
+def create_bgp_ebb_restart_test_config(
     testbed: Testbed,
     profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
     enable_update_group: bool = False,
@@ -837,7 +837,7 @@ def create_ebb_bag011_bgp_restart_test_config(
     )
 
 
-def create_ebb_bag011_bgp_oscillations_test_config(
+def create_bgp_ebb_oscillations_test_config(
     testbed: Testbed,
     profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
     enable_update_group: bool = False,
@@ -902,7 +902,7 @@ def create_ebb_bag011_bgp_oscillations_test_config(
     )
 
 
-def create_ebb_bag011_bgp_stability_test_config(
+def create_bgp_ebb_stability_test_config(
     testbed: Testbed,
     profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
     enable_update_group: bool = False,
@@ -961,7 +961,7 @@ def create_ebb_bag011_bgp_stability_test_config(
     )
 
 
-def create_ebb_bag011_bgp_stage1_test_config(
+def create_bgp_ebb_stage1_test_config(
     testbed: Testbed,
     profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
     enable_update_group: bool = False,

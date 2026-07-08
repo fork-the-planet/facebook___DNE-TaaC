@@ -11,17 +11,17 @@ External consumers import via ``testconfigs.routing`` root; see README.md §7.
 """
 
 from taac.testconfigs.routing.factories.bgp_ebb_characteristic import (
-    create_ebb_bag012_bounded_ecmp_sets_test_config,
-    create_ebb_bag012_constant_attribute_storage_test_config,
-    create_ebb_bag012_conveyor_test_config,
-    create_ebb_bag012_performance_scaling_test_config,
-    create_ebb_bag012_queue_memory_monitor_test_config,
+    create_bgp_ebb_characteristic_bounded_ecmp_sets_test_config,
+    create_bgp_ebb_characteristic_performance_scaling_test_config,
+    create_bgp_ebb_constant_attribute_storage_test_config,
+    create_bgp_ebb_conveyor_test_config,
+    create_bgp_ebb_queue_memory_monitor_test_config,
 )
 from taac.testconfigs.routing.factories.bgp_ebb_full_scale import (
-    create_ebb_bag011_bgp_oscillations_test_config,
-    create_ebb_bag011_bgp_restart_test_config,
-    create_ebb_bag011_bgp_stability_test_config,
-    create_ebb_bag011_bgp_stage1_test_config,
+    create_bgp_ebb_oscillations_test_config,
+    create_bgp_ebb_restart_test_config,
+    create_bgp_ebb_stability_test_config,
+    create_bgp_ebb_stage1_test_config,
     create_ebb_cold_start_and_daemon_restart_test_config,
     create_ebb_drain_test_config,
     create_ebb_instability_test_config,
@@ -94,31 +94,29 @@ BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_UPDATE_GROUP_CONFIG = (
 # byte-wise. The ``pnh_metric_oscillation`` playbook is intentionally NOT in
 # STAGE1 — it lives on bag010's STAGE1 for cross-device wall-clock balance
 # (both bag010 and bag011 share the same full-scale topology).
-BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST_CONFIG = (
-    create_ebb_bag011_bgp_restart_test_config(BAG011_ASH6)
+BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST_CONFIG = create_bgp_ebb_restart_test_config(
+    BAG011_ASH6
 )
 BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_ebb_bag011_bgp_restart_test_config(BAG011_ASH6, enable_update_group=True)
+    create_bgp_ebb_restart_test_config(BAG011_ASH6, enable_update_group=True)
 )
 BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST_CONFIG = (
-    create_ebb_bag011_bgp_oscillations_test_config(BAG011_ASH6)
+    create_bgp_ebb_oscillations_test_config(BAG011_ASH6)
 )
 BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_ebb_bag011_bgp_oscillations_test_config(
-        BAG011_ASH6, enable_update_group=True
-    )
+    create_bgp_ebb_oscillations_test_config(BAG011_ASH6, enable_update_group=True)
 )
-BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_CONFIG = (
-    create_ebb_bag011_bgp_stability_test_config(BAG011_ASH6)
+BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_CONFIG = create_bgp_ebb_stability_test_config(
+    BAG011_ASH6
 )
 BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_ebb_bag011_bgp_stability_test_config(BAG011_ASH6, enable_update_group=True)
+    create_bgp_ebb_stability_test_config(BAG011_ASH6, enable_update_group=True)
 )
-BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG = create_ebb_bag011_bgp_stage1_test_config(
+BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG = create_bgp_ebb_stage1_test_config(
     BAG011_ASH6
 )
 BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_ebb_bag011_bgp_stage1_test_config(BAG011_ASH6, enable_update_group=True)
+    create_bgp_ebb_stage1_test_config(BAG011_ASH6, enable_update_group=True)
 )
 
 
@@ -132,36 +130,36 @@ BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
 # byte-wise. bag012 wires only 2 IXIA ports (no BGP-MON) so its factories
 # live in ``factories/bgp_ebb_characteristic.py`` rather than the full-scale
 # EBB factories which require a BGP-MON port.
-BAG012_ASH6_CONVEYOR_TEST_CONFIG = create_ebb_bag012_conveyor_test_config(BAG012_ASH6)
-BAG012_ASH6_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = create_ebb_bag012_conveyor_test_config(
+BAG012_ASH6_CONVEYOR_TEST_CONFIG = create_bgp_ebb_conveyor_test_config(BAG012_ASH6)
+BAG012_ASH6_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = create_bgp_ebb_conveyor_test_config(
     BAG012_ASH6, enable_update_group=True
 )
 BAG012_ASH6_CONSTANT_ATTRIBUTE_STORAGE_TEST_CONFIG = (
-    create_ebb_bag012_constant_attribute_storage_test_config(BAG012_ASH6)
+    create_bgp_ebb_constant_attribute_storage_test_config(BAG012_ASH6)
 )
 BAG012_ASH6_CONSTANT_ATTRIBUTE_STORAGE_TEST_UPDATE_GROUP_CONFIG = (
-    create_ebb_bag012_constant_attribute_storage_test_config(
+    create_bgp_ebb_constant_attribute_storage_test_config(
         BAG012_ASH6, enable_update_group=True
     )
 )
 BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_CONFIG = (
-    create_ebb_bag012_queue_memory_monitor_test_config(BAG012_ASH6)
+    create_bgp_ebb_queue_memory_monitor_test_config(BAG012_ASH6)
 )
 BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_ebb_bag012_queue_memory_monitor_test_config(
+    create_bgp_ebb_queue_memory_monitor_test_config(
         BAG012_ASH6, enable_update_group=True
     )
 )
 BAG012_ASH6_PERFORMANCE_SCALING_TEST_CONFIG = (
-    create_ebb_bag012_performance_scaling_test_config(BAG012_ASH6)
+    create_bgp_ebb_characteristic_performance_scaling_test_config(BAG012_ASH6)
 )
 BAG012_ASH6_PERFORMANCE_SCALING_TEST_UPDATE_GROUP_CONFIG = (
-    create_ebb_bag012_performance_scaling_test_config(
+    create_bgp_ebb_characteristic_performance_scaling_test_config(
         BAG012_ASH6, enable_update_group=True
     )
 )
 BAG012_ASH6_BOUNDED_ECMP_SETS_TEST_UPDATE_GROUP_CONFIG = (
-    create_ebb_bag012_bounded_ecmp_sets_test_config(BAG012_ASH6)
+    create_bgp_ebb_characteristic_bounded_ecmp_sets_test_config(BAG012_ASH6)
 )
 
 

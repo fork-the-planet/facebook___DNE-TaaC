@@ -1215,7 +1215,7 @@ def _bag012_direct_ixia_connections(testbed: Testbed) -> list[DirectIxiaConnecti
     ]
 
 
-def create_ebb_bag012_conveyor_test_config(
+def create_bgp_ebb_conveyor_test_config(
     testbed: Testbed,
     enable_update_group: bool = False,
 ) -> taac_types.TestConfig:
@@ -1300,7 +1300,7 @@ def create_ebb_bag012_conveyor_test_config(
     )
 
 
-def create_ebb_bag012_constant_attribute_storage_test_config(
+def create_bgp_ebb_constant_attribute_storage_test_config(
     testbed: Testbed,
     enable_update_group: bool = False,
 ) -> taac_types.TestConfig:
@@ -1394,7 +1394,7 @@ def create_ebb_bag012_constant_attribute_storage_test_config(
     )
 
 
-def create_ebb_bag012_queue_memory_monitor_test_config(
+def create_bgp_ebb_queue_memory_monitor_test_config(
     testbed: Testbed,
     enable_update_group: bool = False,
 ) -> taac_types.TestConfig:
@@ -1479,7 +1479,7 @@ def create_ebb_bag012_queue_memory_monitor_test_config(
     )
 
 
-def create_ebb_bag012_performance_scaling_test_config(
+def create_bgp_ebb_characteristic_performance_scaling_test_config(
     testbed: Testbed,
     enable_update_group: bool = False,
 ) -> taac_types.TestConfig:
@@ -1570,7 +1570,7 @@ def create_ebb_bag012_performance_scaling_test_config(
     )
 
 
-def create_ebb_bag012_bounded_ecmp_sets_test_config(
+def create_bgp_ebb_characteristic_bounded_ecmp_sets_test_config(
     testbed: Testbed,
 ) -> taac_types.TestConfig:
     """Bounded-ECMP-sets conveyor test config for bag012.ash6.
