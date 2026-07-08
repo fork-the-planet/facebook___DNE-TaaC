@@ -17,6 +17,9 @@ from dataclasses import dataclass, field
 from taac.testconfigs.routing.role_defaults import ebb_peer_groups
 
 
+VALID_USAGES: frozenset[str] = frozenset({"cicd", "qual", "adhoc", "retired"})
+
+
 @dataclass(frozen=True)
 class Testbed:
     """DUT baseline for a routing test. Fits all usecases (EBB / DC / FA verify / feature).
@@ -35,6 +38,13 @@ class Testbed:
     # load-bearing for factories that hard-index the list: ``[0]`` = eBGP,
     # ``[1]`` = iBGP, ``[2]`` = BGP-MON (when present).
     ixia_ports: list = field(default_factory=list)
+
+    # ─── Which catalog surfaces may bind this testbed ─────────────────────
+    # Members of ``VALID_USAGES``. A cicd_*.py catalog file may only bind
+    # testbeds whose ``usage`` set includes ``"cicd"``; same for qual_ /
+    # adhoc_. ``"retired"`` marks a testbed kept only for historical record.
+    # Enforced by tests/test_testbed_usage_matches_catalog.py.
+    usage: frozenset[str] = field(default_factory=frozenset)
 
     # ─── DUT identity properties (optional, flat) ─────────────────────────
     mac_address: str | None = None
@@ -63,6 +73,14 @@ class Testbed:
     # ─── Escape hatch ─────────────────────────────────────────────────────
     extras: dict = field(default_factory=dict)
 
+    def __post_init__(self):
+        bad = self.usage - VALID_USAGES
+        if bad:
+            raise ValueError(
+                f"Testbed {self.device_name}: usage contains invalid "
+                f"values {sorted(bad)!r}; allowed: {sorted(VALID_USAGES)!r}"
+            )
+
 
 # ─── Shared private constants ─────────────────────────────────────────────
 
@@ -74,6 +92,7 @@ _ASH6_IXIA_CHASSIS = "2401:db00:2066:303b::3001"
 
 BAG002_SNC1 = Testbed(
     device_name="bag002.snc1",
+    usage=frozenset({"qual"}),
     ixia_chassis_ip="ares1-my24520014",
     ixia_ports=[
         ("Ethernet3/25/1", "1/17"),  # eBGP
@@ -86,6 +105,7 @@ BAG002_SNC1 = Testbed(
 
 BAG010_ASH6 = Testbed(
     device_name="bag010.ash6",
+    usage=frozenset({"cicd", "qual"}),
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
     ixia_ports=[
         ("Ethernet3/36/1", "7/1"),  # eBGP
@@ -123,6 +143,7 @@ BAG010_ASH6 = Testbed(
 
 BAG011_ASH6 = Testbed(
     device_name="bag011.ash6",
+    usage=frozenset({"cicd", "qual"}),
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
     ixia_ports=[
         ("Ethernet3/36/1", "7/4"),  # eBGP
@@ -167,6 +188,7 @@ BAG011_ASH6 = Testbed(
 
 BAG012_ASH6 = Testbed(
     device_name="bag012.ash6",
+    usage=frozenset({"cicd", "qual"}),
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
     ixia_ports=[
         ("Ethernet3/36/1", "7/7"),  # eBGP
@@ -184,6 +206,7 @@ BAG012_ASH6 = Testbed(
 
 BAG013_ASH6 = Testbed(
     device_name="bag013.ash6",
+    usage=frozenset({"cicd", "qual"}),
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
     ixia_ports=[
         ("Ethernet3/36/1", "8/2"),  # eBGP
@@ -229,6 +252,7 @@ BAG013_ASH6 = Testbed(
 # stays as private module-level constants inside factories/cte_ucmp.py.
 
 CTE_UCMP_QZD_TESTBED = Testbed(
+    usage=frozenset({"adhoc"}),
     device_name="fa001-du004.qzd1",
     # No shared IXIA chassis IP: the QZD test config uses per-endpoint
     # ``ixia_ports`` strings and does not declare a chassis IP anywhere.
@@ -239,6 +263,7 @@ CTE_UCMP_QZD_TESTBED = Testbed(
 
 CTE_UCMP_STAND_ALONE_TESTBED = Testbed(
     device_name="fsw003.p003.f01.qzd1",
+    usage=frozenset({"adhoc"}),
     ixia_chassis_ip="2401:db00:0116:303b:0000:0000:0000:0100",
     ixia_ports=[
         ("eth7/16/1", "6/2"),  # uplink (eBGP)
@@ -254,6 +279,7 @@ CTE_UCMP_STAND_ALONE_TESTBED = Testbed(
 # credentials plus MockDeviceInfo fields (netwhoami returns ``#INVALID#`` for
 # these devices, so ``get_common_setup_tasks`` needs a synthesized record).
 EB01_LAB_ASH6 = Testbed(
+    usage=frozenset({"qual"}),
     device_name="eb01.lab.ash6",
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
     ixia_ports=[
@@ -280,6 +306,7 @@ EB01_LAB_ASH6 = Testbed(
 )
 
 EB02_LAB_ASH6 = Testbed(
+    usage=frozenset({"qual"}),
     device_name="eb02.lab.ash6",
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
     ixia_ports=[
@@ -306,6 +333,7 @@ EB02_LAB_ASH6 = Testbed(
 )
 
 EB03_LAB_ASH6 = Testbed(
+    usage=frozenset({"qual"}),
     device_name="eb03.lab.ash6",
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
     ixia_ports=[
@@ -332,6 +360,7 @@ EB03_LAB_ASH6 = Testbed(
 )
 
 EB04_LAB_ASH6 = Testbed(
+    usage=frozenset({"qual"}),
     device_name="eb04.lab.ash6",
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
     ixia_ports=[
@@ -366,6 +395,7 @@ EB04_LAB_ASH6 = Testbed(
 # (thrift-over-IPv6 to a non-loopback address). Only used by the queue-memory
 # monitor testconfig.
 EB_TEST_DEVICE = Testbed(
+    usage=frozenset({"qual"}),
     device_name="bgp.eb.test.ash6",
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
     ixia_ports=[
@@ -405,6 +435,7 @@ EB_TEST_DEVICE = Testbed(
 # chassis + port map is intentionally left empty here — Wave 5B will surface
 # the discovered ports if/when the factory needs them.
 JSW002_M001_SNC1 = Testbed(
+    usage=frozenset({"adhoc"}),
     device_name="jsw002.m001.snc1",
     ixia_chassis_ip="",
     dut_bgp_as=64981,
@@ -429,6 +460,7 @@ JSW002_M001_SNC1 = Testbed(
 # future ``fa_uu_peer_groups()`` helper will populate it when Wave 5B
 # migrates the FA verify factory.
 FA001_UU001_QZD1 = Testbed(
+    usage=frozenset({"adhoc"}),
     device_name="fa001-uu001.qzd1",
     ixia_chassis_ip="",
     # dut_bgp_as = ibgp_remote_as (iBGP is same-AS): AS 65271 (FAUU-FADU pool).
@@ -448,6 +480,7 @@ FA001_UU001_QZD1 = Testbed(
 # connections at all, so their ports are captured via ``extras`` for Wave 5B
 # to consume.
 FSW001_QZB = Testbed(
+    usage=frozenset({"adhoc"}),
     device_name="fsw001.p003.f01.qzb1",
     ixia_chassis_ip=_ASH6_IXIA_CHASSIS,
     ixia_ports=[
@@ -461,6 +494,7 @@ FSW001_QZB = Testbed(
 )
 
 FSW_QZB = Testbed(
+    usage=frozenset({"adhoc"}),
     device_name="fsw001.p003.f01.qzb1",
     # Legacy ``fsw_qzb_...`` testconfig declares no ``direct_ixia_connections``.
     # Same physical DUT as ``FSW001_QZB`` above; a separate Testbed instance
@@ -477,6 +511,7 @@ FSW_QZB = Testbed(
 )
 
 QZD_FSW002 = Testbed(
+    usage=frozenset({"adhoc"}),
     device_name="fsw002.p003.f01.qzb1",
     ixia_chassis_ip="",
     dut_bgp_as=64981,
@@ -490,6 +525,7 @@ QZD_FSW002 = Testbed(
 )
 
 QZD_LAB = Testbed(
+    usage=frozenset({"adhoc"}),
     # Same DUT name as ``CTE_UCMP_STAND_ALONE_TESTBED`` — the CTE UCMP config
     # reserves this device for confed-peer stand-alone testing, while
     # ``QZD_LAB`` uses it as an EBB single-node full-scale DUT. Separate
@@ -540,6 +576,7 @@ _BGP_DC_CHRONOS_SHARED_EXTRAS = {
 }
 
 SSW_ELBERT_QZD1 = Testbed(
+    usage=frozenset({"adhoc"}),
     device_name="ssw001.s002.f01.qzd1",
     ixia_chassis_ip="",
     mac_address="c2:18:50:9c:1f:1d",
@@ -579,6 +616,7 @@ SSW_ELBERT_QZD1 = Testbed(
 )
 
 FSW_FUJI_QZD1 = Testbed(
+    usage=frozenset({"adhoc"}),
     device_name="fsw002.p006.f01.qzd1",
     ixia_chassis_ip="",
     mac_address="c2:18:50:9c:13:f8",
@@ -636,6 +674,7 @@ FSW_FUJI_QZD1 = Testbed(
 # No rogue-interface port and no rogue peer-group / route-map / community
 # entries because that factory does not exercise the rogue path.
 FSW_P001_QZD1 = Testbed(
+    usage=frozenset({"adhoc"}),
     device_name="fsw001.p001.f01.qzd1",
     ixia_chassis_ip="",
     mac_address="fe:59:c0:46:07:94",
@@ -646,6 +685,7 @@ FSW_P001_QZD1 = Testbed(
 )
 
 FSW_P006_QZD1 = Testbed(
+    usage=frozenset({"adhoc"}),
     device_name="fsw001.p006.f01.qzd1",
     ixia_chassis_ip="",
     mac_address="c2:18:50:b7:0a:46",
