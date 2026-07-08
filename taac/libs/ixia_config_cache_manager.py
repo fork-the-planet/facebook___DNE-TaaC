@@ -93,7 +93,13 @@ _SAFE_KEY_RE = re.compile(r"[^A-Za-z0-9_-]")
 #     trap. The thrift COMPACT protocol writes fields in tag order so the
 #     byte output is deterministic per struct content. See
 #     `compute_declarative_hash` below.
-_CACHE_VERSION = "v3"
+# v4 (2026-07-07): `create_bgp_prefixes` now sets `NextHopIPType` explicitly
+#     based on the route range's address family. Prior cached configs used
+#     IxNetwork's default (`ipv4`), which prevented v6-only-capable peers
+#     from emitting MP_REACH_NLRI — sessions Established, 0 UPDATEs sent.
+#     Declarative thrift inputs are unchanged, so must bump manually to
+#     force cache rebuild.
+_CACHE_VERSION = "v4"
 
 
 def _sanitize(s: str) -> str:

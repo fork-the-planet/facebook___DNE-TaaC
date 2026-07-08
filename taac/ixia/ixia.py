@@ -3689,6 +3689,13 @@ class Ixia:
                 if ip_address_family == ixia_types.IpAddressFamily.IPV4
                 else (ip_prefix_pool_obj.BgpV6IPRouteProperty.find())
             )
+            # IxNetwork defaults NextHopIPType to 'ipv4' on newly-added
+            # BgpV6IPRouteProperty. An IPv6-Unicast peer (capabilities=[IpV6Unicast])
+            # can't emit MP_REACH_NLRI with a v4 next-hop, so it silently skips
+            # advertising the route range — peers stay Established with 0 routes
+            # sent. Match the ip_address_family here so v6 route ranges get an
+            # v6 next-hop (same pattern used by the import-CSV path below).
+            route_prop_obj.NextHopIPType.Single(ip_address_family.name.lower())
 
             if bgp_prefix_config.prefix_flap_config:
                 route_prop_obj.EnableFlapping.Single(value=True)

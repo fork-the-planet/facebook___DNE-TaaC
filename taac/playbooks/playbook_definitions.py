@@ -4704,6 +4704,7 @@ def build_back_pressure_playbook(
     cleanup_steps,
     stages,
     traffic_items_to_start=None,
+    prechecks=None,
 ):
     """Trampoline for `testconfigs/internal/fboss_bgp_back_pressure_test_config.py`.
 
@@ -4721,6 +4722,8 @@ def build_back_pressure_playbook(
     }
     if traffic_items_to_start is not None:
         kwargs["traffic_items_to_start"] = traffic_items_to_start
+    if prechecks is not None:
+        kwargs["prechecks"] = prechecks
     return Playbook(**kwargs)
 
 
