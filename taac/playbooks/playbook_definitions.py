@@ -7568,215 +7568,264 @@ def get_platform_hardening_playbooks(
 # =============================================================================
 
 
+def create_longevity_prefix_flap_all_prefixes_playbook() -> Playbook:
+    """BGP_DC longevity playbook: sustained prefix-flap across all prefix groups."""
+    return Playbook(
+        name="test_longevity_prefix_flap_all_prefixes",
+        cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
+        stages=[
+            DISABLE_SESSION_FLAPS_STAGE,
+            create_steps_stage(
+                steps=[
+                    create_toggle_ixia_prefix_session_flap_churn_step(
+                        churn_mode="prefix_flap",
+                        enable_prefix_flap=True,
+                        is_all_prefix_groups=True,
+                        churn_duration_s=duration_all_prefix_flaps_s,
+                    ),
+                ]
+            ),
+            DISABLE_PREFIX_FLAPS_STAGE,
+        ],
+    )
+
+
+def create_longevity_activate_deactivate_all_prefixes_playbook() -> Playbook:
+    """BGP_DC longevity playbook: continuously activate/deactivate all prefixes."""
+    return Playbook(
+        name="test_longevity_activate_deactivate_all_prefixes",
+        cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
+        stages=[
+            DISABLE_SESSION_FLAPS_STAGE,
+            create_steps_stage(steps=CONTINUOUSLY_ACTIVATE_DEACTIVATE_ALL_PREFIXES),
+            DISABLE_PREFIX_FLAPS_STAGE,
+        ],
+    )
+
+
+def create_longevity_session_flap_all_prefixes_playbook() -> Playbook:
+    """BGP_DC longevity playbook: sustained session-flap across all session groups."""
+    return Playbook(
+        name="test_longevity_session_flap_all_prefixes",
+        postchecks=[
+            BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
+        ],
+        cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
+        stages=[
+            DISABLE_PREFIX_FLAPS_STAGE,
+            create_steps_stage(
+                steps=[
+                    create_toggle_ixia_prefix_session_flap_churn_step(
+                        churn_mode="session_flap",
+                        enable_session_flap=True,
+                        is_all_session_groups=True,
+                        churn_duration_s=duration_all_session_flaps_s,
+                    ),
+                ]
+            ),
+            DISABLE_SESSION_FLAPS_STAGE,
+        ],
+    )
+
+
+def create_longevity_prefix_flap_all_prefixes_plus_bgp_restart_playbook() -> Playbook:
+    """BGP_DC longevity playbook: prefix-flap combined with BGP daemon restart."""
+    return Playbook(
+        name="test_longevity_prefix_flap_all_prefixes_plus_bgp_restart",
+        postchecks=[
+            BGP_RESTART_SERVICE_CHECK,
+        ],
+        cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
+        stages=[
+            DISABLE_SESSION_FLAPS_STAGE,
+            create_steps_stage(
+                steps=[
+                    create_toggle_ixia_prefix_session_flap_churn_step(
+                        churn_mode="prefix_flap",
+                        enable_prefix_flap=True,
+                        is_all_prefix_groups=True,
+                        churn_duration_s=wait_time_after_disable_churn_s,
+                    ),
+                ]
+            ),
+            DISABLE_PREFIX_FLAPS_STAGE,
+        ],
+    )
+
+
+def create_longevity_session_flap_all_prefixes_plus_bgp_restart_playbook() -> Playbook:
+    """BGP_DC longevity playbook: session-flap combined with BGP daemon restart."""
+    return Playbook(
+        name="test_longevity_session_flap_all_prefixes_plus_bgp_restart",
+        postchecks=[
+            BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
+            BGP_RESTART_SERVICE_CHECK,
+        ],
+        cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
+        stages=[
+            DISABLE_PREFIX_FLAPS_STAGE,
+            create_steps_stage(
+                steps=[
+                    create_toggle_ixia_prefix_session_flap_churn_step(
+                        churn_mode="session_flap",
+                        enable_session_flap=True,
+                        is_all_session_groups=True,
+                        churn_duration_s=wait_time_after_disable_churn_s,
+                    ),
+                ]
+            ),
+            DISABLE_SESSION_FLAPS_STAGE,
+        ],
+    )
+
+
+def create_longevity_rogue_prefix_session_enable_playbook() -> Playbook:
+    """BGP_DC longevity playbook: enable rogue prefix + session and hold."""
+    return Playbook(
+        name="test_longevity_rogue_prefix_session_enable",
+        cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
+        stages=[
+            create_steps_stage(
+                steps=[
+                    create_longevity_step(
+                        duration=duration_only_rogue_session_prefix_flaps_s
+                    ),
+                ]
+            )
+        ],
+    )
+
+
+def create_longevity_no_prefix_no_session_flap_playbook() -> Playbook:
+    """BGP_DC longevity playbook: baseline hold with no churn."""
+    return Playbook(
+        name="test_longevity_no_prefix_no_session_flap",
+        cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
+        stages=[
+            DISABLE_SESSION_FLAPS_STAGE,
+            DISABLE_PREFIX_FLAPS_STAGE,
+            create_steps_stage(
+                steps=[
+                    create_longevity_step(
+                        duration=duration_no_prefix_session_flaps_s
+                    ),
+                ]
+            ),
+        ],
+    )
+
+
+def create_longevity_continuous_toggle_device_group_playbook() -> Playbook:
+    """BGP_DC longevity playbook: continuously toggle rogue device groups."""
+    return Playbook(
+        name="test_longevity_continuous_toggle_device_group",
+        postchecks=[
+            BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
+        ],
+        cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS
+        + [
+            create_ixia_api_step(
+                api_name="toggle_device_groups",
+                args_dict={
+                    "enable": True,
+                    "device_group_name_regex": "ROGUE|NO_PACKET_LOSS_EXPECTED|ECMP_1|ARP|NDP",
+                },
+            ),
+        ],
+        stages=[
+            DISABLE_SESSION_FLAPS_STAGE,
+            DISABLE_PREFIX_FLAPS_STAGE,
+            create_steps_stage(steps=TOGGLE_ROGUE_DEVICE_GROUP_STEPS_CONTIUOUSLY),
+        ],
+    )
+
+
+def create_longevity_frequent_best_path_computation_playbook() -> Playbook:
+    """BGP_DC longevity playbook: frequent best-path computation via LOCAL_PREF churn."""
+    return Playbook(
+        name="test_longevity_frequent_best_path_computation",
+        cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS
+        + REVERT_LOCAL_PREFERENCE_STEPS,
+        stages=[
+            DISABLE_SESSION_FLAPS_STAGE,
+            DISABLE_PREFIX_FLAPS_STAGE,
+            FREQUENT_BEST_PATH_COMPUTATION_STAGE,
+        ],
+    )
+
+
+def create_longevity_cold_start_with_prefix_and_session_oscillations_playbook() -> Playbook:
+    """BGP_DC longevity playbook: cold-start with prefix + session oscillations."""
+    return Playbook(
+        name="test_longevity_cold_start_with_prefix_and_session_oscillations",
+        postchecks_to_skip=[
+            hc_types.CheckName.BGP_SESSION_ESTABLISH_CHECK,
+        ],
+        cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS
+        + [
+            create_ixia_api_step(
+                api_name="rename_device_groups",
+                args_dict={
+                    "device_group_name_regex": "PREFIX_FLAP_TRAFFIC_LOSS_EXPECTED",
+                    "old_tag_name": "PREFIX_FLAP_TRAFFIC_LOSS_EXPECTED",
+                    "new_tag_name": "NO_PACKET_LOSS_EXPECTED",
+                },
+            ),
+            create_ixia_api_step(
+                api_name="rename_device_groups",
+                args_dict={
+                    "device_group_name_regex": "SESSION_FLAP_TRAFFIC_LOSS_EXPECTED",
+                    "old_tag_name": "SESSION_FLAP_TRAFFIC_LOSS_EXPECTED",
+                    "new_tag_name": "NO_V6_PACKET_LOSS_EXPECTED",
+                },
+            ),
+        ],
+        stages=[
+            create_steps_stage(
+                steps=[
+                    create_ixia_api_step(
+                        api_name="rename_device_groups",
+                        args_dict={
+                            "device_group_name_regex": "NO_PACKET_LOSS_EXPECTED",
+                            "old_tag_name": "NO_PACKET_LOSS_EXPECTED",
+                            "new_tag_name": "PREFIX_FLAP_TRAFFIC_LOSS_EXPECTED",
+                        },
+                    ),
+                    create_ixia_api_step(
+                        api_name="rename_device_groups",
+                        args_dict={
+                            "device_group_name_regex": "NO_V6_PACKET_LOSS_EXPECTED",
+                            "old_tag_name": "NO_V6_PACKET_LOSS_EXPECTED",
+                            "new_tag_name": "SESSION_FLAP_TRAFFIC_LOSS_EXPECTED",
+                        },
+                    ),
+                ]
+            ),
+            create_steps_stage(steps=COLD_START_PREFIX_OSCILLATIONS),
+        ],
+    )
+
+
 def get_longevity_playbooks(device_name: str, **kwargs):
     """
     Returns a list of longevity, prefix/session flap, and convergence playbooks.
 
-    These playbooks test the DUT under sustained network disruption
-    scenarios including prefix flaps, session flaps, device group toggling,
-    best-path computation churn, cold start oscillations, and combinations
-    of churn with BGP daemon restarts.
+    Composer over 10 individual per-playbook factories. Retained for
+    backward compatibility with the ``PLAYBOOK_CATEGORY_REGISTRY`` dispatch
+    pattern in ``factories/bgp_dc_chronos_node.py``.
     """
     del device_name  # unused after dropping IXIA traffic checks
     return [
-        Playbook(
-            name="test_longevity_prefix_flap_all_prefixes",
-            cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
-            stages=[
-                DISABLE_SESSION_FLAPS_STAGE,
-                create_steps_stage(
-                    steps=[
-                        create_toggle_ixia_prefix_session_flap_churn_step(
-                            churn_mode="prefix_flap",
-                            enable_prefix_flap=True,
-                            is_all_prefix_groups=True,
-                            churn_duration_s=duration_all_prefix_flaps_s,
-                        ),
-                    ]
-                ),
-                DISABLE_PREFIX_FLAPS_STAGE,
-            ],
-        ),
-        Playbook(
-            name="test_longevity_activate_deactivate_all_prefixes",
-            cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
-            stages=[
-                DISABLE_SESSION_FLAPS_STAGE,
-                create_steps_stage(steps=CONTINUOUSLY_ACTIVATE_DEACTIVATE_ALL_PREFIXES),
-                DISABLE_PREFIX_FLAPS_STAGE,
-            ],
-        ),
-        Playbook(
-            name="test_longevity_session_flap_all_prefixes",
-            postchecks=[
-                BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
-            ],
-            cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
-            stages=[
-                DISABLE_PREFIX_FLAPS_STAGE,
-                create_steps_stage(
-                    steps=[
-                        create_toggle_ixia_prefix_session_flap_churn_step(
-                            churn_mode="session_flap",
-                            enable_session_flap=True,
-                            is_all_session_groups=True,
-                            churn_duration_s=duration_all_session_flaps_s,
-                        ),
-                    ]
-                ),
-                DISABLE_SESSION_FLAPS_STAGE,
-            ],
-        ),
-        Playbook(
-            name="test_longevity_prefix_flap_all_prefixes_plus_bgp_restart",
-            postchecks=[
-                BGP_RESTART_SERVICE_CHECK,
-            ],
-            cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
-            stages=[
-                DISABLE_SESSION_FLAPS_STAGE,
-                create_steps_stage(
-                    steps=[
-                        create_toggle_ixia_prefix_session_flap_churn_step(
-                            churn_mode="prefix_flap",
-                            enable_prefix_flap=True,
-                            is_all_prefix_groups=True,
-                            churn_duration_s=wait_time_after_disable_churn_s,
-                        ),
-                    ]
-                ),
-                DISABLE_PREFIX_FLAPS_STAGE,
-            ],
-        ),
-        Playbook(
-            name="test_longevity_session_flap_all_prefixes_plus_bgp_restart",
-            postchecks=[
-                BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
-                BGP_RESTART_SERVICE_CHECK,
-            ],
-            cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
-            stages=[
-                DISABLE_PREFIX_FLAPS_STAGE,
-                create_steps_stage(
-                    steps=[
-                        create_toggle_ixia_prefix_session_flap_churn_step(
-                            churn_mode="session_flap",
-                            enable_session_flap=True,
-                            is_all_session_groups=True,
-                            churn_duration_s=wait_time_after_disable_churn_s,
-                        ),
-                    ]
-                ),
-                DISABLE_SESSION_FLAPS_STAGE,
-            ],
-        ),
-        Playbook(
-            name="test_longevity_rogue_prefix_session_enable",
-            cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
-            stages=[
-                create_steps_stage(
-                    steps=[
-                        create_longevity_step(
-                            duration=duration_only_rogue_session_prefix_flaps_s
-                        ),
-                    ]
-                )
-            ],
-        ),
-        Playbook(
-            name="test_longevity_no_prefix_no_session_flap",
-            cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS,
-            stages=[
-                DISABLE_SESSION_FLAPS_STAGE,
-                DISABLE_PREFIX_FLAPS_STAGE,
-                create_steps_stage(
-                    steps=[
-                        create_longevity_step(
-                            duration=duration_no_prefix_session_flaps_s
-                        ),
-                    ]
-                ),
-            ],
-        ),
-        Playbook(
-            name="test_longevity_continuous_toggle_device_group",
-            postchecks=[
-                BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
-            ],
-            cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS
-            + [
-                create_ixia_api_step(
-                    api_name="toggle_device_groups",
-                    args_dict={
-                        "enable": True,
-                        "device_group_name_regex": "ROGUE|NO_PACKET_LOSS_EXPECTED|ECMP_1|ARP|NDP",
-                    },
-                ),
-            ],
-            stages=[
-                DISABLE_SESSION_FLAPS_STAGE,
-                DISABLE_PREFIX_FLAPS_STAGE,
-                create_steps_stage(steps=TOGGLE_ROGUE_DEVICE_GROUP_STEPS_CONTIUOUSLY),
-            ],
-        ),
-        Playbook(
-            name="test_longevity_frequent_best_path_computation",
-            cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS
-            + REVERT_LOCAL_PREFERENCE_STEPS,
-            stages=[
-                DISABLE_SESSION_FLAPS_STAGE,
-                DISABLE_PREFIX_FLAPS_STAGE,
-                FREQUENT_BEST_PATH_COMPUTATION_STAGE,
-            ],
-        ),
-        Playbook(
-            name="test_longevity_cold_start_with_prefix_and_session_oscillations",
-            postchecks_to_skip=[
-                hc_types.CheckName.BGP_SESSION_ESTABLISH_CHECK,
-            ],
-            cleanup_steps=ROGUE_PREFIX_SESSION_FLAP_STEPS
-            + [
-                create_ixia_api_step(
-                    api_name="rename_device_groups",
-                    args_dict={
-                        "device_group_name_regex": "PREFIX_FLAP_TRAFFIC_LOSS_EXPECTED",
-                        "old_tag_name": "PREFIX_FLAP_TRAFFIC_LOSS_EXPECTED",
-                        "new_tag_name": "NO_PACKET_LOSS_EXPECTED",
-                    },
-                ),
-                create_ixia_api_step(
-                    api_name="rename_device_groups",
-                    args_dict={
-                        "device_group_name_regex": "SESSION_FLAP_TRAFFIC_LOSS_EXPECTED",
-                        "old_tag_name": "SESSION_FLAP_TRAFFIC_LOSS_EXPECTED",
-                        "new_tag_name": "NO_V6_PACKET_LOSS_EXPECTED",
-                    },
-                ),
-            ],
-            stages=[
-                create_steps_stage(
-                    steps=[
-                        create_ixia_api_step(
-                            api_name="rename_device_groups",
-                            args_dict={
-                                "device_group_name_regex": "NO_PACKET_LOSS_EXPECTED",
-                                "old_tag_name": "NO_PACKET_LOSS_EXPECTED",
-                                "new_tag_name": "PREFIX_FLAP_TRAFFIC_LOSS_EXPECTED",
-                            },
-                        ),
-                        create_ixia_api_step(
-                            api_name="rename_device_groups",
-                            args_dict={
-                                "device_group_name_regex": "NO_V6_PACKET_LOSS_EXPECTED",
-                                "old_tag_name": "NO_V6_PACKET_LOSS_EXPECTED",
-                                "new_tag_name": "SESSION_FLAP_TRAFFIC_LOSS_EXPECTED",
-                            },
-                        ),
-                    ]
-                ),
-                create_steps_stage(steps=COLD_START_PREFIX_OSCILLATIONS),
-            ],
-        ),
+        create_longevity_prefix_flap_all_prefixes_playbook(),
+        create_longevity_activate_deactivate_all_prefixes_playbook(),
+        create_longevity_session_flap_all_prefixes_playbook(),
+        create_longevity_prefix_flap_all_prefixes_plus_bgp_restart_playbook(),
+        create_longevity_session_flap_all_prefixes_plus_bgp_restart_playbook(),
+        create_longevity_rogue_prefix_session_enable_playbook(),
+        create_longevity_no_prefix_no_session_flap_playbook(),
+        create_longevity_continuous_toggle_device_group_playbook(),
+        create_longevity_frequent_best_path_computation_playbook(),
+        create_longevity_cold_start_with_prefix_and_session_oscillations_playbook(),
     ]
 
 
