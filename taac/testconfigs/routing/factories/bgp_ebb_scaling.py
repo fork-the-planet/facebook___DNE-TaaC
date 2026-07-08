@@ -116,11 +116,16 @@ def _lab_device_wiring(
     )
     lab_password = os.environ.get(lab_password_env, lab_admin_password_default)
     device_name = testbed.device_name
-    host_driver_args = {
-        device_name: json.dumps(
-            {"username": lab_admin_username, "password": lab_password}
-        ),
+    # Merge in any per-testbed host_driver_extra_kwargs (e.g. EB_TEST_DEVICE
+    # sets ``bgp_ip`` for a non-loopback thrift target). Insertion order
+    # matters: username/password first (matches legacy wrapper JSON layout),
+    # extras appended in the order declared on the testbed.
+    driver_kwargs: dict[str, t.Any] = {
+        "username": lab_admin_username,
+        "password": lab_password,
     }
+    driver_kwargs.update(testbed.extras.get("host_driver_extra_kwargs", {}))
+    host_driver_args = {device_name: json.dumps(driver_kwargs)}
     # Preserve the legacy MockDeviceInfo layout used by the eb02/eb03/eb04
     # ``performance_scaling_*`` wrappers. ``network_type`` is only emitted
     # when the extras dict has the key -- eb04's legacy source omits it.

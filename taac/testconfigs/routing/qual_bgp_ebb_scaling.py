@@ -14,7 +14,7 @@ External consumers import via ``testconfigs.routing`` root; see README.md §7.
 import json
 import os
 
-from taac.testconfigs.routing.ebb.test_config_performance_scaling_case2 import (
+from taac.testconfigs.routing.factories.bgp_ebb_characteristic import (
     test_config_constant_attribute_storage_on_eos,
 )
 from taac.testconfigs.routing.factories.bgp_ebb_scaling import (
@@ -110,8 +110,9 @@ EB02_ARISTA_PERFORMANCE_SCALING_TEST_9_BOUNDED_ECMP_SETS_TEST_CONFIG = (
 
 
 # ─── EB03 -- perf-scaling case 2: constant attribute storage ──────────────
-# Uses the ``test_config_performance_scaling_case2`` factory (out of Wave 5C
-# scope; kept in place). Binding preserves every arg passed by the legacy
+# Uses the ``test_config_constant_attribute_storage_on_eos`` helper (absorbed
+# into ``factories/bgp_ebb_characteristic.py`` by Wave 5D.1). Binding
+# preserves every arg passed by the legacy
 # ``eb03_arista_performance_scaling_test_2_test_config.py`` wrapper so the
 # golden manifest hash is byte-wise identical.
 _EB03_LAB_DEVICE_PASSWORD = os.environ.get(
