@@ -10,7 +10,7 @@ Built from the centralized
 import json
 import os
 
-from taac.testconfigs.routing.ebb.test_config_performance_scaling_case8 import (
+from taac.testconfigs.routing.factories.bgp_ebb_characteristic import (
     test_config_for_bgp_plus_plus_on_ebb_arista_separable_policy,
 )
 from taac.test_as_a_config import types as taac_types

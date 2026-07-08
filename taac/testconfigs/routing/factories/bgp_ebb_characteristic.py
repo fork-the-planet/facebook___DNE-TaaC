@@ -17,30 +17,61 @@ new ``create_bgp_ebb_characteristic_*`` factories. The playbook factories
 stay in ``playbook_definitions.py`` verbatim so the playbook snapshot
 manifest ``__module__`` filter still picks them up.
 
+Wave 5D.2 absorbs 4 more helpers verbatim so their thin wrappers can be
+retired: ``test_config_for_bgp_plus_plus_on_ebb_arista_separable_policy``
+(case 8), ``test_config_bgp_update_packing_validation`` (update-packing),
+``test_config_to_verify_computational_load_of_bgp_plus_plus`` and
+``test_config_to_verify_constant_attribute_storage`` (verify pair). The
+new testbed-driven factories (``create_bgp_ebb_characteristic_*``) call
+these helpers by name. Playbook factories (``build_case8_playbook``,
+``create_bgp_update_packing_validation_playbook``,
+``create_test_computational_load_for_bgp_plus_plus_playbook``,
+``create_test_constant_attribute_storage_playbook``) stay in
+``playbook_definitions.py``.
+
 See ../README.md §3.
 """
 
 import os
 
 from ixia.ixia import types as ixia_types
-from taac.constants import BgpPlusPlusProfile
+from neteng.test_infra.dne.taac.constants import BgpPlusPlusProfile, Gigabyte
+from taac.health_checks.healthcheck_definitions import (
+    create_bgp_session_establish_check,
+    create_bgp_session_snapshot_check,
+    create_core_dumps_snapshot_check,
+)
 from taac.playbooks.playbook_definitions import (
     build_case2_playbook,
+    build_case8_playbook,
     create_bgp_queue_memory_monitoring_playbook,
+    create_bgp_update_packing_validation_playbook,
+    create_test_computational_load_for_bgp_plus_plus_playbook,
+    create_test_constant_attribute_storage_playbook,
 )
 from taac.routing.ebb.arista_bgp_plus_plus_performance_scaling_tests.attribute_pool_generator import (
     generate_as_path_pool,
     generate_community_pool,
     generate_extended_community_pool,
 )
+from taac.routing.ebb.arista_bgp_plus_plus_performance_scaling_tests.ixia_configs_for_tests import (
+    create_ebb_performance_scale_basic_port_configs,
+)
 from taac.stages.stage_definitions import create_steps_stage
-from taac.steps.step_definitions import create_custom_step
+from taac.steps.step_definitions import (
+    create_custom_step,
+    create_sc_8_setup_steps,
+    create_sc_8_steps,
+)
 from taac.task_definitions import (
     create_configure_bgpcpp_startup_task,
+    create_coop_apply_patchers_task,
+    create_coop_register_patcher_task,
+    create_coop_unregister_patchers_task,
     create_replace_bgp_peers_task,
-)
-from taac.testconfigs.routing.ebb.test_config_update_packing import (
-    test_config_bgp_update_packing_validation,
+    create_run_commands_on_shell_task,
+    create_scp_file_template_task,
+    create_wait_for_agent_convergence_task,
 )
 from taac.testconfigs.routing.factories.bgp_ebb_scaling import (
     _lab_device_wiring,
@@ -63,6 +94,9 @@ from taac.testconfigs.routing.util.bgp_ebb_constants import (
     PEERGROUP_IBGP_V4,
     PEERGROUP_IBGP_V6,
 )
+from taac.testconfigs.routing.util.bgp_ebb_periodic_tasks import (
+    create_standard_periodic_tasks,
+)
 from taac.testconfigs.routing.util.bgp_ebb_setup_tasks import (
     build_per_iteration_factory_v4_capable,
     get_update_packing_setup_tasks,
@@ -75,6 +109,7 @@ from taac.test_as_a_config.types import (
     DirectIxiaConnection,
     Endpoint,
     IpAddressesConfig,
+    IxiaConfigCache,
     RouteScale,
     RouteScaleSpec,
     Task,
@@ -1608,4 +1643,1578 @@ def create_ebb_bag012_bounded_ecmp_sets_test_config(
         # nodes. Passing setup_tasks skips case9's in-shell fallback.
         setup_tasks=setup_tasks,
         log_collection_timeout=600,
+    )
+
+
+# =============================================================================
+# Absorbed helpers (Wave 5D.2) -- historically lived at
+# ``testconfigs/routing/ebb/test_config_performance_scaling_case8.py``,
+# ``testconfigs/routing/ebb/test_config_update_packing.py``,
+# ``testconfigs/routing/ebb/test_config_to_verify_computational_load_of_bgp_plus_plus.py``
+# and
+# ``testconfigs/routing/ebb/test_config_to_verify_constant_attribute_storage.py``.
+# Bodies copied verbatim so serialized TestConfig output is byte-wise identical.
+# The new ``create_bgp_ebb_characteristic_*`` factories below call these
+# helpers by name.
+# =============================================================================
+
+
+def test_config_for_bgp_plus_plus_on_ebb_arista_separable_policy(
+    test_config_name: str,
+    device_name: str,
+    ixia_interface_mimic_ebgp: str,
+    ebgp_peer_count_v6: int,
+    ebgp_peer_count_v4: int,
+    ebgp_remote_as: int,
+    ixia_ebgp_ic_parent_network_v6: str,
+    ixia_ebgp_ic_parent_network_v4: str,
+    prefix_count: int,
+    direct_ixia_connections: list,
+    log_collection_timeout=None,
+    oss_mock_device_data=None,
+    host_os_type_map=None,
+    host_driver_args=None,
+    # Dynamic peer configuration (optional)
+    ssh_user: str | None = None,
+    ssh_password: str | None = None,
+    peergroup_ebgp_v6: str = "EB-FA-V6",
+    peergroup_ebgp_v4: str = "EB-FA-V4",
+):
+    """Build the case-8 (separable policy) BGP++ TestConfig.
+
+    Byte-identical to the legacy
+    ``testconfigs/routing/ebb/test_config_performance_scaling_case8``
+    ``test_config_for_bgp_plus_plus_on_ebb_arista_separable_policy``.
+    """
+    # Build setup_tasks based on whether dynamic peer config is provided
+    if ssh_user is not None and ssh_password is not None:
+        setup_tasks = [
+            create_configure_bgpcpp_startup_task(
+                hostname=device_name,
+                flags={
+                    "agent_thrift_recv_timeout_ms": "160000",
+                },
+                ssh_user=ssh_user,
+                ssh_password=ssh_password,
+            ),
+            create_replace_bgp_peers_task(
+                hostname=device_name,
+                peer_configs=[
+                    {
+                        "peer_group_name": peergroup_ebgp_v6,
+                        "remote_as": ebgp_remote_as,
+                        "base_network": ixia_ebgp_ic_parent_network_v6,
+                        "is_v6": True,
+                        "peer_count": ebgp_peer_count_v6,
+                        "start_offset": 16,
+                    },
+                    {
+                        "peer_group_name": peergroup_ebgp_v4,
+                        "remote_as": ebgp_remote_as,
+                        "base_network": ixia_ebgp_ic_parent_network_v4,
+                        "is_v6": False,
+                        "peer_count": ebgp_peer_count_v4,
+                        "start_offset": 16,
+                    },
+                ],
+            ),
+        ]
+    else:
+        setup_tasks = []
+
+    return TestConfig(
+        name=test_config_name,
+        skip_ixia_protocol_verification=True,
+        log_collection_timeout=log_collection_timeout,
+        basset_pool="dne.test",
+        endpoints=[
+            Endpoint(
+                name=device_name,
+                dut=True,
+                ixia_ports=[ixia_interface_mimic_ebgp],
+                direct_ixia_connections=direct_ixia_connections
+                if direct_ixia_connections
+                else [],
+            ),
+        ],
+        host_driver_args=host_driver_args,
+        oss_mock_device_data=oss_mock_device_data,
+        host_os_type_map=host_os_type_map,
+        startup_checks=[],
+        setup_tasks=setup_tasks,
+        teardown_tasks=[],
+        basic_port_configs=create_ebb_performance_scale_basic_port_configs(
+            device_name=device_name,
+            ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
+            ixia_interface_mimic_ibgp="",
+            ebgp_peer_count_v6=ebgp_peer_count_v6,
+            ebgp_peer_count_v4=ebgp_peer_count_v4,
+            ibgp_peer_count_v6=0,
+            ibgp_peer_count_v4=0,
+            ebgp_remote_as=ebgp_remote_as,
+            ibgp_remote_as=0,
+            ixia_ebgp_ic_parent_network_v6=ixia_ebgp_ic_parent_network_v6,
+            ixia_ebgp_ic_parent_network_v4=ixia_ebgp_ic_parent_network_v4,
+            ixia_ibgp_ic_parent_network_v6="",
+            ixia_ibgp_ic_parent_network_v4="",
+            same_community=True,
+        ),
+        playbooks=[
+            build_case8_playbook(
+                name="bgp_plus_plus_arista_separable_policy_eb_fa_in_test",
+                description="Test BGP++ performance with separable policy",
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                    create_bgp_session_snapshot_check(
+                        skip_flap_check=True, skip_uptime_check=True
+                    ),
+                ],
+                periodic_tasks=create_standard_periodic_tasks(
+                    device_name=device_name,
+                    memory_threshold=Gigabyte.GIG_5.value,
+                    cpu_util_terminate_on_error=False,
+                    memory_terminate_on_error=False,
+                ),
+                postchecks=[
+                    create_bgp_session_establish_check(),
+                ],
+                setup_steps=create_sc_8_setup_steps(
+                    device_name=device_name,
+                    configerator_path="taac/arista_performance_scaling_test_bgpcpp_configs/bgpcpp_config_test_case8_eb_fa_in_no_prefix",
+                ),
+                stages=[
+                    create_steps_stage(
+                        steps=create_sc_8_steps(
+                            device_name=device_name,
+                            prefix_count=10000,
+                            plot_policy_stats=False,
+                        )
+                        + create_sc_8_steps(
+                            device_name=device_name,
+                            prefix_count=20000,
+                            plot_policy_stats=False,
+                        )
+                        + create_sc_8_steps(
+                            device_name=device_name,
+                            prefix_count=30000,
+                            plot_policy_stats=False,
+                        )
+                        + create_sc_8_steps(
+                            device_name=device_name,
+                            prefix_count=40000,
+                            plot_policy_stats=False,
+                        )
+                        + create_sc_8_steps(
+                            device_name=device_name,
+                            prefix_count=50000,
+                            plot_policy_stats=True,
+                        )
+                    )
+                ],
+            ),
+            build_case8_playbook(
+                name="bgp_plus_plus_arista_default_policy_test",
+                description="Test BGP++ performance with default policy",
+                snapshot_checks=[
+                    create_core_dumps_snapshot_check(),
+                    create_bgp_session_snapshot_check(
+                        skip_flap_check=True, skip_uptime_check=True
+                    ),
+                ],
+                periodic_tasks=create_standard_periodic_tasks(
+                    device_name=device_name,
+                    memory_threshold=Gigabyte.GIG_5.value,
+                    cpu_util_terminate_on_error=False,
+                    memory_terminate_on_error=False,
+                ),
+                postchecks=[
+                    create_bgp_session_establish_check(),
+                ],
+                setup_steps=create_sc_8_setup_steps(
+                    device_name=device_name,
+                    configerator_path="taac/arista_performance_scaling_test_bgpcpp_configs/bgpcpp_config_test_case8_accept_all",
+                ),
+                stages=[
+                    create_steps_stage(
+                        steps=create_sc_8_steps(
+                            device_name=device_name,
+                            prefix_count=10000,
+                            policy_name="ACCEPT_ALL",
+                            plot_policy_stats=False,
+                        )
+                        + create_sc_8_steps(
+                            device_name=device_name,
+                            prefix_count=20000,
+                            policy_name="ACCEPT_ALL",
+                            plot_policy_stats=False,
+                        )
+                        + create_sc_8_steps(
+                            device_name=device_name,
+                            prefix_count=30000,
+                            policy_name="ACCEPT_ALL",
+                            plot_policy_stats=False,
+                        )
+                        + create_sc_8_steps(
+                            device_name=device_name,
+                            prefix_count=40000,
+                            policy_name="ACCEPT_ALL",
+                            plot_policy_stats=False,
+                        )
+                        + create_sc_8_steps(
+                            device_name=device_name,
+                            prefix_count=50000,
+                            policy_name="ACCEPT_ALL",
+                            plot_policy_stats=True,
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+
+def test_config_bgp_update_packing_validation(
+    test_config_name: str,
+    device_name: str,
+    # IBGP configuration (ingress)
+    ixia_interface_mimic_ibgp: str,
+    ibgp_local_as: int,
+    ixia_ibgp_ic_parent_network_v6: str,
+    ixia_ibgp_ic_parent_network_v4: str,
+    # EBGP configuration (egress - for capture)
+    ixia_interface_mimic_ebgp: str,
+    ebgp_remote_as: int,
+    ixia_ebgp_ic_parent_network_v6: str,
+    ixia_ebgp_ic_parent_network_v4: str,
+    # Test parameters
+    ibgp_peer_count: int = 10,
+    prefixes_per_peer: int = 10000,
+    ebgp_peer_count: int = 1,
+    # Address family selection
+    test_address_families: list[str] | None = None,
+    # Attribute pool configuration
+    as_path_pool_size: int = 10,
+    community_pool_size: int = 20,
+    as_path_length: int = 3,
+    communities_per_route: int = 2,
+    # Route acceptance communities (required for Edge Border acceptance policy)
+    ibgp_route_acceptance_communities: list[str] | None = None,
+    ebgp_route_acceptance_communities: list[str] | None = None,
+    # Test control
+    capture_duration_seconds: int = 600,
+    min_packed_size: int = 4000,
+    restart_bgp_for_complete_view: bool = True,
+    direct_ixia_connections: list | None = None,
+    log_collection_timeout: int | None = None,
+    oss_mock_device_data=None,
+    host_os_type_map=None,
+    host_driver_args=None,
+    setup_tasks: list | None = None,
+    teardown_tasks: list | None = None,
+    ixia_config_cache: IxiaConfigCache | None = None,
+):
+    """BGP++ UPDATE Message Packing Validation TestConfig.
+
+    Byte-identical to the legacy
+    ``testconfigs/routing/ebb/test_config_update_packing``
+    ``test_config_bgp_update_packing_validation``.
+    """
+    # Set default address families if not specified
+    if test_address_families is None:
+        test_address_families = ["ipv4", "ipv6"]
+
+    # Calculate initial peer counts based on address families
+    num_afs = len(test_address_families)
+    if num_afs == 2:
+        initial_ibgp_peer_count = ibgp_peer_count // 2
+        initial_ebgp_peer_count = ebgp_peer_count // 2
+    elif "ipv4" in test_address_families:
+        initial_ibgp_peer_count = ibgp_peer_count
+        initial_ebgp_peer_count = ebgp_peer_count
+    else:
+        initial_ibgp_peer_count = ibgp_peer_count
+        initial_ebgp_peer_count = ebgp_peer_count
+
+    as_path_pool = generate_as_path_pool(
+        count=as_path_pool_size,
+        base_as=45000,
+        as_path_length=as_path_length,
+    )
+
+    community_pool = generate_community_pool(
+        count=community_pool_size,
+        base_community=45100,
+    )
+
+    if ebgp_route_acceptance_communities:
+        test_direction = "EBGP → IBGP"
+    elif ibgp_route_acceptance_communities:
+        test_direction = "IBGP → EBGP"
+    else:
+        raise ValueError(
+            "Must specify either ibgp_route_acceptance_communities or "
+            "ebgp_route_acceptance_communities to determine test direction"
+        )
+
+    ibgp_device_groups = []
+    ibgp_advertises_routes = test_direction == "IBGP → EBGP"
+
+    if "ipv6" in test_address_families:
+        ibgp_v6_route_scales = None
+        if ibgp_advertises_routes:
+            ibgp_v6_route_scales = [
+                RouteScaleSpec(
+                    v6_route_scale=RouteScale(
+                        prefix_name="PREFIX_POOL_IPV6_IBGP",
+                        starting_prefixes="5001:db8:1000::",
+                        prefix_step="0:0:1::",
+                        prefix_length=64,
+                        multiplier=1,
+                        prefix_count=prefixes_per_peer,
+                        ip_address_family=ixia_types.IpAddressFamily.IPV6,
+                        bgp_communities=[],
+                    ),
+                    multiplier=1,
+                    network_group_index=0,
+                )
+            ]
+
+        ibgp_device_groups.append(
+            DeviceGroupConfig(
+                device_group_name="DEVICE_GROUP_IPV6_IBGP",
+                device_group_index=len(ibgp_device_groups),
+                multiplier=initial_ibgp_peer_count,
+                v6_addresses_config=IpAddressesConfig(
+                    starting_ip=f"{ixia_ibgp_ic_parent_network_v6}::11",
+                    increment_ip="0:0:0:0::2",
+                    gateway_starting_ip=f"{ixia_ibgp_ic_parent_network_v6}::10",
+                    gateway_increment_ip="0:0:0:0::2",
+                    start_index=0,
+                ),
+                v6_bgp_config=BgpConfig(
+                    bgp_peer_name="BGP_PEER_IPV6_IBGP",
+                    local_as_4_bytes=ibgp_local_as,
+                    enable_4_byte_local_as=True,
+                    bgp_peer_type=ixia_types.BgpPeerType.IBGP,
+                    route_scales=ibgp_v6_route_scales,
+                ),
+            )
+        )
+
+    if "ipv4" in test_address_families:
+        ibgp_v4_route_scales = None
+        if ibgp_advertises_routes:
+            ibgp_v4_route_scales = [
+                RouteScaleSpec(
+                    v4_route_scale=RouteScale(
+                        prefix_name="PREFIX_POOL_IPV4_IBGP",
+                        starting_prefixes="50.100.0.0",
+                        prefix_step="0.0.1.0",
+                        prefix_length=24,
+                        multiplier=1,
+                        prefix_count=prefixes_per_peer,
+                        ip_address_family=ixia_types.IpAddressFamily.IPV4,
+                        bgp_communities=[],
+                    ),
+                    multiplier=1,
+                    network_group_index=0,
+                )
+            ]
+
+        ibgp_device_groups.append(
+            DeviceGroupConfig(
+                device_group_name="DEVICE_GROUP_IPV4_IBGP",
+                device_group_index=len(ibgp_device_groups),
+                multiplier=initial_ibgp_peer_count,
+                v4_addresses_config=IpAddressesConfig(
+                    starting_ip=f"{ixia_ibgp_ic_parent_network_v4}.11",
+                    increment_ip="0.0.0.2",
+                    gateway_starting_ip=f"{ixia_ibgp_ic_parent_network_v4}.10",
+                    gateway_increment_ip="0.0.0.2",
+                    mask=31,
+                    start_index=0,
+                ),
+                v4_bgp_config=BgpConfig(
+                    bgp_peer_name="BGP_PEER_IPV4_IBGP",
+                    local_as_4_bytes=ibgp_local_as,
+                    enable_4_byte_local_as=True,
+                    bgp_peer_type=ixia_types.BgpPeerType.IBGP,
+                    route_scales=ibgp_v4_route_scales,
+                ),
+            )
+        )
+
+    ebgp_device_groups = []
+    ebgp_advertises_routes = test_direction == "EBGP → IBGP"
+
+    if "ipv6" in test_address_families:
+        ebgp_v6_route_scales = None
+        if ebgp_advertises_routes:
+            ebgp_v6_route_scales = [
+                RouteScaleSpec(
+                    v6_route_scale=RouteScale(
+                        prefix_name="PREFIX_POOL_IPV6_EBGP",
+                        starting_prefixes="5001:db8:1000::",
+                        prefix_step="0:0:1::",
+                        prefix_length=64,
+                        multiplier=1,
+                        prefix_count=prefixes_per_peer,
+                        ip_address_family=ixia_types.IpAddressFamily.IPV6,
+                        bgp_communities=[],
+                    ),
+                    multiplier=1,
+                    network_group_index=0,
+                )
+            ]
+
+        ebgp_device_groups.append(
+            DeviceGroupConfig(
+                device_group_name="DEVICE_GROUP_IPV6_EBGP",
+                device_group_index=len(ebgp_device_groups),
+                multiplier=initial_ebgp_peer_count,
+                v6_addresses_config=IpAddressesConfig(
+                    starting_ip=f"{ixia_ebgp_ic_parent_network_v6}::11",
+                    increment_ip="0:0:0:0::2",
+                    gateway_starting_ip=f"{ixia_ebgp_ic_parent_network_v6}::10",
+                    gateway_increment_ip="0:0:0:0::2",
+                    start_index=0,
+                ),
+                v6_bgp_config=BgpConfig(
+                    bgp_peer_name="BGP_PEER_IPV6_EBGP",
+                    local_as_4_bytes=ebgp_remote_as,
+                    enable_4_byte_local_as=True,
+                    bgp_peer_type=ixia_types.BgpPeerType.EBGP,
+                    route_scales=ebgp_v6_route_scales,
+                ),
+            )
+        )
+
+    if "ipv4" in test_address_families:
+        ebgp_v4_route_scales = None
+        if ebgp_advertises_routes:
+            ebgp_v4_route_scales = [
+                RouteScaleSpec(
+                    v4_route_scale=RouteScale(
+                        prefix_name="PREFIX_POOL_IPV4_EBGP",
+                        starting_prefixes="50.100.0.0",
+                        prefix_step="0.0.1.0",
+                        prefix_length=24,
+                        multiplier=1,
+                        prefix_count=prefixes_per_peer,
+                        ip_address_family=ixia_types.IpAddressFamily.IPV4,
+                        bgp_communities=[],
+                    ),
+                    multiplier=1,
+                    network_group_index=0,
+                )
+            ]
+
+        ebgp_device_groups.append(
+            DeviceGroupConfig(
+                device_group_name="DEVICE_GROUP_IPV4_EBGP",
+                device_group_index=len(ebgp_device_groups),
+                multiplier=initial_ebgp_peer_count,
+                v4_addresses_config=IpAddressesConfig(
+                    starting_ip=f"{ixia_ebgp_ic_parent_network_v4}.11",
+                    increment_ip="0.0.0.2",
+                    gateway_starting_ip=f"{ixia_ebgp_ic_parent_network_v4}.10",
+                    gateway_increment_ip="0.0.0.2",
+                    mask=31,
+                    start_index=0,
+                ),
+                v4_bgp_config=BgpConfig(
+                    bgp_peer_name="BGP_PEER_IPV4_EBGP",
+                    local_as_4_bytes=ebgp_remote_as,
+                    enable_4_byte_local_as=True,
+                    bgp_peer_type=ixia_types.BgpPeerType.EBGP,
+                    route_scales=ebgp_v4_route_scales,
+                ),
+            )
+        )
+
+    return TestConfig(
+        name=test_config_name,
+        skip_ixia_protocol_verification=True,
+        log_collection_timeout=log_collection_timeout,
+        basset_pool="dne.test",
+        endpoints=[
+            Endpoint(
+                name=device_name,
+                dut=True,
+                ixia_ports=[
+                    ixia_interface_mimic_ibgp,
+                    ixia_interface_mimic_ebgp,
+                ],
+                direct_ixia_connections=direct_ixia_connections
+                if direct_ixia_connections
+                else [],
+            ),
+        ],
+        host_driver_args=host_driver_args,
+        oss_mock_device_data=oss_mock_device_data,
+        host_os_type_map=host_os_type_map,
+        startup_checks=[],
+        setup_tasks=setup_tasks if setup_tasks else [],
+        teardown_tasks=teardown_tasks if teardown_tasks else [],
+        basic_port_configs=[
+            BasicPortConfig(
+                endpoint=f"{device_name}:{ixia_interface_mimic_ibgp}",
+                device_group_configs=ibgp_device_groups,
+            ),
+            BasicPortConfig(
+                endpoint=f"{device_name}:{ixia_interface_mimic_ebgp}",
+                device_group_configs=ebgp_device_groups,
+            ),
+        ],
+        playbooks=[
+            create_bgp_update_packing_validation_playbook(
+                device_name=device_name,
+                ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+                ibgp_peer_count=ibgp_peer_count,
+                prefixes_per_peer=prefixes_per_peer,
+                ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
+                ebgp_peer_count=ebgp_peer_count,
+                test_address_families=test_address_families,
+                as_path_pool=as_path_pool,
+                community_pool=community_pool,
+                communities_per_route=communities_per_route,
+                ibgp_route_acceptance_communities=ibgp_route_acceptance_communities,
+                ebgp_route_acceptance_communities=ebgp_route_acceptance_communities,
+                capture_duration_seconds=capture_duration_seconds,
+                min_packed_size=min_packed_size,
+                restart_bgp_for_complete_view=restart_bgp_for_complete_view,
+            ),
+        ],
+        ixia_config_cache=ixia_config_cache,
+    )
+
+
+def test_config_to_verify_computational_load_of_bgp_plus_plus(
+    test_config_name,
+    device_name,
+    peergroup_ibgp_v6,
+    peergroup_ebgp_v6,
+    peergroup_ibgp_v4,
+    peergroup_ebgp_v4,
+    ixia_interface_mimic_ebgp,
+    ixia_interface_mimic_ibgp,
+    ibgp_remote_as,
+    ebgp_remote_as,
+    ebgp_peer_scale,
+    unqiue_prefix_limit,
+    total_path_limit,
+    ixia_ebgp_ic_parent_network_v6,
+    ixia_ibgp_ic_parent_network_v6,
+    ixia_ebgp_ic_parent_network_v4,
+    ixia_ibgp_ic_parent_network_v4,
+    ixia_ebgp_communities,
+    ixia_ibgp_communities,
+    ebgp_ingress_policy_name,
+    ebgp_egress_policy_name,
+    ibgp_ingress_policy_name,
+    ibgp_egress_policy_name,
+    ibgp_peer_counts: list[int],
+    prefix_counts: list[int],
+):
+    """BGP++ computational-load verification TestConfig.
+
+    Byte-identical to the legacy
+    ``testconfigs/routing/ebb/test_config_to_verify_computational_load_of_bgp_plus_plus``
+    ``test_config_to_verify_computational_load_of_bgp_plus_plus``.
+    """
+    return TestConfig(
+        name=test_config_name,
+        basset_pool="dne.test",
+        skip_ixia_protocol_verification=True,
+        endpoints=[
+            Endpoint(
+                name=device_name,
+                dut=True,
+                ixia_ports=[
+                    ixia_interface_mimic_ebgp,
+                    ixia_interface_mimic_ibgp,
+                ],
+            ),
+        ],
+        setup_tasks=[
+            create_coop_unregister_patchers_task(device_name),
+            create_scp_file_template_task(
+                hostname=device_name,
+                remote_path="/etc/packages/neteng-fboss-bgpd/current/bgpd.service",
+                file_template="systemd_bgp_service",
+                template_params={
+                    "max_rss_size": "10",
+                    "bgp_policy_cache_size": "200000",
+                    "platform": "dev",
+                },
+            ),
+            create_run_commands_on_shell_task(
+                hostname=device_name,
+                cmds=[
+                    "systemctl restart bgpd",
+                    "systemctl daemon-reload",
+                ],
+            ),
+            create_coop_register_patcher_task(
+                hostname=device_name,
+                config_name="bgpcpp",
+                patcher_name="a_remove_bgp_peers",
+                task_name="remove_bgp_peers",
+                patcher_args={"delete_all": "True"},
+                py_func_name="remove_bgp_peers",
+            ),
+            create_coop_register_patcher_task(
+                hostname=device_name,
+                config_name="bgpcpp",
+                patcher_name="configure_bgp_switch_limit",
+                task_name="configure_bgp_switch_limit",
+                patcher_args={
+                    "prefix_limit": str(unqiue_prefix_limit),
+                    "total_path_limit": str(total_path_limit),
+                },
+                py_func_name="configure_bgp_switch_limit",
+            ),
+            create_coop_apply_patchers_task(
+                hostnames=[device_name],
+                config_name="bgpcpp",
+            ),
+            create_wait_for_agent_convergence_task([device_name]),
+            create_coop_apply_patchers_task(
+                hostnames=[device_name],
+                config_name="bgpcpp",
+            ),
+            create_wait_for_agent_convergence_task([device_name]),
+            create_coop_register_patcher_task(
+                hostname=device_name,
+                config_name="bgpcpp",
+                patcher_name=f"add_peer_group_patcher_{peergroup_ebgp_v6}",
+                task_name="add_peer_group_patcher",
+                patcher_args={
+                    "name": peergroup_ebgp_v6,
+                    "description": "BGP V6 peering for EBGP",
+                    "next_hop_self": "True",
+                    "disable_ipv4_afi": "True",
+                    "disable_ipv6_afi": "False",
+                    "is_confed_peer": "False",
+                    "ingress_policy_name": ebgp_ingress_policy_name,
+                    "egress_policy_name": ebgp_egress_policy_name,
+                    "bgp_peer_timers_hold_time_seconds": "15",
+                    "bgp_peer_timers_keep_alive_seconds": "5",
+                    "bgp_peer_timers_out_delay_seconds": "7",
+                    "bgp_peer_timers_withdraw_unprog_delay_seconds": "0",
+                    "peer_tag": "EBGP",
+                    "max_routes": "50000",
+                    "warning_only": "True",
+                    "warning_limit": "0",
+                    "link_bandwidth_bps": "auto",
+                    "v4_over_v6_nexthop": "False",
+                    "is_passive": "False",
+                },
+                py_func_name="add_peer_group_patcher",
+            ),
+            create_coop_register_patcher_task(
+                hostname=device_name,
+                config_name="bgpcpp",
+                patcher_name=f"add_peer_group_patcher_{peergroup_ibgp_v6}",
+                task_name="add_peer_group_patcher",
+                patcher_args={
+                    "name": peergroup_ibgp_v6,
+                    "description": "BGP V6 peering for IBGP",
+                    "next_hop_self": "True",
+                    "disable_ipv4_afi": "True",
+                    "disable_ipv6_afi": "False",
+                    "is_confed_peer": "False",
+                    "ingress_policy_name": ibgp_ingress_policy_name,
+                    "egress_policy_name": ibgp_egress_policy_name,
+                    "bgp_peer_timers_hold_time_seconds": "15",
+                    "bgp_peer_timers_keep_alive_seconds": "5",
+                    "bgp_peer_timers_out_delay_seconds": "7",
+                    "bgp_peer_timers_withdraw_unprog_delay_seconds": "0",
+                    "peer_tag": "IBGP",
+                    "max_routes": "50000",
+                    "warning_only": "True",
+                    "warning_limit": "0",
+                    "link_bandwidth_bps": "auto",
+                    "v4_over_v6_nexthop": "False",
+                    "is_passive": "False",
+                },
+                py_func_name="add_peer_group_patcher",
+            ),
+            create_coop_register_patcher_task(
+                hostname=device_name,
+                config_name="bgpcpp",
+                patcher_name=f"add_peer_group_patcher_{peergroup_ebgp_v4}",
+                task_name="add_peer_group_patcher",
+                patcher_args={
+                    "name": peergroup_ebgp_v4,
+                    "description": "BGP V4 peering for EBGP",
+                    "next_hop_self": "True",
+                    "disable_ipv4_afi": "False",
+                    "disable_ipv6_afi": "True",
+                    "is_confed_peer": "False",
+                    "ingress_policy_name": ebgp_ingress_policy_name,
+                    "egress_policy_name": ebgp_egress_policy_name,
+                    "bgp_peer_timers_hold_time_seconds": "15",
+                    "bgp_peer_timers_keep_alive_seconds": "5",
+                    "bgp_peer_timers_out_delay_seconds": "7",
+                    "bgp_peer_timers_withdraw_unprog_delay_seconds": "0",
+                    "peer_tag": "EBGP",
+                    "max_routes": "50000",
+                    "warning_only": "True",
+                    "warning_limit": "0",
+                    "link_bandwidth_bps": "auto",
+                    "v4_over_v6_nexthop": "False",
+                    "is_passive": "False",
+                },
+                py_func_name="add_peer_group_patcher",
+            ),
+            create_coop_register_patcher_task(
+                hostname=device_name,
+                config_name="bgpcpp",
+                patcher_name=f"add_peer_group_patcher_{peergroup_ibgp_v4}",
+                task_name="add_peer_group_patcher",
+                patcher_args={
+                    "name": peergroup_ibgp_v4,
+                    "description": "BGP V4 peering for IBGP",
+                    "next_hop_self": "True",
+                    "disable_ipv4_afi": "False",
+                    "disable_ipv6_afi": "True",
+                    "is_confed_peer": "False",
+                    "ingress_policy_name": ibgp_ingress_policy_name,
+                    "egress_policy_name": ibgp_egress_policy_name,
+                    "bgp_peer_timers_hold_time_seconds": "15",
+                    "bgp_peer_timers_keep_alive_seconds": "5",
+                    "bgp_peer_timers_out_delay_seconds": "7",
+                    "bgp_peer_timers_withdraw_unprog_delay_seconds": "0",
+                    "peer_tag": "IBGP",
+                    "max_routes": "50000",
+                    "warning_only": "True",
+                    "warning_limit": "0",
+                    "link_bandwidth_bps": "auto",
+                    "v4_over_v6_nexthop": "False",
+                    "is_passive": "False",
+                },
+                py_func_name="add_peer_group_patcher",
+            ),
+            create_coop_apply_patchers_task(
+                hostnames=[device_name],
+                config_name="bgpcpp",
+            ),
+            create_wait_for_agent_convergence_task([device_name]),
+        ],
+        teardown_tasks=[
+            create_coop_unregister_patchers_task(device_name),
+        ],
+        basic_port_configs=[
+            taac_types.BasicPortConfig(
+                endpoint=f"{device_name}:{ixia_interface_mimic_ebgp}",
+                device_group_configs=[
+                    taac_types.DeviceGroupConfig(
+                        device_group_index=0,
+                        multiplier=1,
+                        v6_addresses_config=taac_types.IpAddressesConfig(
+                            starting_ip=f"{ixia_ebgp_ic_parent_network_v6}::11",
+                            increment_ip="0:0:0:0::2",
+                            gateway_starting_ip=f"{ixia_ebgp_ic_parent_network_v6}::10",
+                            gateway_increment_ip="0:0:0:0::2",
+                        ),
+                        v6_bgp_config=taac_types.BgpConfig(
+                            local_as_4_bytes=ebgp_remote_as,
+                            enable_4_byte_local_as=True,
+                            is_confed=False,
+                            bgp_peer_type=ixia_types.BgpPeerType.EBGP,
+                            bgp_capabilities=[ixia_types.BgpCapability.IpV6Unicast],
+                            route_scales=[
+                                taac_types.RouteScaleSpec(
+                                    network_group_index=0,
+                                    v6_route_scale=taac_types.RouteScale(
+                                        multiplier=1,
+                                        prefix_count=1,
+                                        prefix_length=64,
+                                        starting_prefixes="2001:db8::",
+                                        prefix_step="0:0:0:1::",
+                                        bgp_communities=ixia_ebgp_communities,
+                                        ip_address_family=ixia_types.IpAddressFamily.IPV6,
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                    taac_types.DeviceGroupConfig(
+                        device_group_index=1,
+                        multiplier=1,
+                        v4_addresses_config=taac_types.IpAddressesConfig(
+                            starting_ip=f"{ixia_ebgp_ic_parent_network_v4}.11",
+                            increment_ip="0.0.0.2",
+                            gateway_starting_ip=f"{ixia_ebgp_ic_parent_network_v4}.10",
+                            gateway_increment_ip="0.0.0.2",
+                            mask=31,
+                        ),
+                        v4_bgp_config=taac_types.BgpConfig(
+                            local_as_4_bytes=ebgp_remote_as,
+                            enable_4_byte_local_as=True,
+                            is_confed=False,
+                            bgp_peer_type=ixia_types.BgpPeerType.EBGP,
+                            bgp_capabilities=[ixia_types.BgpCapability.IpV4Unicast],
+                            route_scales=[
+                                taac_types.RouteScaleSpec(
+                                    network_group_index=0,
+                                    v4_route_scale=taac_types.RouteScale(
+                                        multiplier=1,
+                                        prefix_count=1,
+                                        prefix_length=24,
+                                        starting_prefixes="100.0.0.0",
+                                        prefix_step="0.0.1.0",
+                                        bgp_communities=ixia_ebgp_communities,
+                                        ip_address_family=ixia_types.IpAddressFamily.IPV4,
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+            taac_types.BasicPortConfig(
+                endpoint=f"{device_name}:{ixia_interface_mimic_ibgp}",
+                device_group_configs=[
+                    taac_types.DeviceGroupConfig(
+                        device_group_index=0,
+                        multiplier=1,
+                        v6_addresses_config=taac_types.IpAddressesConfig(
+                            starting_ip=f"{ixia_ibgp_ic_parent_network_v6}::11",
+                            increment_ip="0:0:0:0::2",
+                            gateway_starting_ip=f"{ixia_ibgp_ic_parent_network_v6}::10",
+                            gateway_increment_ip="0:0:0:0::2",
+                            mask=127,
+                        ),
+                        v6_bgp_config=taac_types.BgpConfig(
+                            local_as_4_bytes=ibgp_remote_as,
+                            enable_4_byte_local_as=True,
+                            is_confed=False,
+                            bgp_peer_type=ixia_types.BgpPeerType.IBGP,
+                            bgp_capabilities=[ixia_types.BgpCapability.IpV6Unicast],
+                        ),
+                    ),
+                    taac_types.DeviceGroupConfig(
+                        device_group_index=1,
+                        multiplier=1,
+                        v4_addresses_config=taac_types.IpAddressesConfig(
+                            starting_ip=f"{ixia_ibgp_ic_parent_network_v4}.11",
+                            increment_ip="0.0.0.2",
+                            gateway_starting_ip=f"{ixia_ibgp_ic_parent_network_v4}.10",
+                            gateway_increment_ip="0.0.0.2",
+                            mask=31,
+                        ),
+                        v4_bgp_config=taac_types.BgpConfig(
+                            local_as_4_bytes=ibgp_remote_as,
+                            enable_4_byte_local_as=True,
+                            is_confed=False,
+                            bgp_peer_type=ixia_types.BgpPeerType.IBGP,
+                            bgp_capabilities=[ixia_types.BgpCapability.IpV4Unicast],
+                        ),
+                    ),
+                ],
+            ),
+        ],
+        playbooks=[
+            create_test_computational_load_for_bgp_plus_plus_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=peergroup_ibgp_v6,
+                peergroup_ebgp_v6=peergroup_ebgp_v6,
+                peergroup_ibgp_v4=peergroup_ibgp_v4,
+                peergroup_ebgp_v4=peergroup_ebgp_v4,
+                ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
+                ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+                ibgp_remote_as=ibgp_remote_as,
+                ebgp_remote_as=ebgp_remote_as,
+                ebgp_peer_scale=ebgp_peer_scale,
+                unqiue_prefix_limit=unqiue_prefix_limit,
+                total_path_limit=total_path_limit,
+                ixia_ebgp_ic_parent_network_v6=ixia_ebgp_ic_parent_network_v6,
+                ixia_ibgp_ic_parent_network_v6=ixia_ibgp_ic_parent_network_v6,
+                ixia_ebgp_ic_parent_network_v4=ixia_ebgp_ic_parent_network_v4,
+                ixia_ibgp_ic_parent_network_v4=ixia_ibgp_ic_parent_network_v4,
+                ixia_ebgp_communities=ixia_ebgp_communities,
+                ixia_ibgp_communities=ixia_ibgp_communities,
+                ebgp_ingress_policy_name=ebgp_ingress_policy_name,
+                ebgp_egress_policy_name=ebgp_egress_policy_name,
+                ibgp_ingress_policy_name=ibgp_ingress_policy_name,
+                ibgp_egress_policy_name=ibgp_egress_policy_name,
+                ibgp_peer_counts=ibgp_peer_counts,
+                prefix_counts=prefix_counts,
+            ),
+        ],
+    )
+
+
+def test_config_to_verify_constant_attribute_storage(
+    test_config_name,
+    device_name,
+    peergroup_ibgp_v6,
+    peergroup_ebgp_v6,
+    peergroup_ibgp_v4,
+    peergroup_ebgp_v4,
+    ixia_interface_mimic_ebgp,
+    ixia_interface_mimic_ibgp,
+    ibgp_remote_as,
+    ebgp_remote_as,
+    ebgp_peer_counts: list[int],
+    unqiue_prefix_limit,
+    total_path_limit,
+    ixia_ebgp_ic_parent_network_v6,
+    ixia_ibgp_ic_parent_network_v6,
+    ixia_ebgp_ic_parent_network_v4,
+    ixia_ibgp_ic_parent_network_v4,
+    ixia_ebgp_communities,
+    ixia_ibgp_communities,
+    ebgp_ingress_policy_name,
+    ebgp_egress_policy_name,
+    ibgp_ingress_policy_name,
+    ibgp_egress_policy_name,
+    prefix_counts: list[int],
+    ibgp_peer_count: int = 1000,
+):
+    """BGP++ constant-attribute-storage verification TestConfig.
+
+    Byte-identical to the legacy
+    ``testconfigs/routing/ebb/test_config_to_verify_constant_attribute_storage``
+    ``test_config_to_verify_constant_attribute_storage``.
+    """
+    return TestConfig(
+        name=test_config_name,
+        basset_pool="dne.test",
+        skip_ixia_protocol_verification=True,
+        endpoints=[
+            Endpoint(
+                name=device_name,
+                dut=True,
+                ixia_ports=[
+                    ixia_interface_mimic_ebgp,
+                    ixia_interface_mimic_ibgp,
+                ],
+            ),
+        ],
+        setup_tasks=[
+            create_coop_unregister_patchers_task(device_name),
+            create_scp_file_template_task(
+                hostname=device_name,
+                remote_path="/etc/packages/neteng-fboss-bgpd/current/bgpd.service",
+                file_template="systemd_bgp_service",
+                template_params={
+                    "max_rss_size": "10",
+                    "bgp_policy_cache_size": "200000",
+                    "platform": "dev",
+                },
+            ),
+            create_run_commands_on_shell_task(
+                hostname=device_name,
+                cmds=[
+                    "systemctl restart bgpd",
+                    "systemctl daemon-reload",
+                ],
+            ),
+            create_coop_register_patcher_task(
+                hostname=device_name,
+                config_name="bgpcpp",
+                patcher_name="a_remove_bgp_peers",
+                task_name="remove_bgp_peers",
+                patcher_args={"delete_all": "True"},
+                py_func_name="remove_bgp_peers",
+            ),
+            create_coop_register_patcher_task(
+                hostname=device_name,
+                config_name="bgpcpp",
+                patcher_name="configure_bgp_switch_limit",
+                task_name="configure_bgp_switch_limit",
+                patcher_args={
+                    "prefix_limit": str(unqiue_prefix_limit),
+                    "total_path_limit": str(total_path_limit),
+                },
+                py_func_name="configure_bgp_switch_limit",
+            ),
+            create_coop_apply_patchers_task(
+                hostnames=[device_name],
+                config_name="bgpcpp",
+            ),
+            create_wait_for_agent_convergence_task([device_name]),
+            create_coop_apply_patchers_task(
+                hostnames=[device_name],
+                config_name="bgpcpp",
+            ),
+            create_wait_for_agent_convergence_task([device_name]),
+            create_coop_register_patcher_task(
+                hostname=device_name,
+                config_name="bgpcpp",
+                patcher_name=f"add_peer_group_patcher_{peergroup_ebgp_v6}",
+                task_name="add_peer_group_patcher",
+                patcher_args={
+                    "name": peergroup_ebgp_v6,
+                    "description": "BGP V6 peering for EBGP",
+                    "next_hop_self": "True",
+                    "disable_ipv4_afi": "True",
+                    "disable_ipv6_afi": "False",
+                    "is_confed_peer": "False",
+                    "ingress_policy_name": ebgp_ingress_policy_name,
+                    "egress_policy_name": ebgp_egress_policy_name,
+                    "bgp_peer_timers_hold_time_seconds": "15",
+                    "bgp_peer_timers_keep_alive_seconds": "5",
+                    "bgp_peer_timers_out_delay_seconds": "7",
+                    "bgp_peer_timers_withdraw_unprog_delay_seconds": "0",
+                    "peer_tag": "EBGP",
+                    "max_routes": "50000",
+                    "warning_only": "True",
+                    "warning_limit": "0",
+                    "link_bandwidth_bps": "auto",
+                    "v4_over_v6_nexthop": "False",
+                    "is_passive": "False",
+                },
+                py_func_name="add_peer_group_patcher",
+            ),
+            create_coop_register_patcher_task(
+                hostname=device_name,
+                config_name="bgpcpp",
+                patcher_name=f"add_peer_group_patcher_{peergroup_ibgp_v6}",
+                task_name="add_peer_group_patcher",
+                patcher_args={
+                    "name": peergroup_ibgp_v6,
+                    "description": "BGP V6 peering for IBGP",
+                    "next_hop_self": "True",
+                    "disable_ipv4_afi": "True",
+                    "disable_ipv6_afi": "False",
+                    "is_confed_peer": "False",
+                    "ingress_policy_name": ibgp_ingress_policy_name,
+                    "egress_policy_name": ibgp_egress_policy_name,
+                    "bgp_peer_timers_hold_time_seconds": "15",
+                    "bgp_peer_timers_keep_alive_seconds": "5",
+                    "bgp_peer_timers_out_delay_seconds": "7",
+                    "bgp_peer_timers_withdraw_unprog_delay_seconds": "0",
+                    "peer_tag": "IBGP",
+                    "max_routes": "50000",
+                    "warning_only": "True",
+                    "warning_limit": "0",
+                    "link_bandwidth_bps": "auto",
+                    "v4_over_v6_nexthop": "False",
+                    "is_passive": "False",
+                },
+                py_func_name="add_peer_group_patcher",
+            ),
+            create_coop_register_patcher_task(
+                hostname=device_name,
+                config_name="bgpcpp",
+                patcher_name=f"add_peer_group_patcher_{peergroup_ebgp_v4}",
+                task_name="add_peer_group_patcher",
+                patcher_args={
+                    "name": peergroup_ebgp_v4,
+                    "description": "BGP V4 peering for EBGP",
+                    "next_hop_self": "True",
+                    "disable_ipv4_afi": "False",
+                    "disable_ipv6_afi": "True",
+                    "is_confed_peer": "False",
+                    "ingress_policy_name": ebgp_ingress_policy_name,
+                    "egress_policy_name": ebgp_egress_policy_name,
+                    "bgp_peer_timers_hold_time_seconds": "15",
+                    "bgp_peer_timers_keep_alive_seconds": "5",
+                    "bgp_peer_timers_out_delay_seconds": "7",
+                    "bgp_peer_timers_withdraw_unprog_delay_seconds": "0",
+                    "peer_tag": "EBGP",
+                    "max_routes": "50000",
+                    "warning_only": "True",
+                    "warning_limit": "0",
+                    "link_bandwidth_bps": "auto",
+                    "v4_over_v6_nexthop": "False",
+                    "is_passive": "False",
+                },
+                py_func_name="add_peer_group_patcher",
+            ),
+            create_coop_register_patcher_task(
+                hostname=device_name,
+                config_name="bgpcpp",
+                patcher_name=f"add_peer_group_patcher_{peergroup_ibgp_v4}",
+                task_name="add_peer_group_patcher",
+                patcher_args={
+                    "name": peergroup_ibgp_v4,
+                    "description": "BGP V4 peering for IBGP",
+                    "next_hop_self": "True",
+                    "disable_ipv4_afi": "False",
+                    "disable_ipv6_afi": "True",
+                    "is_confed_peer": "False",
+                    "ingress_policy_name": ibgp_ingress_policy_name,
+                    "egress_policy_name": ibgp_egress_policy_name,
+                    "bgp_peer_timers_hold_time_seconds": "15",
+                    "bgp_peer_timers_keep_alive_seconds": "5",
+                    "bgp_peer_timers_out_delay_seconds": "7",
+                    "bgp_peer_timers_withdraw_unprog_delay_seconds": "0",
+                    "peer_tag": "IBGP",
+                    "max_routes": "50000",
+                    "warning_only": "True",
+                    "warning_limit": "0",
+                    "link_bandwidth_bps": "auto",
+                    "v4_over_v6_nexthop": "False",
+                    "is_passive": "False",
+                },
+                py_func_name="add_peer_group_patcher",
+            ),
+            create_coop_apply_patchers_task(
+                hostnames=[device_name],
+                config_name="bgpcpp",
+            ),
+            create_wait_for_agent_convergence_task([device_name]),
+        ],
+        teardown_tasks=[
+            create_coop_unregister_patchers_task(device_name),
+        ],
+        basic_port_configs=[
+            taac_types.BasicPortConfig(
+                endpoint=f"{device_name}:{ixia_interface_mimic_ebgp}",
+                device_group_configs=[
+                    taac_types.DeviceGroupConfig(
+                        device_group_index=0,
+                        multiplier=1,
+                        v6_addresses_config=taac_types.IpAddressesConfig(
+                            starting_ip=f"{ixia_ebgp_ic_parent_network_v6}::11",
+                            increment_ip="0:0:0:0::2",
+                            gateway_starting_ip=f"{ixia_ebgp_ic_parent_network_v6}::10",
+                            gateway_increment_ip="0:0:0:0::2",
+                        ),
+                        v6_bgp_config=taac_types.BgpConfig(
+                            local_as_4_bytes=ebgp_remote_as,
+                            enable_4_byte_local_as=True,
+                            is_confed=False,
+                            bgp_peer_type=ixia_types.BgpPeerType.EBGP,
+                            bgp_capabilities=[ixia_types.BgpCapability.IpV6Unicast],
+                            route_scales=[
+                                taac_types.RouteScaleSpec(
+                                    network_group_index=0,
+                                    v6_route_scale=taac_types.RouteScale(
+                                        multiplier=1,
+                                        prefix_count=1,
+                                        prefix_length=64,
+                                        starting_prefixes="2001:db8::",
+                                        prefix_step="0:0:0:1::",
+                                        bgp_communities=ixia_ebgp_communities,
+                                        ip_address_family=ixia_types.IpAddressFamily.IPV6,
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                    taac_types.DeviceGroupConfig(
+                        device_group_index=1,
+                        multiplier=1,
+                        v4_addresses_config=taac_types.IpAddressesConfig(
+                            starting_ip=f"{ixia_ebgp_ic_parent_network_v4}.11",
+                            increment_ip="0.0.0.2",
+                            gateway_starting_ip=f"{ixia_ebgp_ic_parent_network_v4}.10",
+                            gateway_increment_ip="0.0.0.2",
+                            mask=31,
+                        ),
+                        v4_bgp_config=taac_types.BgpConfig(
+                            local_as_4_bytes=ebgp_remote_as,
+                            enable_4_byte_local_as=True,
+                            is_confed=False,
+                            bgp_peer_type=ixia_types.BgpPeerType.EBGP,
+                            bgp_capabilities=[ixia_types.BgpCapability.IpV4Unicast],
+                            route_scales=[
+                                taac_types.RouteScaleSpec(
+                                    network_group_index=0,
+                                    v4_route_scale=taac_types.RouteScale(
+                                        multiplier=1,
+                                        prefix_count=1,
+                                        prefix_length=24,
+                                        starting_prefixes="100.0.0.0",
+                                        prefix_step="0.0.1.0",
+                                        bgp_communities=ixia_ebgp_communities,
+                                        ip_address_family=ixia_types.IpAddressFamily.IPV4,
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+            taac_types.BasicPortConfig(
+                endpoint=f"{device_name}:{ixia_interface_mimic_ibgp}",
+                device_group_configs=[
+                    taac_types.DeviceGroupConfig(
+                        device_group_index=0,
+                        multiplier=1,
+                        v6_addresses_config=taac_types.IpAddressesConfig(
+                            starting_ip=f"{ixia_ibgp_ic_parent_network_v6}::11",
+                            increment_ip="0:0:0:0::2",
+                            gateway_starting_ip=f"{ixia_ibgp_ic_parent_network_v6}::10",
+                            gateway_increment_ip="0:0:0:0::2",
+                            mask=127,
+                        ),
+                        v6_bgp_config=taac_types.BgpConfig(
+                            local_as_4_bytes=ibgp_remote_as,
+                            enable_4_byte_local_as=True,
+                            is_confed=False,
+                            bgp_peer_type=ixia_types.BgpPeerType.IBGP,
+                            bgp_capabilities=[ixia_types.BgpCapability.IpV6Unicast],
+                        ),
+                    ),
+                    taac_types.DeviceGroupConfig(
+                        device_group_index=1,
+                        multiplier=1,
+                        v4_addresses_config=taac_types.IpAddressesConfig(
+                            starting_ip=f"{ixia_ibgp_ic_parent_network_v4}.11",
+                            increment_ip="0.0.0.2",
+                            gateway_starting_ip=f"{ixia_ibgp_ic_parent_network_v4}.10",
+                            gateway_increment_ip="0.0.0.2",
+                            mask=31,
+                        ),
+                        v4_bgp_config=taac_types.BgpConfig(
+                            local_as_4_bytes=ibgp_remote_as,
+                            enable_4_byte_local_as=True,
+                            is_confed=False,
+                            bgp_peer_type=ixia_types.BgpPeerType.IBGP,
+                            bgp_capabilities=[ixia_types.BgpCapability.IpV4Unicast],
+                        ),
+                    ),
+                ],
+            ),
+        ],
+        playbooks=[
+            create_test_constant_attribute_storage_playbook(
+                device_name=device_name,
+                peergroup_ibgp_v6=peergroup_ibgp_v6,
+                peergroup_ebgp_v6=peergroup_ebgp_v6,
+                peergroup_ibgp_v4=peergroup_ibgp_v4,
+                peergroup_ebgp_v4=peergroup_ebgp_v4,
+                ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
+                ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+                ibgp_remote_as=ibgp_remote_as,
+                ebgp_remote_as=ebgp_remote_as,
+                ebgp_peer_counts=ebgp_peer_counts,
+                unqiue_prefix_limit=unqiue_prefix_limit,
+                total_path_limit=total_path_limit,
+                ixia_ebgp_ic_parent_network_v6=ixia_ebgp_ic_parent_network_v6,
+                ixia_ibgp_ic_parent_network_v6=ixia_ibgp_ic_parent_network_v6,
+                ixia_ebgp_ic_parent_network_v4=ixia_ebgp_ic_parent_network_v4,
+                ixia_ibgp_ic_parent_network_v4=ixia_ibgp_ic_parent_network_v4,
+                ixia_ebgp_communities=ixia_ebgp_communities,
+                ixia_ibgp_communities=ixia_ibgp_communities,
+                ebgp_ingress_policy_name=ebgp_ingress_policy_name,
+                ebgp_egress_policy_name=ebgp_egress_policy_name,
+                ibgp_ingress_policy_name=ibgp_ingress_policy_name,
+                ibgp_egress_policy_name=ibgp_egress_policy_name,
+                ibgp_peer_count=ibgp_peer_count,
+                prefix_counts=prefix_counts,
+            ),
+        ],
+    )
+
+
+# =============================================================================
+# Wave 5D.2 -- new testbed-driven factories for the routing catalog.
+# =============================================================================
+
+
+def create_bgp_ebb_characteristic_separable_policy_test_config(
+    testbed: Testbed,
+    *,
+    name: str,
+    ebgp_remote_as: int = 65334,
+    ixia_ebgp_ic_parent_network_v6: str = "2401:db00:e50d:11:8",
+    ixia_ebgp_ic_parent_network_v4: str = "10.163.28",
+    ebgp_peer_count_v6: int = 1,
+    ebgp_peer_count_v4: int = 1,
+    prefix_count: int = 50000,
+    ssh_user: str | None = None,
+    log_collection_timeout: int | None = None,
+    direct_ixia_connections: list[DirectIxiaConnection] | None = None,
+) -> taac_types.TestConfig:
+    """Case-8 separable-policy TestConfig (legacy case8 factory).
+
+    Byte-identical to the legacy
+    ``eb02_arista_bgp_plus_plus_separable_policy_1_peer_test_config.py``
+    wrapper when invoked with ``EB02_LAB_ASH6`` + ``ssh_user="admin"``.
+    """
+    device_name = testbed.device_name
+    ebgp_iface, ebgp_port = testbed.ixia_ports[0]
+
+    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
+    resolved_direct_ixia_connections = (
+        direct_ixia_connections
+        if direct_ixia_connections is not None
+        else [
+            DirectIxiaConnection(
+                interface=ebgp_iface,
+                ixia_chassis_ip=testbed.ixia_chassis_ip,
+                ixia_port=ebgp_port,
+            ),
+        ]
+    )
+
+    ssh_password: str | None = None
+    if ssh_user is not None:
+        lab_password_env = (
+            testbed.lab_device_password_env_var or "TAAC_EBB_LAB_DEVICE_PASSWORD"
+        )
+        lab_admin_password_default = testbed.extras.get(
+            "lab_admin_password_default",
+            "dnepit",  # pragma: allowlist secret
+        )
+        ssh_password = os.environ.get(lab_password_env, lab_admin_password_default)
+
+    return test_config_for_bgp_plus_plus_on_ebb_arista_separable_policy(
+        test_config_name=name,
+        device_name=device_name,
+        ixia_interface_mimic_ebgp=ebgp_iface,
+        ebgp_remote_as=ebgp_remote_as,
+        ebgp_peer_count_v6=ebgp_peer_count_v6,
+        ebgp_peer_count_v4=ebgp_peer_count_v4,
+        ixia_ebgp_ic_parent_network_v6=ixia_ebgp_ic_parent_network_v6,
+        ixia_ebgp_ic_parent_network_v4=ixia_ebgp_ic_parent_network_v4,
+        direct_ixia_connections=resolved_direct_ixia_connections,
+        prefix_count=prefix_count,
+        host_driver_args=host_driver_args,
+        oss_mock_device_data=oss_mock_device_data,
+        host_os_type_map=host_os_type_map,
+        ssh_user=ssh_user,
+        ssh_password=ssh_password,
+        log_collection_timeout=log_collection_timeout,
+    )
+
+
+def create_bgp_ebb_characteristic_update_packing_test_config(
+    testbed: Testbed,
+    *,
+    name: str,
+    ebgp_remote_as: int = 65334,
+    ixia_ebgp_ic_parent_network_v6: str = "2401:db00:e50d:11:8",
+    ixia_ebgp_ic_parent_network_v4: str = "10.163.28",
+    ibgp_local_as: int = 64981,
+    ixia_ibgp_ic_parent_network_v6: str = "2401:db00:e50d:11:9",
+    ixia_ibgp_ic_parent_network_v4: str = "10.164.28",
+    ebgp_peer_count: int = 10,
+    prefixes_per_peer: int = 10000,
+    ibgp_peer_count: int = 1,
+    test_address_families: list[str] | None = None,
+    as_path_pool_size: int = 10,
+    community_pool_size: int = 20,
+    as_path_length: int = 3,
+    communities_per_route: int = 2,
+    ebgp_route_acceptance_communities: list[str] | None = None,
+    capture_duration_seconds: int = 300,
+    min_packed_size: int = 3500,
+    restart_bgp_for_complete_view: bool = True,
+    log_collection_timeout: int | None = None,
+    direct_ixia_connections: list[DirectIxiaConnection] | None = None,
+) -> taac_types.TestConfig:
+    """BGP++ UPDATE-packing-validation TestConfig (legacy update_packing factory).
+
+    Byte-identical to the legacy
+    ``eb02_arista_bgp_update_packing_validation_test_config.py``
+    wrapper when invoked with ``EB02_LAB_ASH6`` and its wrapper defaults.
+    """
+    if test_address_families is None:
+        test_address_families = ["ipv6"]
+    if ebgp_route_acceptance_communities is None:
+        ebgp_route_acceptance_communities = ["65529:39744"]
+
+    device_name = testbed.device_name
+    ebgp_iface, ebgp_port = testbed.ixia_ports[0]
+    ibgp_iface, ibgp_port = testbed.ixia_ports[1]
+
+    host_driver_args, oss_mock_device_data = _lab_device_wiring(testbed)
+    host_os_type_map = {device_name: taac_types.DeviceOsType.ARISTA_FBOSS}
+    resolved_direct_ixia_connections = (
+        direct_ixia_connections
+        if direct_ixia_connections is not None
+        else [
+            DirectIxiaConnection(
+                interface=ebgp_iface,
+                ixia_chassis_ip=testbed.ixia_chassis_ip,
+                ixia_port=ebgp_port,
+            ),
+            DirectIxiaConnection(
+                interface=ibgp_iface,
+                ixia_chassis_ip=testbed.ixia_chassis_ip,
+                ixia_port=ibgp_port,
+            ),
+        ]
+    )
+
+    return test_config_bgp_update_packing_validation(
+        test_config_name=name,
+        device_name=device_name,
+        ixia_interface_mimic_ebgp=ebgp_iface,
+        ebgp_remote_as=ebgp_remote_as,
+        ixia_ebgp_ic_parent_network_v6=ixia_ebgp_ic_parent_network_v6,
+        ixia_ebgp_ic_parent_network_v4=ixia_ebgp_ic_parent_network_v4,
+        ixia_interface_mimic_ibgp=ibgp_iface,
+        ibgp_local_as=ibgp_local_as,
+        ixia_ibgp_ic_parent_network_v6=ixia_ibgp_ic_parent_network_v6,
+        ixia_ibgp_ic_parent_network_v4=ixia_ibgp_ic_parent_network_v4,
+        ebgp_peer_count=ebgp_peer_count,
+        prefixes_per_peer=prefixes_per_peer,
+        ibgp_peer_count=ibgp_peer_count,
+        test_address_families=test_address_families,
+        as_path_pool_size=as_path_pool_size,
+        community_pool_size=community_pool_size,
+        as_path_length=as_path_length,
+        communities_per_route=communities_per_route,
+        ebgp_route_acceptance_communities=ebgp_route_acceptance_communities,
+        capture_duration_seconds=capture_duration_seconds,
+        min_packed_size=min_packed_size,
+        restart_bgp_for_complete_view=restart_bgp_for_complete_view,
+        host_driver_args=host_driver_args,
+        oss_mock_device_data=oss_mock_device_data,
+        host_os_type_map=host_os_type_map,
+        direct_ixia_connections=resolved_direct_ixia_connections,
+        log_collection_timeout=log_collection_timeout,
+    )
+
+
+def create_bgp_ebb_characteristic_verify_computational_load_test_config(
+    testbed: Testbed,
+    *,
+    name: str,
+    peergroup_ibgp_v6: str = "PEERGROUP_FAUU_FADU_V6_NEW",
+    peergroup_ebgp_v6: str = "PEERGROUP_FAUU_EB_V6_NEW",
+    peergroup_ibgp_v4: str = "PEERGROUP_FAUU_FADU_V4_NEW",
+    peergroup_ebgp_v4: str = "PEERGROUP_FAUU_EB_V4_NEW",
+    ebgp_remote_as: int = 64734,
+    ebgp_peer_scale: int = 1,
+    unqiue_prefix_limit: int = 75000,
+    total_path_limit: int = 30000000,
+    ixia_ebgp_ic_parent_network_v6: str = "2401:db00:e50d:11:8",
+    ixia_ibgp_ic_parent_network_v6: str = "2401:db00:e50d:11:9",
+    ixia_ebgp_ic_parent_network_v4: str = "10.163.28",
+    ixia_ibgp_ic_parent_network_v4: str = "10.164.28",
+    ixia_ebgp_communities: list[str] | None = None,
+    ixia_ibgp_communities: list[str] | None = None,
+    ebgp_ingress_policy_name: str = "PROPAGATE_FAUU_EB_IN",
+    ebgp_egress_policy_name: str = "PROPAGATE_FAUU_EB_OUT",
+    ibgp_ingress_policy_name: str = "PROPAGATE_FAUU_FADU_IN",
+    ibgp_egress_policy_name: str = "PROPAGATE_FAUU_FADU_OUT",
+    ibgp_peer_counts: list[int] | None = None,
+    prefix_counts: list[int] | None = None,
+) -> taac_types.TestConfig:
+    """BGP++ computational-load-verification TestConfig.
+
+    Byte-identical to the legacy
+    ``bgp_plus_plus_verify_computational_load_test_config.py`` wrapper when
+    invoked with ``FA001_UU001_QZD1`` and its wrapper defaults. DUT identity
+    + IXIA interface map come from ``testbed`` (interfaces come from
+    ``testbed.extras['dut_iface_*']`` since this FA testbed does not declare
+    ``ixia_ports``). iBGP remote AS is derived from ``testbed.dut_bgp_as``
+    (iBGP is same-AS on FA-UU).
+    """
+    if ixia_ebgp_communities is None:
+        ixia_ebgp_communities = ["65526:35724"]
+    if ixia_ibgp_communities is None:
+        ixia_ibgp_communities = ["65441:133"]
+    if ibgp_peer_counts is None:
+        ibgp_peer_counts = [200]
+    if prefix_counts is None:
+        prefix_counts = [2000]
+
+    assert testbed.dut_bgp_as is not None, "factory requires dut_bgp_as on testbed"
+    device_name = testbed.device_name
+    ixia_interface_mimic_ebgp = testbed.extras["dut_iface_ebgp"]
+    ixia_interface_mimic_ibgp = testbed.extras["dut_iface_ibgp"]
+
+    return test_config_to_verify_computational_load_of_bgp_plus_plus(
+        test_config_name=name,
+        device_name=device_name,
+        peergroup_ibgp_v6=peergroup_ibgp_v6,
+        peergroup_ebgp_v6=peergroup_ebgp_v6,
+        peergroup_ibgp_v4=peergroup_ibgp_v4,
+        peergroup_ebgp_v4=peergroup_ebgp_v4,
+        ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
+        ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+        ibgp_remote_as=testbed.dut_bgp_as,
+        ebgp_remote_as=ebgp_remote_as,
+        ebgp_peer_scale=ebgp_peer_scale,
+        unqiue_prefix_limit=unqiue_prefix_limit,
+        total_path_limit=total_path_limit,
+        ixia_ebgp_ic_parent_network_v6=ixia_ebgp_ic_parent_network_v6,
+        ixia_ibgp_ic_parent_network_v6=ixia_ibgp_ic_parent_network_v6,
+        ixia_ebgp_ic_parent_network_v4=ixia_ebgp_ic_parent_network_v4,
+        ixia_ibgp_ic_parent_network_v4=ixia_ibgp_ic_parent_network_v4,
+        ixia_ebgp_communities=ixia_ebgp_communities,
+        ixia_ibgp_communities=ixia_ibgp_communities,
+        ebgp_ingress_policy_name=ebgp_ingress_policy_name,
+        ebgp_egress_policy_name=ebgp_egress_policy_name,
+        ibgp_ingress_policy_name=ibgp_ingress_policy_name,
+        ibgp_egress_policy_name=ibgp_egress_policy_name,
+        ibgp_peer_counts=ibgp_peer_counts,
+        prefix_counts=prefix_counts,
+    )
+
+
+def create_bgp_ebb_characteristic_verify_constant_attribute_storage_test_config(
+    testbed: Testbed,
+    *,
+    name: str,
+    peergroup_ibgp_v6: str = "PEERGROUP_FAUU_FADU_V6_NEW",
+    peergroup_ebgp_v6: str = "PEERGROUP_FAUU_EB_V6_NEW",
+    peergroup_ibgp_v4: str = "PEERGROUP_FAUU_FADU_V4_NEW",
+    peergroup_ebgp_v4: str = "PEERGROUP_FAUU_EB_V4_NEW",
+    ebgp_remote_as: int = 64734,
+    ebgp_peer_counts: list[int] | None = None,
+    unqiue_prefix_limit: int = 75000,
+    total_path_limit: int = 30000000,
+    ixia_ebgp_ic_parent_network_v6: str = "2401:db00:e50d:11:8",
+    ixia_ibgp_ic_parent_network_v6: str = "2401:db00:e50d:11:9",
+    ixia_ebgp_ic_parent_network_v4: str = "10.163.28",
+    ixia_ibgp_ic_parent_network_v4: str = "10.164.28",
+    ixia_ebgp_communities: list[str] | None = None,
+    ixia_ibgp_communities: list[str] | None = None,
+    ebgp_ingress_policy_name: str = "PROPAGATE_FAUU_EB_IN",
+    ebgp_egress_policy_name: str = "PROPAGATE_FAUU_EB_OUT",
+    ibgp_ingress_policy_name: str = "PROPAGATE_FAUU_FADU_IN",
+    ibgp_egress_policy_name: str = "PROPAGATE_FAUU_FADU_OUT",
+    prefix_counts: list[int] | None = None,
+    ibgp_peer_count: int = 1000,
+) -> taac_types.TestConfig:
+    """BGP++ constant-attribute-storage-verification TestConfig.
+
+    Byte-identical to the legacy
+    ``bgp_plus_plus_verify_constant_attribute_storage_test_config.py``
+    wrapper when invoked with ``FA001_UU001_QZD1`` and its wrapper defaults.
+    """
+    if ebgp_peer_counts is None:
+        ebgp_peer_counts = [1, 4, 16, 64, 128]
+    if ixia_ebgp_communities is None:
+        ixia_ebgp_communities = ["65526:35724"]
+    if ixia_ibgp_communities is None:
+        ixia_ibgp_communities = ["65441:133"]
+    if prefix_counts is None:
+        prefix_counts = [10000]
+
+    assert testbed.dut_bgp_as is not None, "factory requires dut_bgp_as on testbed"
+    device_name = testbed.device_name
+    ixia_interface_mimic_ebgp = testbed.extras["dut_iface_ebgp"]
+    ixia_interface_mimic_ibgp = testbed.extras["dut_iface_ibgp"]
+
+    return test_config_to_verify_constant_attribute_storage(
+        test_config_name=name,
+        device_name=device_name,
+        peergroup_ibgp_v6=peergroup_ibgp_v6,
+        peergroup_ebgp_v6=peergroup_ebgp_v6,
+        peergroup_ibgp_v4=peergroup_ibgp_v4,
+        peergroup_ebgp_v4=peergroup_ebgp_v4,
+        ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
+        ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+        ibgp_remote_as=testbed.dut_bgp_as,
+        ebgp_remote_as=ebgp_remote_as,
+        ebgp_peer_counts=ebgp_peer_counts,
+        unqiue_prefix_limit=unqiue_prefix_limit,
+        total_path_limit=total_path_limit,
+        ixia_ebgp_ic_parent_network_v6=ixia_ebgp_ic_parent_network_v6,
+        ixia_ibgp_ic_parent_network_v6=ixia_ibgp_ic_parent_network_v6,
+        ixia_ebgp_ic_parent_network_v4=ixia_ebgp_ic_parent_network_v4,
+        ixia_ibgp_ic_parent_network_v4=ixia_ibgp_ic_parent_network_v4,
+        ixia_ebgp_communities=ixia_ebgp_communities,
+        ixia_ibgp_communities=ixia_ibgp_communities,
+        ebgp_ingress_policy_name=ebgp_ingress_policy_name,
+        ebgp_egress_policy_name=ebgp_egress_policy_name,
+        ibgp_ingress_policy_name=ibgp_ingress_policy_name,
+        ibgp_egress_policy_name=ibgp_egress_policy_name,
+        prefix_counts=prefix_counts,
+        ibgp_peer_count=ibgp_peer_count,
     )

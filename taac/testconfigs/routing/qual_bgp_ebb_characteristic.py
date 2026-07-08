@@ -19,6 +19,8 @@ from taac.testconfigs.routing.factories.bgp_ebb_characteristic import (
     create_bgp_ebb_characteristic_constant_attribute_storage_test_config,
     create_bgp_ebb_characteristic_constant_attribute_storage_varying_combinations_test_config,
     create_bgp_ebb_characteristic_queue_memory_monitor_test_config,
+    create_bgp_ebb_characteristic_separable_policy_test_config,
+    create_bgp_ebb_characteristic_update_packing_test_config,
 )
 from taac.testconfigs.routing.testbed import (
     EB02_LAB_ASH6,
@@ -116,8 +118,31 @@ EB_TEST_DEVICE_BGP_QUEUE_MEMORY_MONITOR_IPV6_50EBGP_25IBGP_WITH_FLAPPING_TEST_CO
 )
 
 
+# ─── EB02 -- separable policy case 8 (ssh_user=admin, sends via BgpPeers) ─
+# Legacy wrapper wired ``direct_ixia_connections`` EBGP-only (Ethernet3/1/3
+# card 6/2). Preserve the ordering for byte-identical golden hash.
+EB02_ARISTA_BGP_PLUS_PLUS_SEPARABLE_POLICY_1_PEER_TEST_CONFIG = (
+    create_bgp_ebb_characteristic_separable_policy_test_config(
+        EB02_LAB_ASH6,
+        name="EB02_ARISTA_BGP_PLUS_PLUS_SEPARABLE_POLICY_1_PEER",
+        ssh_user="admin",
+    )
+)
+
+
+# ─── EB02 -- BGP UPDATE message packing validation ────────────────────────
+EB02_ARISTA_BGP_UPDATE_PACKING_VALIDATION_TEST_CONFIG = (
+    create_bgp_ebb_characteristic_update_packing_test_config(
+        EB02_LAB_ASH6,
+        name="EB02_ARISTA_BGP_UPDATE_PACKING_VALIDATION",
+    )
+)
+
+
 __all__ = [
+    "EB02_ARISTA_BGP_PLUS_PLUS_SEPARABLE_POLICY_1_PEER_TEST_CONFIG",
     "EB02_ARISTA_BGP_QUEUE_MEMORY_MONITOR_IPV6_50EBGP_25IBGP_WITH_FLAPPING_TEST_CONFIG",
+    "EB02_ARISTA_BGP_UPDATE_PACKING_VALIDATION_TEST_CONFIG",
     "EB02_ARISTA_CONSTANT_ATTRIBUTE_STORAGE_VARYING_COMBINATIONS_TEST_CONFIG",
     "EB03_ARISTA_HIGH_DIVERSITY_TEST_CONFIG",
     "EB04_ARISTA_BGP_QUEUE_MEMORY_MONITOR_IPV6_50EBGP_25IBGP_WITH_FLAPPING_TEST_CONFIG",
