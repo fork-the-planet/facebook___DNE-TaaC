@@ -6145,6 +6145,204 @@ class Ixia:
             self.logger.error(f"Error getting BGP update statistics: {str(e)}")
             return []
 
+    def _build_bgp_peer_ip_mapping(self) -> t.Dict[str, t.Dict[str, str]]:
+        """Build ``{peer_key -> {Remote IP, Local IP}}`` by walking the
+        IxNetwork protocol tree. Keys are ``f"{peer.Name}#{idx + 1}"`` where
+        ``idx`` is the session index within the BgpPeer object. This mirrors
+        ``Device#`` in the ``BGP[+] Peer Drill Down`` StatView rows so caller
+        can join by ``f"{Protocol}#{Device#}"``.
+        """
+        mapping: t.Dict[str, t.Dict[str, str]] = {}
+        try:
+            for topo in self.ixnetwork.Topology.find():
+                for dg in topo.DeviceGroup.find():
+                    for eth in dg.Ethernet.find():
+                        for ip_layer_attr, peer_attr in (
+                            ("Ipv6", "BgpIpv6Peer"),
+                            ("Ipv4", "BgpIpv4Peer"),
+                        ):
+                            try:
+                                for ip_layer in getattr(eth, ip_layer_attr).find():
+                                    self._extract_bgp_peers_from_ip_layer(
+                                        ip_layer, peer_attr, mapping
+                                    )
+                            except Exception as e:
+                                self.logger.debug(
+                                    f"BGP peer-ip mapping skip {ip_layer_attr}: {e}"
+                                )
+        except Exception as e:
+            self.logger.warning(f"Could not build BGP peer-ip mapping: {e}")
+        return mapping
+
+    def _extract_bgp_peers_from_ip_layer(
+        self,
+        ip_layer: t.Any,
+        bgp_attr: str,
+        mapping: t.Dict[str, t.Dict[str, str]],
+    ) -> None:
+        """Extract BGP peer entries from an IPv4/IPv6 layer into ``mapping``.
+
+        Uses ``f"{name}#{idx + 1}"`` unconditionally (single-session peers
+        included) so the join key format matches the drill-down view's
+        ``Protocol#Device#`` regardless of session multiplicity.
+
+        ``local_ips`` is shared across all BgpPeer objects under this layer;
+        each peer's sessions consume a slice starting at the running
+        ``layer_offset`` so peers past the first pick up their own local IPs
+        rather than aliasing the first peer's.
+        """
+        local_ips = ip_layer.Address.Values
+        layer_offset = 0
+        for peer in getattr(ip_layer, bgp_attr).find():
+            remote_ips = peer.DutIp.Values
+            name = peer.Name
+            for idx in range(len(remote_ips)):
+                local_idx = layer_offset + idx
+                local = local_ips[local_idx] if local_idx < len(local_ips) else ""
+                remote = remote_ips[idx] if idx < len(remote_ips) else ""
+                key = f"{name}#{idx + 1}"
+                mapping[key] = {"Local IP": local, "Remote IP": remote}
+            layer_offset += len(remote_ips)
+
+    def _wait_view_page_ready(
+        self,
+        page: t.Any,
+        caption: str,
+        timeout_s: float = 60.0,
+        poll_s: float = 0.5,
+    ) -> bool:
+        """Poll ``page.IsReady`` until True or timeout. Returns True if ready."""
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            try:
+                if page.IsReady:
+                    return True
+            except Exception as e:
+                self.logger.debug(f"IsReady poll on {caption}: {e}")
+            time.sleep(poll_s)
+        return False
+
+    def _read_drill_down_view(
+        self,
+        view: t.Any,
+        peer_map: t.Dict[str, t.Dict[str, str]],
+    ) -> t.List[t.Dict[str, t.Any]]:
+        """Read one BGP drill-down view; join rows to peer IPs via peer_map."""
+        caption = view.Caption
+        out: t.List[t.Dict[str, t.Any]] = []
+        view.Enabled = True
+        view.Refresh()
+        try:
+            view.Page.PageSize = 2000
+        except Exception:
+            pass
+
+        page = view.Page
+        if not self._wait_view_page_ready(page, caption):
+            self.logger.warning(
+                f"[per-peer-wire] {caption}: page never became ready; skipping"
+            )
+            return out
+
+        cols = page.ColumnCaptions
+        total_pages = page.TotalPages
+        for pg_num in range(1, total_pages + 1):
+            page.CurrentPage = pg_num
+            raw_rows = page.PageValues
+            if not raw_rows:
+                continue
+            for row_values in raw_rows:
+                vals = (
+                    row_values[0]
+                    if len(row_values) == 1 and isinstance(row_values[0], list)
+                    else row_values
+                )
+                stat_entry: t.Dict[str, t.Any] = {}
+                for i, col in enumerate(cols):
+                    if i < len(vals):
+                        stat_entry[col] = vals[i]
+                proto = str(stat_entry.get("Protocol", ""))
+                dev = str(stat_entry.get("Device#", ""))
+                if not proto or not dev:
+                    # Skip rows without both identifiers rather than
+                    # coincidentally aliasing them to session #1.
+                    continue
+                join_key = f"{proto}#{dev}"
+                info = peer_map.get(join_key, {})
+                stat_entry["Remote IP"] = info.get("Remote IP", "")
+                stat_entry["Local IP"] = info.get("Local IP", "")
+                stat_entry["View"] = caption
+                out.append(stat_entry)
+
+        self.logger.info(
+            f"[per-peer-wire] {caption}: rows={len(out)} pages={total_pages}"
+        )
+        return out
+
+    def get_bgp_per_peer_wire_stats(self) -> t.List[t.Dict[str, t.Any]]:
+        """Get per-peer BGP wire counters from the drill-down StatViews.
+
+        Unlike ``get_bgp_update_statistics`` (which reads the per-PORT aggregate
+        ``BGP[+] Peer Per Port`` views), this reads ``BGP Peer Drill Down`` +
+        ``BGP+ Peer Drill Down`` — the true per-peer-per-session views — and
+        correlates each row to its peer IP by joining ``f"{Protocol}#{Device#}"``
+        against the BGP peer topology tree.
+
+        Uses raw View objects from ``ixnetwork.Statistics.View.find()`` (not
+        ``StatViewAssistant``) because drill-down views have no data by default
+        and require explicit ``view.Enabled = True; view.Refresh()`` to
+        populate, then are paginated via ``view.Page.PageValues``. This mirrors
+        the pattern in ``internal/utils/ixia_session_cli.py::_read_drill_down_view``.
+
+        Returns:
+            List of dicts, one per BGP session. Each dict is a copy of the
+            drill-down row plus:
+              - ``"Remote IP"``: the DUT-facing peer IP for this session
+              - ``"Local IP"``: the IXIA-facing local IP for this session
+              - ``"View"``: source StatView caption
+            Callers filter by ``Local IP`` for per-peer aggregation (that
+            field matches the DUT's view of its BGP neighbors).
+        """
+        peer_map = self._build_bgp_peer_ip_mapping()
+        wanted_captions = ("BGP Peer Drill Down", "BGP+ Peer Drill Down")
+        combined: t.List[t.Dict[str, t.Any]] = []
+
+        try:
+            all_views = self.ixnetwork.Statistics.View.find()
+        except Exception as e:
+            self.logger.warning(f"Failed to enumerate IxNetwork Statistics views: {e}")
+            return combined
+
+        matched_views = []
+        for view in all_views:
+            try:
+                if view.Caption in wanted_captions:
+                    matched_views.append(view)
+            except Exception:
+                continue
+
+        if not matched_views:
+            self.logger.warning(
+                f"[per-peer-wire] no drill-down views found "
+                f"(wanted={list(wanted_captions)})"
+            )
+            return combined
+
+        self.logger.info(
+            f"[per-peer-wire] peer_map size={len(peer_map)}, "
+            f"{len(matched_views)} drill-down view(s) to read"
+        )
+
+        for view in matched_views:
+            try:
+                combined.extend(self._read_drill_down_view(view, peer_map))
+            except Exception as e:
+                self.logger.warning(
+                    f"[per-peer-wire] Error reading {view.Caption}: {str(e)}"
+                )
+
+        return combined
+
     def _get_property(
         self, obj: t.Any, property_names: t.List[str]
     ) -> t.Optional[t.Any]:
