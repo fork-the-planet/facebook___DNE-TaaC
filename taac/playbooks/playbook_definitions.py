@@ -7120,6 +7120,482 @@ def create_all_lag_playbooks(
 # =============================================================================
 
 
+def create_cgroup_system_slice_oom_kill_policy_playbook() -> Playbook:
+    """Platform hardening playbook: system.slice OOM kill policy test."""
+    return Playbook(
+        name="test_cgroup_system_slice_oom_kill_policy",
+        postchecks=[
+            create_oomd_kill_check(
+                expected_oom_kills={"system.slice": ["memory-pressure"]},
+            )
+        ],
+        stages=[
+            create_steps_stage(
+                steps=[
+                    create_allocate_cgroup_memory_step(
+                        total_memory_pct_decimal=0.25,
+                        slice_name="system",
+                        duration=180,
+                        minimum_memory_allocation=1048 * 10,
+                        oom_score_adj=1000,
+                    ),
+                    create_longevity_step(duration=300),
+                ]
+            )
+        ],
+    )
+
+
+def create_hardening_of_ndp_overload_entries_playbook(
+    device_name,
+    downlink_iface: str,
+    uplink_iface: str,
+    good_ndp_entries_downlink: int,
+    good_ndp_entries_uplink: int,
+    rogue_ndp_entries: int,
+    ndp_entry_limit: int = NDP_SOFT_LIMIT,
+) -> Playbook:
+    """Platform hardening playbook: NDP overload table test."""
+    return Playbook(
+        name="test_hardening_of_ndp_overload_entries",
+        cleanup_steps=[
+            create_ixia_api_step(
+                api_name="configure_ipv6_entries",
+                args_dict={
+                    "device_group_regex": f".*{downlink_iface}.*",
+                    "prefix_count": good_ndp_entries_downlink,
+                    "toggle_all_ipv6_ipv4_only_protocol": True,
+                },
+            ),
+        ],
+        stages=[
+            create_steps_stage(
+                steps=[
+                    create_ixia_api_step(
+                        api_name="configure_ipv6_entries",
+                        args_dict={
+                            "device_group_regex": f".*{downlink_iface}.*",
+                            "prefix_count": good_ndp_entries_downlink,
+                            "toggle_all_ipv6_ipv4_only_protocol": True,
+                        },
+                    ),
+                    create_ixia_api_step(
+                        api_name="configure_ipv6_entries",
+                        args_dict={
+                            "device_group_regex": f".*{uplink_iface}.*",
+                            "prefix_count": good_ndp_entries_uplink,
+                            "toggle_all_ipv6_ipv4_only_protocol": True,
+                        },
+                    ),
+                    create_ixia_api_step(
+                        api_name="configure_ipv6_entries",
+                        args_dict={
+                            "device_group_regex": f".*{downlink_iface}.*",
+                            "prefix_count": rogue_ndp_entries,
+                            "toggle_all_ipv6_ipv4_only_protocol": True,
+                        },
+                    ),
+                    create_longevity_step(duration=600),
+                ]
+            )
+        ],
+        postchecks=[
+            create_l2_entry_threshold_check(
+                ndp_entry_upper_lower_threshold=(
+                    ndp_entry_limit,
+                    good_ndp_entries_uplink + good_ndp_entries_downlink,
+                )
+            ),
+            get_ixia_healthcheck_stable_state(device_name),
+        ],
+    )
+
+
+def create_hardening_of_arp_overload_entries_playbook(
+    downlink_iface: str,
+    uplink_iface: str,
+    good_arp_entries: int,
+    rogue_arp_entries: int,
+    arp_entry_limit: int = ARP_SOFT_LIMIT,
+) -> Playbook:
+    """Platform hardening playbook: ARP overload table test."""
+    return Playbook(
+        name="test_hardening_of_arp_overload_entries",
+        cleanup_steps=[
+            create_ixia_api_step(
+                api_name="configure_ipv4_entries",
+                args_dict={
+                    "device_group_regex": f".*{downlink_iface}.*",
+                    "prefix_count": 1,
+                    "toggle_all_ipv6_ipv4_only_protocol": True,
+                },
+            ),
+        ],
+        stages=[
+            create_steps_stage(
+                steps=[
+                    create_ixia_api_step(
+                        api_name="configure_ipv4_entries",
+                        args_dict={
+                            "device_group_regex": f".*{downlink_iface}.*",
+                            "prefix_count": 1,
+                            "toggle_all_ipv6_ipv4_only_protocol": True,
+                        },
+                    ),
+                    create_ixia_api_step(
+                        api_name="configure_ipv4_entries",
+                        args_dict={
+                            "device_group_regex": f".*{uplink_iface}.*",
+                            "prefix_count": good_arp_entries,
+                            "toggle_all_ipv6_ipv4_only_protocol": True,
+                        },
+                    ),
+                    create_ixia_api_step(
+                        api_name="configure_ipv4_entries",
+                        args_dict={
+                            "device_group_regex": f".*{downlink_iface}.*",
+                            "prefix_count": rogue_arp_entries,
+                            "toggle_all_ipv6_ipv4_only_protocol": True,
+                        },
+                    ),
+                    create_longevity_step(duration=600),
+                ]
+            )
+        ],
+        postchecks=[
+            create_l2_entry_threshold_check(
+                arp_entry_upper_lower_threshold=(
+                    arp_entry_limit,
+                    good_arp_entries,
+                )
+            ),
+        ],
+    )
+
+
+def create_hardening_of_mac_overload_entries_playbook(
+    downlink_iface: str,
+    rogue_mac_entry_count: int,
+    good_mac_entry_count: int,
+    good_ndp_entries_uplink: int,
+    good_ndp_entries_downlink: int,
+    good_arp_entries: int,
+    mac_entry_limit: int = MAC_SOFT_LIMIT,
+) -> Playbook:
+    """Platform hardening playbook: MAC overload table test."""
+    return Playbook(
+        name="test_hardening_of_mac_overload_entries",
+        cleanup_steps=[
+            create_ixia_api_step(
+                api_name="configure_traffic_item_src_mac_entry_count",
+                args_dict={
+                    "src_mac_entry_count": 1,
+                    "traffic_item_regex": f".*_{downlink_iface}_.*",
+                },
+            ),
+        ],
+        stages=[
+            create_steps_stage(
+                steps=[
+                    create_ixia_api_step(
+                        api_name="configure_traffic_item_src_mac_entry_count",
+                        args_dict={
+                            "src_mac_entry_count": rogue_mac_entry_count,
+                            "traffic_item_regex": f".*_{downlink_iface}_.*",
+                        },
+                    ),
+                    create_longevity_step(duration=100),
+                ],
+            )
+        ],
+        postchecks=[
+            create_l2_entry_threshold_check(
+                mac_entry_upper_lower_threshold=(
+                    mac_entry_limit,
+                    good_mac_entry_count
+                    + good_ndp_entries_uplink
+                    + good_ndp_entries_downlink
+                    + good_arp_entries,
+                )
+            ),
+        ],
+    )
+
+
+def create_bgp_malformed_packet_test_playbook(device_name) -> Playbook:
+    """Platform hardening playbook: BGP malformed packet handling test."""
+    return Playbook(
+        name="test_bgp_malformed_packet_test",
+        iteration=1,
+        postchecks=[
+            get_ixia_healthcheck_ignore_cpu_and_v4_directional_traffic(device_name),
+        ],
+        cleanup_steps=[],
+        stages=[
+            create_steps_stage(
+                steps=[
+                    create_ixia_api_step(
+                        api_name="bounce_bgp_next_hop_attribute",
+                        args_dict={
+                            "enable": False,
+                            "network_group_regex": "NO_PACKET_LOSS_EXPECTED|ECMP_1",
+                        },
+                    ),
+                    create_ixia_api_step(
+                        api_name="bounce_bgp_next_hop_attribute",
+                        args_dict={
+                            "enable": False,
+                            "network_group_regex": "NO_PACKET_LOSS_EXPECTED|ECMP_1",
+                        },
+                    ),
+                    create_longevity_step(duration=1000),
+                    create_ixia_api_step(
+                        api_name="bounce_bgp_next_hop_attribute",
+                        args_dict={
+                            "enable": True,
+                            "network_group_regex": "NO_PACKET_LOSS_EXPECTED|ECMP_1",
+                        },
+                    ),
+                    create_ixia_api_step(
+                        api_name="bounce_bgp_next_hop_attribute",
+                        args_dict={
+                            "enable": True,
+                            "network_group_regex": "NO_PACKET_LOSS_EXPECTED|ECMP_1",
+                        },
+                    ),
+                    create_longevity_step(duration=200),
+                ]
+            ),
+        ],
+    )
+
+
+def create_ecmp_member_overload_limit_playbook(
+    ixia_uplink_good_ndp_network,
+    ecmp_group_limit: int,
+    good_ndp_entries_uplink: int,
+    ecmp_member_limit: int = 11500,
+    ecmp_member_test_member_limit: int = 11950,
+    ecmp_member_test_group_limit: int = 1300,
+) -> Playbook:
+    """Platform hardening playbook: ECMP member overload limit test."""
+    return Playbook(
+        iteration=1,
+        name="test_ecmp_member_overload_limit",
+        postchecks=[
+            AGENT_RESTART_SERVICE_CHECK,
+        ],
+        cleanup_steps=[
+            create_ixia_api_step(
+                api_name="toggle_device_groups",
+                args_dict={
+                    "enable": False,
+                    "device_group_name_regex": "ECMP_2",
+                },
+            ),
+            create_ecmp_member_static_route_step(
+                delete_patcher_and_exit_step=True,
+            ),
+            create_service_interruption_step(
+                service=taac_types.Service.AGENT,
+                trigger=taac_types.ServiceInterruptionTrigger.SYSTEMCTL_RESTART,
+            ),
+            create_service_convergence_step(
+                services=[taac_types.Service.AGENT, taac_types.Service.BGP],
+            ),
+            create_ecmp_member_static_route_step(
+                max_ecmp_group=ecmp_group_limit,
+                max_ecmp_members=ecmp_member_limit,
+                nh_prefix_1=f"{ixia_uplink_good_ndp_network}::/80",
+                lb_prefix_agg="6000:ab::/32",
+                device_group_count=good_ndp_entries_uplink,
+                delete_patcher_and_exit_step=False,
+            ),
+        ],
+        stages=[
+            create_steps_stage(
+                steps=[
+                    create_ecmp_member_static_route_step(
+                        delete_patcher_and_exit_step=True,
+                    ),
+                    create_service_interruption_step(
+                        service=taac_types.Service.AGENT,
+                        trigger=taac_types.ServiceInterruptionTrigger.SYSTEMCTL_RESTART,
+                    ),
+                    create_service_convergence_step(
+                        services=[taac_types.Service.AGENT, taac_types.Service.BGP],
+                    ),
+                    create_ecmp_member_static_route_step(
+                        max_ecmp_group=ecmp_member_test_group_limit,
+                        max_ecmp_members=ecmp_member_test_member_limit,
+                        nh_prefix_1=f"{ixia_uplink_good_ndp_network}::/80",
+                        lb_prefix_agg="6000:ab::/32",
+                        device_group_count=good_ndp_entries_uplink,
+                        delete_patcher_and_exit_step=False,
+                    ),
+                    create_ixia_api_step(
+                        api_name="toggle_device_groups",
+                        args_dict={
+                            "enable": True,
+                            "device_group_name_regex": "ECMP_2",
+                        },
+                    ),
+                    create_longevity_step(duration=600),
+                ],
+            )
+        ],
+    )
+
+
+def create_ecmp_group_overload_limit_playbook() -> Playbook:
+    """Platform hardening playbook: ECMP group overload limit test."""
+    return Playbook(
+        iteration=1,
+        name="test_ecmp_group_overload_limit",
+        cleanup_steps=[
+            create_ixia_api_step(
+                api_name="toggle_device_groups",
+                args_dict={
+                    "enable": False,
+                    "device_group_name_regex": "ECMP_2",
+                },
+            ),
+        ],
+        stages=[
+            create_steps_stage(
+                steps=[
+                    create_ixia_api_step(
+                        api_name="toggle_device_groups",
+                        args_dict={
+                            "enable": True,
+                            "device_group_name_regex": "ECMP_2",
+                        },
+                    ),
+                    create_longevity_step(duration=100),
+                ],
+            )
+        ],
+    )
+
+
+def create_cpu_high_priority_queue_overload_playbook(
+    ixia_rogue_ic_parent_network_v6,
+    ixia_rogue_ic_parent_network_v4,
+) -> Playbook:
+    """Platform hardening playbook: CPU high-priority queue overload test."""
+    return Playbook(
+        name="test_cpu_high_priority_queue_overload",
+        snapshot_checks=[
+            create_bgp_session_snapshot_check(
+                parent_prefixes_to_ignore=[
+                    f"{ixia_rogue_ic_parent_network_v6}::/80",
+                    f"{ixia_rogue_ic_parent_network_v4}.0/16",
+                ],
+                pre_snapshot_checkpoint_id="stage.test_cpu_high_priority_queue_overload.step.sleep_120_secs_after_disabling_bgp_cp_traffic.end",
+            ),
+            create_bgp_session_snapshot_check(
+                skip_flap_check=True,
+                parent_prefixes_to_ignore=[
+                    f"{ixia_rogue_ic_parent_network_v6}::/80",
+                    f"{ixia_rogue_ic_parent_network_v4}.0/16",
+                ],
+                post_snapshot_checkpoint_id="stage.test_cpu_high_priority_queue_overload.step.sleep_120_secs_after_disabling_bgp_cp_traffic.end",
+            ),
+        ],
+        stages=[
+            create_steps_stage(
+                stage_id="test_cpu_high_priority_queue_overload",
+                steps=[
+                    create_ixia_api_step(
+                        api_name="enable_traffic",
+                        args_dict={
+                            "regexes": ["HIGH_QUEUE_BGP_CP_TRAFFIC"],
+                            "enable": True,
+                        },
+                    ),
+                    create_longevity_step(duration=150),
+                    create_ixia_api_step(
+                        api_name="enable_traffic",
+                        args_dict={
+                            "regexes": ["HIGH_QUEUE_BGP_CP_TRAFFIC"],
+                            "enable": False,
+                        },
+                    ),
+                    create_longevity_step(
+                        duration=120,
+                        step_id="sleep_120_secs_after_disabling_bgp_cp_traffic",
+                    ),
+                    create_ixia_api_step(
+                        api_name="clear_traffic_stats",
+                        args_dict={},
+                    ),
+                    create_longevity_step(duration=30),
+                ],
+            )
+        ],
+    )
+
+
+def create_fboss_sw_agent_warmboot_playbook() -> Playbook:
+    """Platform hardening playbook: FBOSS sw_agent warmboot (wrapper for module-level constant)."""
+    return TEST_FBOSS_SW_AGENT_WARMBOOT_PLAYBOOK
+
+
+def create_fboss_sw_agent_crash_playbook() -> Playbook:
+    """Platform hardening playbook: FBOSS sw_agent crash (wrapper for module-level constant)."""
+    return TEST_FBOSS_SW_AGENT_CRASH_PLAYBOOK
+
+
+def create_fboss_hw_agent_0_restart_playbook() -> Playbook:
+    """Platform hardening playbook: FBOSS hw_agent_0 systemctl restart (wrapper for module-level constant)."""
+    return TEST_FBOSS_HW_AGENT_0_RESTART_PLAYBOOK
+
+
+def create_fboss_hw_agent_0_crash_playbook() -> Playbook:
+    """Platform hardening playbook: FBOSS hw_agent_0 crash (wrapper for module-level constant)."""
+    return TEST_FBOSS_HW_AGENT_0_CRASH_PLAYBOOK
+
+
+def create_fboss_sw_agent_and_hw_agent_0_restart_playbook() -> Playbook:
+    """Platform hardening playbook: concurrent FBOSS sw_agent + hw_agent_0 restart (wrapper for module-level constant)."""
+    return TEST_FBOSS_SW_AGENT_AND_HW_AGENT_0_RESTART_PLAYBOOK
+
+
+def create_fboss_sw_agent_and_hw_agent_0_crash_playbook() -> Playbook:
+    """Platform hardening playbook: concurrent FBOSS sw_agent + hw_agent_0 crash (wrapper for module-level constant)."""
+    return TEST_FBOSS_SW_AGENT_AND_HW_AGENT_0_CRASH_PLAYBOOK
+
+
+def create_bgpd_and_fsdb_restart_playbook() -> Playbook:
+    """Platform hardening playbook: bgpd + fsdb concurrent restart (wrapper for module-level constant)."""
+    return TEST_BGPD_AND_FSDB_RESTART_PLAYBOOK
+
+
+def create_agent_and_bgpd_restart_playbook() -> Playbook:
+    """Platform hardening playbook: wedge_agent + bgpd concurrent restart (wrapper for module-level constant)."""
+    return TEST_AGENT_AND_BGPD_RESTART_PLAYBOOK
+
+
+def create_agent_and_fsdb_restart_playbook() -> Playbook:
+    """Platform hardening playbook: wedge_agent + fsdb concurrent restart (wrapper for module-level constant)."""
+    return TEST_AGENT_AND_FSDB_RESTART_PLAYBOOK
+
+
+def create_agent_and_qsfp_service_restart_playbook() -> Playbook:
+    """Platform hardening playbook: wedge_agent + qsfp_service concurrent restart (wrapper for module-level constant)."""
+    return TEST_AGENT_AND_QSFP_SERVICE_RESTART_PLAYBOOK
+
+
+def create_fsdb_and_qsfp_service_restart_playbook() -> Playbook:
+    """Platform hardening playbook: fsdb + qsfp_service concurrent restart (wrapper for module-level constant)."""
+    return TEST_FSDB_AND_QSFP_SERVICE_RESTART_PLAYBOOK
+
+
+def create_sw_agent_and_wedge_agent_restart_playbook() -> Playbook:
+    """Platform hardening playbook: fboss_sw_agent + wedge_agent restart (wrapper for module-level constant)."""
+    return TEST_SW_AGENT_AND_WEDGE_AGENT_RESTART_PLAYBOOK
+
+
 def get_platform_hardening_playbooks(
     device_name,
     ixia_downlink_interface,
@@ -7149,179 +7625,40 @@ def get_platform_hardening_playbooks(
     """
     Returns a list of platform hardening playbooks.
 
-    These playbooks test the DUT under extreme platform-level conditions
-    including memory pressure, L2 table overflows, ECMP limit violations,
-    CPU queue overload, malformed BGP packets, and service crash/restart
-    combinations.
+    Composer over 31 individual per-playbook factories. Retained for
+    backward compatibility with the ``PLAYBOOK_CATEGORY_REGISTRY`` dispatch
+    pattern in ``factories/bgp_dc_chronos_node.py``.
     """
     # Uppercase interface names for IXIA API regex matching
     downlink_iface = ixia_downlink_interface.upper()
     uplink_iface = ixia_uplink_interface.upper()
 
     return [
-        Playbook(
-            name="test_cgroup_system_slice_oom_kill_policy",
-            postchecks=[
-                create_oomd_kill_check(
-                    expected_oom_kills={"system.slice": ["memory-pressure"]},
-                )
-            ],
-            stages=[
-                create_steps_stage(
-                    steps=[
-                        create_allocate_cgroup_memory_step(
-                            total_memory_pct_decimal=0.25,
-                            slice_name="system",
-                            duration=180,
-                            minimum_memory_allocation=1048 * 10,
-                            oom_score_adj=1000,
-                        ),
-                        create_longevity_step(duration=300),
-                    ]
-                )
-            ],
+        create_cgroup_system_slice_oom_kill_policy_playbook(),
+        create_hardening_of_ndp_overload_entries_playbook(
+            device_name=device_name,
+            downlink_iface=downlink_iface,
+            uplink_iface=uplink_iface,
+            good_ndp_entries_downlink=good_ndp_entries_downlink,
+            good_ndp_entries_uplink=good_ndp_entries_uplink,
+            rogue_ndp_entries=rogue_ndp_entries,
+            ndp_entry_limit=ndp_entry_limit,
         ),
-        Playbook(
-            name="test_hardening_of_ndp_overload_entries",
-            cleanup_steps=[
-                create_ixia_api_step(
-                    api_name="configure_ipv6_entries",
-                    args_dict={
-                        "device_group_regex": f".*{downlink_iface}.*",
-                        "prefix_count": good_ndp_entries_downlink,
-                        "toggle_all_ipv6_ipv4_only_protocol": True,
-                    },
-                ),
-            ],
-            stages=[
-                create_steps_stage(
-                    steps=[
-                        create_ixia_api_step(
-                            api_name="configure_ipv6_entries",
-                            args_dict={
-                                "device_group_regex": f".*{downlink_iface}.*",
-                                "prefix_count": good_ndp_entries_downlink,
-                                "toggle_all_ipv6_ipv4_only_protocol": True,
-                            },
-                        ),
-                        create_ixia_api_step(
-                            api_name="configure_ipv6_entries",
-                            args_dict={
-                                "device_group_regex": f".*{uplink_iface}.*",
-                                "prefix_count": good_ndp_entries_uplink,
-                                "toggle_all_ipv6_ipv4_only_protocol": True,
-                            },
-                        ),
-                        create_ixia_api_step(
-                            api_name="configure_ipv6_entries",
-                            args_dict={
-                                "device_group_regex": f".*{downlink_iface}.*",
-                                "prefix_count": rogue_ndp_entries,
-                                "toggle_all_ipv6_ipv4_only_protocol": True,
-                            },
-                        ),
-                        create_longevity_step(duration=600),
-                    ]
-                )
-            ],
-            postchecks=[
-                create_l2_entry_threshold_check(
-                    ndp_entry_upper_lower_threshold=(
-                        ndp_entry_limit,
-                        good_ndp_entries_uplink + good_ndp_entries_downlink,
-                    )
-                ),
-                get_ixia_healthcheck_stable_state(device_name),
-            ],
+        create_hardening_of_arp_overload_entries_playbook(
+            downlink_iface=downlink_iface,
+            uplink_iface=uplink_iface,
+            good_arp_entries=good_arp_entries,
+            rogue_arp_entries=rogue_arp_entries,
+            arp_entry_limit=arp_entry_limit,
         ),
-        Playbook(
-            name="test_hardening_of_arp_overload_entries",
-            cleanup_steps=[
-                create_ixia_api_step(
-                    api_name="configure_ipv4_entries",
-                    args_dict={
-                        "device_group_regex": f".*{downlink_iface}.*",
-                        "prefix_count": 1,
-                        "toggle_all_ipv6_ipv4_only_protocol": True,
-                    },
-                ),
-            ],
-            stages=[
-                create_steps_stage(
-                    steps=[
-                        create_ixia_api_step(
-                            api_name="configure_ipv4_entries",
-                            args_dict={
-                                "device_group_regex": f".*{downlink_iface}.*",
-                                "prefix_count": 1,
-                                "toggle_all_ipv6_ipv4_only_protocol": True,
-                            },
-                        ),
-                        create_ixia_api_step(
-                            api_name="configure_ipv4_entries",
-                            args_dict={
-                                "device_group_regex": f".*{uplink_iface}.*",
-                                "prefix_count": good_arp_entries,
-                                "toggle_all_ipv6_ipv4_only_protocol": True,
-                            },
-                        ),
-                        create_ixia_api_step(
-                            api_name="configure_ipv4_entries",
-                            args_dict={
-                                "device_group_regex": f".*{downlink_iface}.*",
-                                "prefix_count": rogue_arp_entries,
-                                "toggle_all_ipv6_ipv4_only_protocol": True,
-                            },
-                        ),
-                        create_longevity_step(duration=600),
-                    ]
-                )
-            ],
-            postchecks=[
-                create_l2_entry_threshold_check(
-                    arp_entry_upper_lower_threshold=(
-                        arp_entry_limit,
-                        good_arp_entries,
-                    )
-                ),
-            ],
-        ),
-        Playbook(
-            name="test_hardening_of_mac_overload_entries",
-            cleanup_steps=[
-                create_ixia_api_step(
-                    api_name="configure_traffic_item_src_mac_entry_count",
-                    args_dict={
-                        "src_mac_entry_count": 1,
-                        "traffic_item_regex": f".*_{downlink_iface}_.*",
-                    },
-                ),
-            ],
-            stages=[
-                create_steps_stage(
-                    steps=[
-                        create_ixia_api_step(
-                            api_name="configure_traffic_item_src_mac_entry_count",
-                            args_dict={
-                                "src_mac_entry_count": rogue_mac_entry_count,
-                                "traffic_item_regex": f".*_{downlink_iface}_.*",
-                            },
-                        ),
-                        create_longevity_step(duration=100),
-                    ],
-                )
-            ],
-            postchecks=[
-                create_l2_entry_threshold_check(
-                    mac_entry_upper_lower_threshold=(
-                        mac_entry_limit,
-                        good_mac_entry_count
-                        + good_ndp_entries_uplink
-                        + good_ndp_entries_downlink
-                        + good_arp_entries,
-                    )
-                ),
-            ],
+        create_hardening_of_mac_overload_entries_playbook(
+            downlink_iface=downlink_iface,
+            rogue_mac_entry_count=rogue_mac_entry_count,
+            good_mac_entry_count=good_mac_entry_count,
+            good_ndp_entries_uplink=good_ndp_entries_uplink,
+            good_ndp_entries_downlink=good_ndp_entries_downlink,
+            good_arp_entries=good_arp_entries,
+            mac_entry_limit=mac_entry_limit,
         ),
         create_agent_warmboot_playbook(
             iteration=wedge_agent_restart_no_of_interations,
@@ -7331,193 +7668,19 @@ def get_platform_hardening_playbooks(
             ixia_rogue_ic_parent_network_v6=ixia_rogue_ic_parent_network_v6,
             ixia_rogue_ic_parent_network_v4=ixia_rogue_ic_parent_network_v4,
         ),
-        Playbook(
-            name="test_bgp_malformed_packet_test",
-            iteration=1,
-            postchecks=[
-                get_ixia_healthcheck_ignore_cpu_and_v4_directional_traffic(device_name),
-            ],
-            cleanup_steps=[],
-            stages=[
-                create_steps_stage(
-                    steps=[
-                        create_ixia_api_step(
-                            api_name="bounce_bgp_next_hop_attribute",
-                            args_dict={
-                                "enable": False,
-                                "network_group_regex": "NO_PACKET_LOSS_EXPECTED|ECMP_1",
-                            },
-                        ),
-                        create_ixia_api_step(
-                            api_name="bounce_bgp_next_hop_attribute",
-                            args_dict={
-                                "enable": False,
-                                "network_group_regex": "NO_PACKET_LOSS_EXPECTED|ECMP_1",
-                            },
-                        ),
-                        create_longevity_step(duration=1000),
-                        create_ixia_api_step(
-                            api_name="bounce_bgp_next_hop_attribute",
-                            args_dict={
-                                "enable": True,
-                                "network_group_regex": "NO_PACKET_LOSS_EXPECTED|ECMP_1",
-                            },
-                        ),
-                        create_ixia_api_step(
-                            api_name="bounce_bgp_next_hop_attribute",
-                            args_dict={
-                                "enable": True,
-                                "network_group_regex": "NO_PACKET_LOSS_EXPECTED|ECMP_1",
-                            },
-                        ),
-                        create_longevity_step(duration=200),
-                    ]
-                ),
-            ],
+        create_bgp_malformed_packet_test_playbook(device_name=device_name),
+        create_ecmp_member_overload_limit_playbook(
+            ixia_uplink_good_ndp_network=ixia_uplink_good_ndp_network,
+            ecmp_group_limit=ecmp_group_limit,
+            good_ndp_entries_uplink=good_ndp_entries_uplink,
+            ecmp_member_limit=ecmp_member_limit,
+            ecmp_member_test_member_limit=ecmp_member_test_member_limit,
+            ecmp_member_test_group_limit=ecmp_member_test_group_limit,
         ),
-        Playbook(
-            iteration=1,
-            name="test_ecmp_member_overload_limit",
-            postchecks=[
-                AGENT_RESTART_SERVICE_CHECK,
-            ],
-            cleanup_steps=[
-                create_ixia_api_step(
-                    api_name="toggle_device_groups",
-                    args_dict={
-                        "enable": False,
-                        "device_group_name_regex": "ECMP_2",
-                    },
-                ),
-                create_ecmp_member_static_route_step(
-                    delete_patcher_and_exit_step=True,
-                ),
-                create_service_interruption_step(
-                    service=taac_types.Service.AGENT,
-                    trigger=taac_types.ServiceInterruptionTrigger.SYSTEMCTL_RESTART,
-                ),
-                create_service_convergence_step(
-                    services=[taac_types.Service.AGENT, taac_types.Service.BGP],
-                ),
-                create_ecmp_member_static_route_step(
-                    max_ecmp_group=ecmp_group_limit,
-                    max_ecmp_members=ecmp_member_limit,
-                    nh_prefix_1=f"{ixia_uplink_good_ndp_network}::/80",
-                    lb_prefix_agg="6000:ab::/32",
-                    device_group_count=good_ndp_entries_uplink,
-                    delete_patcher_and_exit_step=False,
-                ),
-            ],
-            stages=[
-                create_steps_stage(
-                    steps=[
-                        create_ecmp_member_static_route_step(
-                            delete_patcher_and_exit_step=True,
-                        ),
-                        create_service_interruption_step(
-                            service=taac_types.Service.AGENT,
-                            trigger=taac_types.ServiceInterruptionTrigger.SYSTEMCTL_RESTART,
-                        ),
-                        create_service_convergence_step(
-                            services=[taac_types.Service.AGENT, taac_types.Service.BGP],
-                        ),
-                        create_ecmp_member_static_route_step(
-                            max_ecmp_group=ecmp_member_test_group_limit,
-                            max_ecmp_members=ecmp_member_test_member_limit,
-                            nh_prefix_1=f"{ixia_uplink_good_ndp_network}::/80",
-                            lb_prefix_agg="6000:ab::/32",
-                            device_group_count=good_ndp_entries_uplink,
-                            delete_patcher_and_exit_step=False,
-                        ),
-                        create_ixia_api_step(
-                            api_name="toggle_device_groups",
-                            args_dict={
-                                "enable": True,
-                                "device_group_name_regex": "ECMP_2",
-                            },
-                        ),
-                        create_longevity_step(duration=600),
-                    ],
-                )
-            ],
-        ),
-        Playbook(
-            iteration=1,
-            name="test_ecmp_group_overload_limit",
-            cleanup_steps=[
-                create_ixia_api_step(
-                    api_name="toggle_device_groups",
-                    args_dict={
-                        "enable": False,
-                        "device_group_name_regex": "ECMP_2",
-                    },
-                ),
-            ],
-            stages=[
-                create_steps_stage(
-                    steps=[
-                        create_ixia_api_step(
-                            api_name="toggle_device_groups",
-                            args_dict={
-                                "enable": True,
-                                "device_group_name_regex": "ECMP_2",
-                            },
-                        ),
-                        create_longevity_step(duration=100),
-                    ],
-                )
-            ],
-        ),
-        Playbook(
-            name="test_cpu_high_priority_queue_overload",
-            snapshot_checks=[
-                create_bgp_session_snapshot_check(
-                    parent_prefixes_to_ignore=[
-                        f"{ixia_rogue_ic_parent_network_v6}::/80",
-                        f"{ixia_rogue_ic_parent_network_v4}.0/16",
-                    ],
-                    pre_snapshot_checkpoint_id="stage.test_cpu_high_priority_queue_overload.step.sleep_120_secs_after_disabling_bgp_cp_traffic.end",
-                ),
-                create_bgp_session_snapshot_check(
-                    skip_flap_check=True,
-                    parent_prefixes_to_ignore=[
-                        f"{ixia_rogue_ic_parent_network_v6}::/80",
-                        f"{ixia_rogue_ic_parent_network_v4}.0/16",
-                    ],
-                    post_snapshot_checkpoint_id="stage.test_cpu_high_priority_queue_overload.step.sleep_120_secs_after_disabling_bgp_cp_traffic.end",
-                ),
-            ],
-            stages=[
-                create_steps_stage(
-                    stage_id="test_cpu_high_priority_queue_overload",
-                    steps=[
-                        create_ixia_api_step(
-                            api_name="enable_traffic",
-                            args_dict={
-                                "regexes": ["HIGH_QUEUE_BGP_CP_TRAFFIC"],
-                                "enable": True,
-                            },
-                        ),
-                        create_longevity_step(duration=150),
-                        create_ixia_api_step(
-                            api_name="enable_traffic",
-                            args_dict={
-                                "regexes": ["HIGH_QUEUE_BGP_CP_TRAFFIC"],
-                                "enable": False,
-                            },
-                        ),
-                        create_longevity_step(
-                            duration=120,
-                            step_id="sleep_120_secs_after_disabling_bgp_cp_traffic",
-                        ),
-                        create_ixia_api_step(
-                            api_name="clear_traffic_stats",
-                            args_dict={},
-                        ),
-                        create_longevity_step(duration=30),
-                    ],
-                )
-            ],
+        create_ecmp_group_overload_limit_playbook(),
+        create_cpu_high_priority_queue_overload_playbook(
+            ixia_rogue_ic_parent_network_v6=ixia_rogue_ic_parent_network_v6,
+            ixia_rogue_ic_parent_network_v4=ixia_rogue_ic_parent_network_v4,
         ),
         create_qsfp_service_restart_playbook(
             iteration=process_restart_iterations,
@@ -7546,18 +7709,18 @@ def get_platform_hardening_playbooks(
         create_fsdb_crash_playbook(
             iteration=process_restart_iterations,
         ),
-        TEST_FBOSS_SW_AGENT_WARMBOOT_PLAYBOOK,
-        TEST_FBOSS_SW_AGENT_CRASH_PLAYBOOK,
-        TEST_FBOSS_HW_AGENT_0_RESTART_PLAYBOOK,
-        TEST_FBOSS_HW_AGENT_0_CRASH_PLAYBOOK,
-        TEST_FBOSS_SW_AGENT_AND_HW_AGENT_0_RESTART_PLAYBOOK,
-        TEST_FBOSS_SW_AGENT_AND_HW_AGENT_0_CRASH_PLAYBOOK,
-        TEST_BGPD_AND_FSDB_RESTART_PLAYBOOK,
-        TEST_AGENT_AND_BGPD_RESTART_PLAYBOOK,
-        TEST_AGENT_AND_FSDB_RESTART_PLAYBOOK,
-        TEST_AGENT_AND_QSFP_SERVICE_RESTART_PLAYBOOK,
-        TEST_FSDB_AND_QSFP_SERVICE_RESTART_PLAYBOOK,
-        TEST_SW_AGENT_AND_WEDGE_AGENT_RESTART_PLAYBOOK,
+        create_fboss_sw_agent_warmboot_playbook(),
+        create_fboss_sw_agent_crash_playbook(),
+        create_fboss_hw_agent_0_restart_playbook(),
+        create_fboss_hw_agent_0_crash_playbook(),
+        create_fboss_sw_agent_and_hw_agent_0_restart_playbook(),
+        create_fboss_sw_agent_and_hw_agent_0_crash_playbook(),
+        create_bgpd_and_fsdb_restart_playbook(),
+        create_agent_and_bgpd_restart_playbook(),
+        create_agent_and_fsdb_restart_playbook(),
+        create_agent_and_qsfp_service_restart_playbook(),
+        create_fsdb_and_qsfp_service_restart_playbook(),
+        create_sw_agent_and_wedge_agent_restart_playbook(),
     ]
 
 
