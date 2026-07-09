@@ -2,10 +2,8 @@
 # pyre-unsafe
 """Spec 2.3 — Backpressure and Blocking Behavior. UG qualification testconfig factory.
 
-Byte-wise-identical move from ``testconfigs/routing/factories/bgp_update_group.py``
-(pre-Wave-6). Combines the former ``create_bgp_ug_backpressure_test_config``
-and ``create_bgp_ug_backpressure_topology_smoke_test_config`` into one
-factory switched by ``smoke_only=False`` (default) / ``True``.
+Combines the default UG-backpressure spec run and a topology-smoke variant into
+one factory switched by ``smoke_only=False`` (default) / ``True``.
 """
 
 from ixia.ixia import types as ixia_types
@@ -353,18 +351,14 @@ def create_bgp_ug_backpressure_test_config(
 
     Default (``smoke_only=False``): four playbooks (2.3.1 / 2.3.2 / 2.3.3 /
     2.3.4) sharing the EBB full-scale topology; ``enable_update_group=True``
-    hard-coded (UG MUST be on for these specs). TestConfig ``name`` field
-    grandfathered as ``BGP_UG_BACKPRESSURE_TEST``.
+    hard-coded (UG MUST be on for these specs).
 
     ``smoke_only=True``: brings up the full EBB-scale topology + runs
     a longevity playbook (precheck + 30-min longevity + postcheck) so the
     operator can hands-on probe the device. Designed to be paired with
-    ``--skip-teardown-tasks --skip-ixia-cleanup``. TestConfig ``name`` field
-    grandfathered as ``BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE``.
+    ``--skip-teardown-tasks --skip-ixia-cleanup``.
 
-    Only bag013 is wired to run this today (see catalog binding in
-    ``qual_bgp_update_group.py``); factory itself is testbed-agnostic
-    given any EBB full-scale testbed.
+    Factory is testbed-agnostic given any EBB full-scale testbed.
     """
     # ── Shape asserts ──
     assert testbed.dut_bgp_as is not None, "Testbed must have dut_bgp_as set"
@@ -493,7 +487,6 @@ def create_bgp_ug_backpressure_test_config(
             teardown_tasks=teardown_tasks,
             basic_port_configs=basic_port_configs,
             playbooks=[
-                # Bring-up smoke: full EBB-scale + 30-min longevity. No spec test.
                 create_bgp_ug_backpressure_topology_smoke_playbook(
                     expected_established_sessions=_BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS,
                 ),
@@ -501,8 +494,6 @@ def create_bgp_ug_backpressure_test_config(
         )
 
     # ── 2.3.1 — Fast peers not held back by slow peers ─────────────────────
-    # Carve: split eBGP into fast (majority) + slow (20 with TCP throttled).
-    # Traffic: heavy iBGP storm targeting the shared iBGP receiver group.
     _2_3_1_slow_peer_throttle = create_configure_bgp_peer_tcp_window_size_step(
         hostname=device_name,
         interface=ixia_interface_mimic_ebgp,
@@ -550,22 +541,6 @@ def create_bgp_ug_backpressure_test_config(
         ),
     )
 
-    # ── 2.3.2 — Peer blocks, goes down, comes back — full recovery ─────────
-    # Carve: shutdown 16 eBGP peers; survivors = remaining eBGP + all iBGP.
-    # Traffic: initial + follow-up storms; the follow-up is smaller (500 prefixes)
-    # to exercise UG re-programming under a live workload.
-    # (no per-test setup steps beyond the shared setup_tasks)
-
-    # ── 2.3.3 — Withdraw and attribute change under backpressure ───────────
-    # Carve: pick one eBGP sender peer to fire attribute changes at while the
-    # iBGP storm is running; mutate community + local-pref on 100 prefixes.
-    # (no per-test setup steps)
-
-    # ── 2.3.4 — All peers block, then all go down, then all come back ──────
-    # Carve: bounce the entire (fast) eBGP list + all iBGP peers.
-    # Traffic: initial + follow-up (smaller) storms.
-    # (no per-test setup steps)
-
     return TestConfig(
         name="BGP_UG_BACKPRESSURE_TEST",
         skip_ixia_protocol_verification=True,
@@ -585,7 +560,7 @@ def create_bgp_ug_backpressure_test_config(
                 ixia_interface=ixia_interface_mimic_ibgp,
                 storm_prefix_pool_regex=_BACKPRESSURE_STORM_PREFIX_POOL_REGEX,
                 storm_device_group_regex=_BACKPRESSURE_STORM_DEVICE_GROUP_REGEX,
-                storm_prefix_count=10000,  # 2.3.1 storm prefixes
+                storm_prefix_count=10000,
                 community_combinations=_backpressure_heavy_communities_32(),
                 extended_community_combinations=_backpressure_heavy_extended_communities_16(),
                 as_path=_backpressure_heavy_as_path_255(),
@@ -607,14 +582,14 @@ def create_bgp_ug_backpressure_test_config(
                 ixia_interface=ixia_interface_mimic_ibgp,
                 storm_prefix_pool_regex=_BACKPRESSURE_STORM_PREFIX_POOL_REGEX,
                 storm_device_group_regex=_BACKPRESSURE_STORM_DEVICE_GROUP_REGEX,
-                storm_initial_prefix_count=5000,  # 2.3.2 initial storm prefixes
-                storm_followup_prefix_count=500,  # 2.3.2 follow-up storm prefixes
+                storm_initial_prefix_count=5000,
+                storm_followup_prefix_count=500,
                 community_combinations=_backpressure_heavy_communities_32(),
                 extended_community_combinations=_backpressure_heavy_extended_communities_16(),
                 as_path=_backpressure_heavy_as_path_255(),
                 shutdown_peer_regex=_BACKPRESSURE_EBGP_V6_PEER_REGEX,
                 shutdown_peer_addrs=_BACKPRESSURE_2_3_2_SHUTDOWN_PEER_ADDRS,
-                shutdown_count=16,  # 2.3.2 peers to bounce
+                shutdown_count=16,
                 surviving_receiver_peer_addrs=_BACKPRESSURE_2_3_2_SURVIVING_RECEIVER_ADDRS,
                 surviving_ebgp_receiver_peer_addrs=_BACKPRESSURE_2_3_2_SURVIVING_EBGP_RECEIVER_ADDRS,
                 surviving_ibgp_receiver_peer_addrs=_BACKPRESSURE_2_3_2_SURVIVING_IBGP_RECEIVER_ADDRS,
@@ -628,20 +603,20 @@ def create_bgp_ug_backpressure_test_config(
                 ixia_interface=ixia_interface_mimic_ibgp,
                 ibgp_storm_prefix_pool_regex=_BACKPRESSURE_STORM_PREFIX_POOL_REGEX,
                 ibgp_storm_device_group_regex=_BACKPRESSURE_STORM_DEVICE_GROUP_REGEX,
-                ibgp_storm_prefix_count=5000,  # 2.3.3 background iBGP storm prefixes
+                ibgp_storm_prefix_count=5000,
                 community_combinations=_backpressure_heavy_communities_32(),
                 extended_community_combinations=_backpressure_heavy_extended_communities_16(),
                 as_path=_backpressure_heavy_as_path_255(),
-                ebgp_attr_change_prefix_pool_regex="PREFIX_POOL_IPV6_EBGP",  # 2.3.3-only
-                ebgp_attr_change_device_group_regex="DEVICE_GROUP_IPV6_EBGP",  # 2.3.3-only
-                ebgp_attr_change_prefix_count=400,  # 2.3.3 attr-change target
-                withdraw_count=200,  # 2.3.3 withdraws
-                lp_modify_count=100,  # 2.3.3 LP mutations
-                initial_community="65529:34814",  # 2.3.3 seed community
+                ebgp_attr_change_prefix_pool_regex="PREFIX_POOL_IPV6_EBGP",
+                ebgp_attr_change_device_group_regex="DEVICE_GROUP_IPV6_EBGP",
+                ebgp_attr_change_prefix_count=400,
+                withdraw_count=200,
+                lp_modify_count=100,
+                initial_community="65529:34814",
                 # NOTE: 16-bit constraint — BGP RFC 1997 community low field is
                 # 16 bits; IXIA silently truncates writes above 65535.
-                mutated_community="65529:1234",  # 2.3.3 mutated community
-                target_local_pref=200,  # 2.3.3 target LP
+                mutated_community="65529:1234",
+                target_local_pref=200,
                 ibgp_receiver_peer_addrs=_BACKPRESSURE_IBGP_RECEIVER_PEER_ADDRS,
                 expected_established_sessions=_BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS,
                 memory_threshold_bytes=_BACKPRESSURE_MEMORY_THRESHOLD_BYTES,
@@ -655,8 +630,8 @@ def create_bgp_ug_backpressure_test_config(
                 ixia_interface=ixia_interface_mimic_ibgp,
                 storm_prefix_pool_regex=_BACKPRESSURE_STORM_PREFIX_POOL_REGEX,
                 storm_device_group_regex=_BACKPRESSURE_STORM_DEVICE_GROUP_REGEX,
-                storm_initial_prefix_count=10000,  # 2.3.4 initial storm prefixes
-                storm_followup_prefix_count=500,  # 2.3.4 follow-up storm prefixes
+                storm_initial_prefix_count=10000,
+                storm_followup_prefix_count=500,
                 community_combinations=_backpressure_heavy_communities_32(),
                 extended_community_combinations=_backpressure_heavy_extended_communities_16(),
                 as_path=_backpressure_heavy_as_path_255(),

@@ -2,15 +2,11 @@
 # pyre-unsafe
 """Spec 2.3 — Backpressure and Blocking Behavior. UG qualification playbook factories.
 
-- 2.3.1 Fast Peers Not Held Back by Slow Peers (REAL)
-- 2.3.2 Peer Blocks, Goes Down, Comes Back — Full Recovery (REAL)
-- 2.3.3 Withdraw and Attribute Change Under Backpressure (REAL)
-- 2.3.4 All Peers in Group Block, Then All Go Down, Then All Come Back (REAL)
-- Topology smoke variant (REAL)
-
-The four sub-spec factories were previously named ``create_ug_backpressure_*``
-and were renamed to the canonical ``create_bgp_ug_backpressure_*`` form during
-the Wave 6 spec-anchored restructuring.
+- 2.3.1 Fast Peers Not Held Back by Slow Peers
+- 2.3.2 Peer Blocks, Goes Down, Comes Back — Full Recovery
+- 2.3.3 Withdraw and Attribute Change Under Backpressure
+- 2.3.4 All Peers in Group Block, Then All Go Down, Then All Come Back
+- Topology smoke variant
 """
 
 import typing as t
@@ -83,44 +79,36 @@ def _heavy_attr_advertise_steps(
 ) -> t.List[Step]:
     """Build the 'heavy-attr advertise' step sequence used by all 4 2.3 playbooks.
 
-    With ``skip_pool_config=True`` (the default since 2026-06-29), the three
-    runtime ``configure_*_pool`` steps are OMITTED. The caller is expected to
-    have pre-attached the community / extended-community pools at IXIA-build
-    time (e.g. via ``plane_drain_dg_v6_attribute_overrides`` on the EBB
-    topology builder). Reason: ``ixia.py`` invokes ``stop_protocols()``
-    unconditionally at the top of ``configure_community_pool`` /
-    ``configure_extended_community_pool`` / ``configure_as_path_pool``. That
-    stop tears down every BGP TCP session on the chassis -- verified
-    2026-06-29 in bag013 bgpcpp logs: errno 104 Connection reset by peer
-    across all 18 device groups within ~600 ms of the first
-    ``configure_community_pool`` call. The test then fails on cascade rather
-    than on the trigger's spec.
+    With ``skip_pool_config=True`` (default), the three runtime
+    ``configure_*_pool`` steps are OMITTED. Callers must pre-attach the
+    community / extended-community pools at IXIA-build time (e.g. via
+    ``plane_drain_dg_v6_attribute_overrides`` on the EBB topology builder).
+    Reason: ``ixia.py`` invokes ``stop_protocols()`` unconditionally at the
+    top of ``configure_community_pool`` / ``configure_extended_community_pool``
+    / ``configure_as_path_pool``; that tears down every BGP TCP session on
+    the chassis, so the test then fails on cascade rather than on the
+    trigger's spec.
 
     With ``skip_pool_config=False``, the legacy 3-step pre-amble is emitted.
     Use ONLY when the caller is comfortable with the chassis-wide
-    ``stop_protocols()`` -- characteristic-scale tests where 1272-session
-    teardown is tolerable, or when the framework hazard has been fixed.
+    ``stop_protocols()``.
 
     The ``community_combinations`` / ``extended_community_combinations`` /
-    ``as_path`` parameters stay in the signature for spec traceability and so
-    a future framework fix can re-enable mid-test pool configuration without
+    ``as_path`` parameters stay in the signature for spec traceability and
+    so a framework fix can re-enable mid-test pool configuration without
     breaking callers.
 
-    Per spec 2.3.x: AS_PATH "AS_SEQ with 255 random ASNs". Build-time
-    AS_PATH pre-attach via the ``BgpAttribute`` thrift enum is not
-    supported (enum lacks AS_PATH). Runtime path IS now supported: a
-    targeted ``configure_as_path_pool`` step runs BELOW even under
-    ``skip_pool_config=True``, but scoped to ONLY the storm sender DG
-    (``device_group_regex``) and with ``stop_protocols=False`` so it
-    writes the AsPath.ValueList in-place without the chassis-wide TCP
-    cascade. This closes the 255-ASN AS_PATH spec gap without needing a
-    thrift/framework change.
+    AS_PATH note: build-time pre-attach via the ``BgpAttribute`` thrift enum
+    is not supported (enum lacks AS_PATH). A targeted ``configure_as_path_pool``
+    step runs below even under ``skip_pool_config=True``, scoped to ONLY the
+    storm sender DG (``device_group_regex``) and with ``stop_protocols=False``
+    so it writes the AsPath.ValueList in-place without the chassis-wide TCP
+    cascade.
     """
     steps: t.List[Step] = []
     if not skip_pool_config:
         steps.extend(
             [
-                # 1. Configure community pool (legacy path; cascades on full-scale topology).
                 create_configure_community_pool_step(
                     device_name=device_name,
                     interface=ixia_interface,
@@ -128,7 +116,6 @@ def _heavy_attr_advertise_steps(
                     device_group_regex=device_group_regex,
                     description=f"{description_prefix}: set {len(community_combinations)} community combinations on {device_group_regex}",
                 ),
-                # 2. Configure extended community pool (legacy path).
                 create_configure_extended_community_pool_step(
                     device_name=device_name,
                     interface=ixia_interface,
@@ -136,8 +123,7 @@ def _heavy_attr_advertise_steps(
                     device_group_regex=device_group_regex,
                     description=f"{description_prefix}: set {len(extended_community_combinations)} ext-community combinations on {device_group_regex}",
                 ),
-                # 3. Configure AS_PATH pool (legacy path). The step factory
-                # expects ASNs as strings; our spec uses ints, so convert.
+                # Step factory expects ASNs as strings; our spec uses ints.
                 create_configure_as_path_pool_step(
                     device_name=device_name,
                     interface=ixia_interface,
@@ -147,7 +133,6 @@ def _heavy_attr_advertise_steps(
                 ),
             ]
         )
-    # 4. Per-prefix attribute randomization (optional, but spec-required for 2.3.1)
     if randomize_med:
         steps.append(
             create_bgp_prefixes_med_value_step(
@@ -167,11 +152,10 @@ def _heavy_attr_advertise_steps(
                 description=f"{description_prefix}: randomize LocalPref on {prefix_pool_regex}[{prefix_start_index}..{prefix_end_index}]",
             ),
         )
-    # Targeted AS_PATH pool config -- runs even under skip_pool_config=True
-    # because it's scoped to ONLY the storm-sender DG (device_group_regex)
-    # and uses stop_protocols=False. Writes AsPath.ValueList in-place on
-    # matching prefix pools; no chassis-wide TCP cascade. Closes spec 2.3.x
-    # 255-ASN AS_PATH gap.
+    # Runs even under skip_pool_config=True: scoped to ONLY the storm-sender
+    # DG (device_group_regex) with stop_protocols=False, so it writes
+    # AsPath.ValueList in-place on matching prefix pools without a
+    # chassis-wide TCP cascade.
     if as_path:
         steps.append(
             create_configure_as_path_pool_step(
@@ -184,13 +168,8 @@ def _heavy_attr_advertise_steps(
             ),
         )
     if randomize_origin:
-        # Per-slot Origin cycling: ``IxiaModifyBgpPrefixesOriginValue`` now
-        # accepts ``origin_values: List[str]`` and writes per-prefix via the
-        # underlying ``Origin.ValueList`` path (see ``ixia_tasks.py:175``).
-        # Cycling ``[igp, egp, incomplete]`` per prefix exercises DUT
-        # per-prefix Origin handling in the heavy-attr storm (spec 2.3.x).
-        # Deterministic order keeps the playbook config hash stable for the
-        # golden-config test (earlier ``random.choice(...)`` form broke it).
+        # Deterministic order (not random) is required so the playbook config
+        # hash stays stable for the golden-config test.
         _origin_cycle = ["igp", "egp", "incomplete"]
         steps.append(
             create_modify_bgp_prefixes_origin_value_step(
@@ -201,7 +180,6 @@ def _heavy_attr_advertise_steps(
                 description=f"{description_prefix}: cycle Origin {_origin_cycle} per-prefix on {prefix_pool_regex}[{prefix_start_index}..{prefix_end_index}]",
             ),
         )
-    # 5. Advertise the prefixes (rapid push -- creates the egress storm)
     steps.append(
         create_advertise_withdraw_prefixes_step(
             device_name=device_name,
@@ -223,8 +201,7 @@ def _heavy_attr_withdraw_steps(
     prefix_end_index: int,
     description_prefix: str = "Heavy-attr",
 ) -> t.List[Step]:
-    """Mirror of ``_heavy_attr_advertise_steps`` for the withdraw side --
-    used by 2.3.1's "withdraw all 10K + verify clean withdrawal" step."""
+    """Withdraw-side mirror of ``_heavy_attr_advertise_steps``."""
     return [
         create_advertise_withdraw_prefixes_step(
             device_name=device_name,
@@ -258,32 +235,26 @@ def _ug_backpressure_common_postchecks(
             BGP/system logs during the test window (2.3.3 + 2.3.4 spec).
     """
     checks: t.List[PointInTimeHealthCheck] = [
-        # "BGP++ agent does not crash" -- canonical Arista BGP++ gate.
         create_service_restart_check(
             services=["Bgp"],
             daemons=["FibBgpGrpc"],
         ),
-        # "No stale routes on any peer after recovery"
         create_bgp_stale_route_check(),
-        # "VmHWM below 10GB" -- absolute threshold via threshold_by_service.
-        # ALSO pass delta (max growth between snapshots) because the Arista
-        # check path requires it; without delta the HC SKIPs on ARISTA_FBOSS
-        # devices. 2 GiB delta is a conservative growth ceiling.
+        # ALSO pass delta because the Arista check path requires it; without
+        # delta the HC SKIPs on ARISTA_FBOSS devices. 2 GiB is a conservative
+        # growth ceiling.
         create_memory_utilization_check(
             threshold_by_service={"Bgp": memory_threshold_bytes},
             start_time_jq_var="test_case_start_time",
-            delta=2 * (1024**3),  # 2 GiB max growth during the test
+            delta=2 * (1024**3),
         ),
-        # End-of-test session-establish gate (UG state not corrupted).
         create_bgp_session_establish_check(
             expected_established_sessions=expected_established_sessions,
         ),
     ]
     if enforce_load_avg:
-        # "1m, 5m and 15m load-averages never cross 12" (2.3.1)
         checks.append(create_system_cpu_load_average_check(baseline=load_avg_baseline))
     if enforce_log_parsing:
-        # "No EOS logs with Emergencies, Critical or Error priorities" (2.3.3, 2.3.4)
         checks.append(
             create_log_parsing_check(
                 json_params={
@@ -315,21 +286,20 @@ def create_bgp_ug_backpressure_fast_peers_not_held_back_playbook(
     memory_threshold_bytes: int,
     during_storm_settle_s: int = 60,
     post_storm_settle_s: int = 120,
-    # Bumped from 120s -> 600s 2026-06-25 after 3 identical e2e failures where
-    # IXIA sessions silently collapsed during the post-withdraw settle window.
-    # Longer settle + an explicit mid-settle session-establish check (added
-    # below) catch the collapse sooner and give it more recovery time.
+    # 600s (not 120s): IXIA sessions can silently collapse during the
+    # post-withdraw settle window; the longer wait + explicit mid-settle
+    # session-establish check (added below) catch the collapse sooner and
+    # give it more recovery time.
     post_withdraw_settle_s: int = 600,
     setup_steps: t.Optional[t.List[Step]] = None,
     prechecks: t.Optional[t.List[PointInTimeHealthCheck]] = None,
     postchecks: t.Optional[t.List[PointInTimeHealthCheck]] = None,
     snapshot_checks: t.Optional[t.List[SnapshotHealthCheck]] = None,
-    # Optional: regex over peer_group of the storm-sender peer set. When
-    # provided, a spec-loyal "storm arrived at DUT" gate is added post-settle
-    # asserting DUT ingress RIB received >= storm_prefix_count from those
-    # peers. Decoupled from egress-policy filtering (some topologies drop
-    # heavy-attr storms at egress -- see Run #11 finding, memory
-    # ``[[project-bgp-ug-backpressure-run7-findings]]``).
+    # Optional: address-prefix of the storm-sender peer set. When provided,
+    # a "storm arrived at DUT" gate is added post-settle asserting DUT
+    # ingress RIB received >= storm_prefix_count from those peers. Decoupled
+    # from egress-policy filtering (some topologies drop heavy-attr storms
+    # at egress).
     storm_sender_peer_addr_prefix: t.Optional[str] = None,
     # Slow eBGP peer address list — the peers that have been artificially
     # TCP-throttled (via ``create_configure_bgp_peer_tcp_window_size_step``
@@ -461,42 +431,20 @@ def create_bgp_ug_backpressure_fast_peers_not_held_back_playbook(
             ),
         )
 
-    # Phase 3 spec-loyal "storm arrived at DUT" gate: probe DUT's ingress
-    # RIB for prefixes received from the storm-sender peer group. Independent
-    # of egress-policy filtering (which on some topologies drops the heavy-
-    # attr storm before it reaches downstream peers; Run #11 finding, memory
-    # ``[[project-bgp-ug-backpressure-run7-findings]]``). If caller does NOT
-    # provide ``storm_sender_peer_addr_prefix`` (e.g. tests that don't want
-    # the DUT-side probe), the gate is skipped.
-    #
-    # Fast-peer wire-side observability (Phase 0 snapshot + Phase 1.5 during-
-    # storm liveness + Phase 3 delta): opt-in via ``enable_fast_peer_wire_check``
-    # -- the spec 2.3.1 central claim is that fast peers CONTINUE receiving
-    # updates EVEN WHEN slow iBGP receivers block. Snapshot pre-storm sent_count
-    # per fast peer, then verify delta at mid-storm (>=1 route arrived DURING
-    # the storm) and again post-settle (delta >= storm_prefix_count).
-    #
-    # TOPOLOGY REQUIREMENT: the DUT's eBGP egress policy MUST permit the
-    # heavy-attr storm routes on the wire, otherwise delta is trivially 0
-    # and the gate false-fails. bag013's EB-FA-OUT policy filters more than
-    # just community (prefix range + AS-PATH length checks), so the anchor-
-    # community trick alone is insufficient -- the wire-side probe is
-    # DISABLED on bag013 (Run #14 finding). The follow-up path is to add a
-    # slow-peer TCP-throttle DG (see task #141): same UG, different peer
-    # session speeds -> asymmetry gate directly exercises the spec claim
-    # instead of relying on egress-policy alignment.
-    #
     # DUT-INTERNAL observability (default ON): snapshot per-peer
     # ``adjribout_queue_blocks`` pre-storm, then post-storm assert
-    #   (a) backpressure was observed on some slow peers (proves the workload
-    #       exercised UG send path),
+    #   (a) backpressure was observed on some slow peers,
     #   (b) fast-peer avg queue_size < slow-peer avg queue_size mid-storm
-    #       (proves DUT doesn't hold fast peers back inside the same UG --
-    #       spec 2.3.1 central claim),
-    #   (c) all UG queues drained post-settle (spec 2.3.1 "no peer permanently
-    #       stuck").
-    # This is topology-agnostic and works even when egress policy filters the
-    # storm on the wire (bag013).
+    #       (spec 2.3.1 central claim: DUT doesn't hold fast peers back
+    #       inside the same UG),
+    #   (c) all UG queues drained post-settle (spec 2.3.1 "no peer
+    #       permanently stuck").
+    # Topology-agnostic: works even when egress policy filters the storm
+    # on the wire.
+    #
+    # TOPOLOGY REQUIREMENT for ``enable_fast_peer_wire_check``: DUT eBGP
+    # egress policy MUST permit the heavy-attr storm routes on the wire,
+    # otherwise delta is trivially 0 and the gate false-fails.
     _egress_stats_snapshot_key = f"pb_2_3_1_egress_stats_pre_storm_{device_name}"
     _dut_internal_pre_storm: t.List[Step] = []
     _dut_internal_mid_storm: t.List[Step] = []
@@ -573,14 +521,11 @@ def create_bgp_ug_backpressure_fast_peers_not_held_back_playbook(
                 ),
             ),
         )
-        # Post-settle queue-drained check: scope to peers that AREN'T being
-        # artificially TCP-throttled. Slow eBGP peers (with tiny TCP window)
-        # take much longer to drain the storm through their throttled socket
-        # (10K prefixes * ~200B/UPDATE / 1500B window * RTT ~= minutes per
-        # peer), so requiring their queue == 0 within the standard post_storm
-        # settle window is unrealistic. Fast peers should drain quickly and
-        # ARE what the spec's "no peer permanently stuck" claim tests --
-        # residual queue on artificially-slowed peers is expected behavior.
+        # Scope to peers NOT being artificially TCP-throttled. Slow eBGP
+        # peers with a tiny TCP window take minutes to drain the storm
+        # through their throttled socket, so requiring their queue == 0
+        # within the standard settle window is unrealistic. Fast peers ARE
+        # what the spec's "no peer permanently stuck" claim tests.
         _queue_drained_scope = [
             addr
             for addr in _all_ug_peer_addrs
@@ -590,17 +535,11 @@ def create_bgp_ug_backpressure_fast_peers_not_held_back_playbook(
             create_verify_ug_queue_recovered_step(
                 hostname=device_name,
                 peer_addrs=_queue_drained_scope,
-                # Spec-loyal: threshold at 1 MTU = 1500 bytes. Below that
-                # a peer cannot have a stuck BGP UPDATE (min viable UPDATE
-                # is header+attrs+prefix > 20 bytes but typically 100+;
-                # <1500B in socket buffer means at most sub-MTU steady-
-                # state noise, not routes stuck in adj-RIB-out). The spec's
-                # "no peer permanently stuck" is about ROUTE delivery, not
-                # sub-MTU TCP-buffer residuals (Run #29 finding: peers had
-                # constant 1-byte buffer -- TCP-level noise, not stuck).
+                # Threshold at 1 MTU = 1500 bytes: below that a peer cannot
+                # have a stuck BGP UPDATE, only sub-MTU TCP-buffer noise.
+                # The spec's "no peer permanently stuck" is about ROUTE
+                # delivery, not sub-MTU residuals.
                 max_queue_size=1500,
-                # Multi-sample: only peers whose buffer is > 1500B in ALL
-                # samples AND not draining count as permanently stuck.
                 num_samples=3,
                 sample_interval_s=10,
                 description=(
@@ -643,16 +582,11 @@ def create_bgp_ug_backpressure_fast_peers_not_held_back_playbook(
                 interface=fast_peer_ixia_interface,
                 snapshot_key=_ixia_rx_snapshot_key,
                 min_rx_delta=1,
-                # Live-probed 2026-07-02 Run #37: IxNetwork column names
-                # are "Messages Rx" (all BGP messages incl. keepalives) +
-                # "Updates Rx" (UPDATE messages only) + "KeepAlives Rx"
-                # + "Routes Rx" etc. Sample: Messages Rx=564091, Updates
-                # Rx=531300, KeepAlives Rx=32087 -- keepalives fire every
-                # 30s so Messages Rx delta > 0 during any window >30s
-                # even when storm gets egress-filtered. This is spec-
-                # loyal wire-side proof-of-life: DUT is actively
-                # communicating with fast peers on wire (session alive,
-                # UG not blocked from delivering any BGP message).
+                # Messages Rx counts all BGP messages incl. keepalives
+                # (which fire every 30s), so delta > 0 during any window
+                # >30s even when the storm gets egress-filtered -- wire-
+                # side proof-of-life that the UG isn't blocked from
+                # delivering any BGP message to fast peers.
                 counter_name="rx_total_messages",
                 description=(
                     f"Phase 3 fast-peer IXIA wire-side check (2.3.1): "
@@ -795,11 +729,9 @@ def create_bgp_ug_backpressure_fast_peers_not_held_back_playbook(
                 duration=mid_settle_s,
                 description=f"Phase 4a-settle (2.3.1): {mid_settle_s}s mid-settle for clean withdrawal propagation",
             ),
-            # Mid-settle session-health gate -- catches the silent
-            # IXIA-session-collapse failure mode (bag013 2026-06-25, 3 e2e
-            # iterations all showed Phase 5 equality passing trivially with
-            # 0 routes everywhere because all sessions had silently IDLEd
-            # during the post-withdraw settle).
+            # Catches the silent IXIA-session-collapse failure mode: without
+            # this, Phase 5 equality can pass trivially with 0 routes
+            # everywhere if all sessions silently IDLEd during the settle.
             create_validation_step(
                 point_in_time_checks=[
                     create_bgp_session_establish_check(
@@ -948,11 +880,9 @@ def create_bgp_ug_backpressure_peer_blocks_down_recover_playbook(
         (total = initial + followup) from shadow RIB.
     """
     total_count = storm_initial_prefix_count + storm_followup_prefix_count
-    # Build the per-outbound-policy peer groups used by the Phase 4 + Phase 6
-    # equality gates. If the caller supplied both split lists we split; else
-    # fall back to a single mixed group (legacy behavior for tests + old
-    # callers -- known to false-fail on any real DUT because of the policy
-    # mismatch, but preserved for compat).
+    # Route-set equality is only valid WITHIN a single outbound-policy group.
+    # When the caller supplies both split lists we split; otherwise fall back
+    # to a single mixed group (known to false-fail on any real DUT).
     _peer_groups_phase4: t.List[t.Tuple[str, t.List[str]]] = []
     _peer_groups_phase6: t.List[t.Tuple[str, t.List[str]]] = []
     if (
@@ -1000,14 +930,7 @@ def create_bgp_ug_backpressure_peer_blocks_down_recover_playbook(
         description_prefix="Phase 1 (2.3.2)",
     )
 
-    # Phase 0 snapshot: baseline eBGP-survivor sent_count so Phase 4 + Phase 6
-    # can assert the storm+followup delivered (delta >= total_count) without
-    # Storm-arrival probe (see PB1 note): DUT ingress RIB from the storm
-    # sender peer group. Optional -- when regex not provided, gate is
-    # skipped.
     trigger_steps = storm_steps + [
-        # Phase 2: shut down N eBGP sessions mid-storm (no GR -- they may
-        # have been in a blocked state when going down).
         create_start_stop_bgp_peers_step(
             peer_regex=shutdown_peer_regex,
             start=False,
@@ -1023,7 +946,6 @@ def create_bgp_ug_backpressure_peer_blocks_down_recover_playbook(
             duration=post_shutdown_settle_s,
             description=f"Phase 2-settle (2.3.2): {post_shutdown_settle_s}s for DUT hold-timer + UG cleanup",
         ),
-        # Phase 3: inject 500 more prefixes while shut peers are down.
         create_advertise_withdraw_prefixes_step(
             device_name=device_name,
             advertise=True,
@@ -1039,12 +961,6 @@ def create_bgp_ug_backpressure_peer_blocks_down_recover_playbook(
             duration=post_inject_settle_s,
             description=f"Phase 3-settle (2.3.2): {post_inject_settle_s}s for surviving peers to receive followup inject",
         ),
-        # Phase 4 (inline gate): (1) shut peers are down; (2) within each
-        # surviving outbound-policy peer group, all survivors converged;
-        # (3) UG state intact. The delivery-magnitude assertion (surviving
-        # iBGP delta >= total_count) runs as a separate delta-verify step
-        # AFTER this gate so the fail body is scoped to the count issue if
-        # both would fail.
         create_validation_step(
             point_in_time_checks=[
                 create_bgp_session_establish_check(
@@ -1083,7 +999,6 @@ def create_bgp_ug_backpressure_peer_blocks_down_recover_playbook(
             if storm_sender_peer_addr_prefix
             else []
         ),
-        # Phase 5: bring all shut peers back up.
         create_start_stop_bgp_peers_step(
             peer_regex=shutdown_peer_regex,
             start=True,
@@ -1097,12 +1012,10 @@ def create_bgp_ug_backpressure_peer_blocks_down_recover_playbook(
         ),
     ]
 
-    # Phase 6 spec gate: reconnected peers received full re-sync from shadow
-    # RIB. MUST run inline BEFORE ``cleanup_steps`` withdraws the storm
-    # prefixes — TAAC lifecycle is ``trigger_steps -> cleanup_steps ->
-    # postchecks``, so if this ran in postchecks the ``anchor_route_count``
-    # assertion would compare against a post-cleanup state where ALL storm
-    # prefixes have been withdrawn and fail vacuously.
+    # MUST run inline BEFORE ``cleanup_steps`` withdraws the storm prefixes.
+    # TAAC lifecycle is ``trigger_steps -> cleanup_steps -> postchecks``, so
+    # running this in postchecks would compare against a post-cleanup state
+    # where ALL storm prefixes have been withdrawn and fail vacuously.
     inline_phase_6_checks: t.List[PointInTimeHealthCheck] = [
         create_bgp_session_establish_check(
             ignore_all_prefixes_except=shutdown_peer_addrs,
@@ -1126,10 +1039,9 @@ def create_bgp_ug_backpressure_peer_blocks_down_recover_playbook(
             ),
         ),
     )
-    # Phase 6 delta gate (spec-loyal): surviving iBGP receivers should STILL
-    # Phase 6 ingress-RIB probe: DUT still has >= total_count from storm
-    # sender post-recovery (proves storm+followup weren't accidentally
-    # withdrawn during shutdown/recovery churn).
+    # DUT still has >= total_count from storm sender post-recovery (proves
+    # storm+followup weren't accidentally withdrawn during shutdown/recovery
+    # churn).
     if storm_sender_peer_addr_prefix:
         trigger_steps.append(
             create_verify_dut_received_from_peer_group_step(
@@ -1144,7 +1056,6 @@ def create_bgp_ug_backpressure_peer_blocks_down_recover_playbook(
         )
 
     cleanup_steps = [
-        # Withdraw the storm prefixes so the testbed returns to a clean state.
         create_advertise_withdraw_prefixes_step(
             device_name=device_name,
             advertise=False,
@@ -1587,39 +1498,21 @@ def create_bgp_ug_backpressure_withdraw_attr_change_playbook(
     inline_phase_3_checks: t.List[PointInTimeHealthCheck] = []
     postcheck_phase_3_checks: t.List[PointInTimeHealthCheck] = []
     if not skip_community_swap_for_cascade_safety:
-        # Only meaningful when the swap actually fired. Prefer the
-        # adj-RIB-IN trigger-verification probe when an ``ebgp_sender_peer_addr``
-        # is supplied: it reads ``getPrefilterReceivedNetworks(sender)`` and
-        # asserts the mutated community arrived on the WIRE from the eBGP
-        # sender that the wrapper's peer-scoped Stop/Start affected. This
-        # isolates the wrapper's contract ("did my IXIA-side mutation reach
-        # the DUT?") from any downstream UG-replication latency (which is
-        # a separate spec gate). Without ``ebgp_sender_peer_addr``, fall
-        # back to the adj-RIB-OUT UG-validation form (compares per-prefix
-        # community across iBGP receivers).
-        # Spec 2.3.3 assertions applied verbatim: after the community
-        # mutation, receivers must observe the new (``anchor``) community
-        # AND the old (``forbidden``) community must be absent — "no
-        # stale community values". Both sub-assertions run inline BEFORE
-        # cleanup reverts the mutation.
+        # Prefer the adj-RIB-IN probe when ``ebgp_sender_peer_addr`` is
+        # supplied: it reads the DUT's view of the sender directly, isolating
+        # the wrapper's contract from downstream UG-replication latency.
+        # Without ``ebgp_sender_peer_addr``, fall back to the adj-RIB-OUT
+        # form (per-prefix community across iBGP receivers).
         #
-        # Empirical (bag013 hardware, 5 runs 2026-06-30 PB3 v5-v9):
-        # wrapper writes ``mutated_community`` to slot 0 on all 750 eBGP
-        # prefixes (anchor-present PASS 100%). The forbidden check
-        # deterministically observes the SAME 9 of 750 prefix indices
-        # (0xa7, 0xf5, 0x116, 0x142, 0x160, 0x1c0, 0x223, 0x288, 0x2aa)
-        # still carrying ``initial_community`` in a non-slot-0 position
-        # across every run. Deterministic-same-9 rules out BGP re-
-        # advertise timing (that would vary the stragglers run-to-run);
-        # confirmed root cause is IXIA setup-time
-        # ``configure_community_pool`` per-route ``community_combinations``
-        # cycling — the initial value lands in a non-slot-0 position for
-        # those 9 routes at build time, and our slot-0 wrapper cannot
-        # reach it. pt2 setup-side fix: use non-overlapping
-        # initial/mutated values so no route carries the initial value
-        # anywhere other than the slot the wrapper mutates. The check
-        # firing here is spec-correct behavior; relaxing would compromise
-        # spec loyalty.
+        # Spec 2.3.3: receivers must observe the new (``anchor``) community
+        # AND the old (``forbidden``) community must be absent. Both
+        # sub-assertions run inline BEFORE cleanup reverts the mutation.
+        #
+        # Caveat: if the initial community lands in a non-slot-0 position
+        # for any route at setup time (per-route ``community_combinations``
+        # cycling in ``configure_community_pool``), the slot-0-only wrapper
+        # cannot reach it and the forbidden check will fire on those routes.
+        # Setup-side fix: use non-overlapping initial/mutated values.
         inline_phase_3_checks.append(
             _pb3_phase_3_community_check(
                 ebgp_sender_peer_addr=ebgp_sender_peer_addr,
@@ -1629,7 +1522,6 @@ def create_bgp_ug_backpressure_withdraw_attr_change_playbook(
             )
         )
     postcheck_phase_3_checks.append(
-        # All iBGP peers have identical final route set (no per-peer state divergence).
         create_bgp_peer_route_set_equality_check(
             baseline_peer_addr=ibgp_receiver_peer_addrs[0],
             tested_peer_addrs=ibgp_receiver_peer_addrs[1:],
@@ -1768,11 +1660,7 @@ def create_bgp_ug_backpressure_all_peers_block_down_recover_playbook(
         description_prefix="Phase 1 (2.3.4)",
     )
 
-    # Storm-arrival probe (see PB1 note): DUT ingress RIB from the storm
-    # sender peer group. Optional -- when regex not provided, gate is
-    # skipped.
     trigger_steps = storm_steps + [
-        # Phase 2: mass shutdown of ALL eBGP via DG toggle (truly simultaneous).
         create_ixia_api_step(
             api_name="toggle_device_groups",
             args_dict={
@@ -1790,25 +1678,20 @@ def create_bgp_ug_backpressure_all_peers_block_down_recover_playbook(
             duration=post_shutdown_settle_s,
             description=f"Phase 2-settle (2.3.4): {post_shutdown_settle_s}s for DUT hold-timer + UG cleanup",
         ),
-        # Phase 3+4 (combined inline): unaffected check + followup inject
         create_validation_step(
             point_in_time_checks=[
-                # iBGP + BGP_MON not affected by mass eBGP shutdown — assert
-                # every peer in the unaffected set is still ESTABLISHED. The
-                # expected count is the size of the scoped filter (NOT the
-                # chassis-wide surviving total), because the check is
-                # already restricted to ``unaffected_peers`` via
+                # Expected count is the size of the scoped filter (NOT the
+                # chassis-wide surviving total): the check is already
+                # restricted to ``unaffected_peers`` via
                 # ``ignore_all_prefixes_except``.
                 create_bgp_session_establish_check(
                     ignore_all_prefixes_except=unaffected_peers,
                     expected_established_sessions=len(unaffected_peers),
                 ),
-                # eBGP peers must be DOWN.
                 create_bgp_session_establish_check(
                     ignore_all_prefixes_except=list(ebgp_peer_addrs),
                     expected_established_sessions=0,
                 ),
-                # UG state not corrupted.
                 create_bgp_update_group_check(expect_enabled=True),
             ],
             description="Phase 3 mid-shutdown gate (2.3.4): iBGP+BGP_MON UP, all eBGP DOWN, UG intact",
@@ -1827,11 +1710,9 @@ def create_bgp_ug_backpressure_all_peers_block_down_recover_playbook(
         ),
         create_validation_step(
             point_in_time_checks=[
-                # Cross-peer equality WITHIN the unaffected peer group.
-                # ``unaffected_peers = bgp_mon + ibgp`` -- both fall under the
-                # DUT's iBGP-fanout policy (BGP_MON is a special-shape peer but
-                # receives the same full RIB), so a single equality check is
-                # valid. Delivery-magnitude assertion is the delta step below.
+                # ``unaffected_peers = bgp_mon + ibgp`` both fall under the
+                # DUT's iBGP-fanout policy (BGP_MON receives the same full
+                # RIB), so a single cross-peer equality check is valid.
                 create_bgp_peer_route_set_equality_check(
                     baseline_peer_addr=unaffected_peers[0],
                     tested_peer_addrs=unaffected_peers[1:],
@@ -1859,7 +1740,6 @@ def create_bgp_ug_backpressure_all_peers_block_down_recover_playbook(
             if storm_sender_peer_addr_prefix
             else []
         ),
-        # Phase 6: mass recovery of eBGP via DG toggle (truly simultaneous).
         create_ixia_api_step(
             api_name="toggle_device_groups",
             args_dict={
@@ -1878,17 +1758,12 @@ def create_bgp_ug_backpressure_all_peers_block_down_recover_playbook(
         ),
     ]
 
-    # Phase 7 spec gate: all recovered eBGP peers received full re-sync from
-    # shadow RIB. MUST run inline BEFORE ``cleanup_steps`` withdraws the storm
-    # prefixes — TAAC lifecycle is ``trigger_steps -> cleanup_steps ->
-    # postchecks``, so if this ran in postchecks the ``anchor_route_count``
-    # assertion would compare against a post-cleanup state where ALL storm
-    # prefixes have been withdrawn and fail vacuously.
-    # Phase 7 spec gate is per-outbound-policy-group. iBGP baseline vs eBGP
-    # tested is a policy mismatch (iBGP receives full RIB, eBGP receives an
-    # egress-policy-filtered subset), so we split into two equality checks:
-    # one within the recovered eBGP group and one within the untouched iBGP
-    # group. Drop absolute anchor_route_count -- see Phase 5 note above.
+    # MUST run inline BEFORE ``cleanup_steps`` withdraws the storm prefixes.
+    # TAAC lifecycle is ``trigger_steps -> cleanup_steps -> postchecks``, so
+    # running this in postchecks would compare against a post-cleanup state
+    # where ALL storm prefixes have been withdrawn and fail vacuously.
+    # Split into per-outbound-policy-group equality checks (iBGP receives
+    # full RIB, eBGP receives an egress-policy-filtered subset).
     inline_phase_7_checks: t.List[PointInTimeHealthCheck] = [
         create_bgp_session_establish_check(
             ignore_all_prefixes_except=list(ebgp_peer_addrs),
@@ -1918,11 +1793,9 @@ def create_bgp_ug_backpressure_all_peers_block_down_recover_playbook(
             ),
         ),
     )
-    # Phase 7 ingress-RIB gate: DUT still has >= total_count from storm
-    # sender post-recovery. "eBGP peers received full re-sync" cannot be
-    # verified via peer sent_count on this topology (egress policy filters
-    # heavy-attr storm); the ingress-RIB probe validates the DUT-side half
-    # of the spec.
+    # "eBGP peers received full re-sync" cannot be verified via peer
+    # sent_count on this topology (egress policy filters heavy-attr storm);
+    # the ingress-RIB probe validates the DUT-side half of the spec.
     if storm_sender_peer_addr_prefix:
         trigger_steps.append(
             create_verify_dut_received_from_peer_group_step(
