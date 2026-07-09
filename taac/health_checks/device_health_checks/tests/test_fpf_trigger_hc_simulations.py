@@ -102,7 +102,8 @@ def _make_session_collector(
     timeout_count: int = 0,
 ) -> MagicMock:
     collector = MagicMock()
-    collector.host = GPU_HOST
+    collector.hosts = [GPU_HOST]
+    collector.hosts_in_window.return_value = [GPU_HOST]
     collector.evaluate_window.return_value = window_result
     collector.evaluate_recovery_hold.return_value = recovery
     collector.timeout_count_in_window.return_value = timeout_count
@@ -133,6 +134,8 @@ class _SessionStatBase(unittest.IsolatedAsyncioTestCase):
             p.start()
 
     async def _run(self, collector, params):
+        # The session-stat check reads the single "hrt_fsdb_session" collector via
+        # get_collector(); None models an empty registry.
         with patch(f"{SESSION_MODULE}.get_collector", return_value=collector):
             return await self.health_check._run(
                 self.device, hc_types.BaseHealthCheckIn(), params

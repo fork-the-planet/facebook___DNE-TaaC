@@ -174,13 +174,18 @@ class FpfStartCollectorsTask(BaseTask):
         enable_fsdb_session = bool(params.get("enable_fsdb_session_collector", True))
         gpu_hosts = [h for h in hosts if str(h).startswith("rtptest")]
         if enable_fsdb_session and gpu_hosts:
-            session_host: str = params.get("fsdb_session_host", gpu_hosts[0])
             session_poll_sec: float = float(
                 params.get("fsdb_session_poll_interval_sec", 3.0)
             )
             session_expected: int = int(params.get("fsdb_session_expected", 32))
+            # ONE collector holds ALL monitored GPU hosts (each row carries its
+            # host, one file with a host column). ``fsdb_session_hosts`` (opt-in)
+            # selects which hosts to monitor; default is all GPU hosts.
+            # FpfHrtSessionStatHealthCheck reads this single collector and
+            # iterates its hosts internally, asserting each meets the census.
+            session_hosts: t.List[str] = params.get("fsdb_session_hosts") or gpu_hosts
             fsdb_session_collector = HrtFsdbSessionCollector(
-                host=session_host,
+                hosts=session_hosts,
                 expected_connected=session_expected,
                 interval_sec=session_poll_sec,
             )
@@ -189,37 +194,57 @@ class FpfStartCollectorsTask(BaseTask):
             register_collector("hrt_fsdb_session", fsdb_session_collector)
             logger.info(
                 f"[FpfStartCollectors] HRT FSDB-session collector started on "
-                f"{session_host} (expected {session_expected} CONNECTED, "
+                f"{session_hosts} (expected {session_expected} CONNECTED, "
                 f"poll {session_poll_sec:.0f}s)"
             )
 
-        # Optional: production-prefix reachability collector. Only started when
-        # the caller supplies prod_prefixes (list) + the host + GPU device_id —
-        # the collector never assumes all GPUs. Monitors steady-state per-prefix
-        # reachability for the reachability-stability postcheck.
-        prod_prefixes: t.List[str] = params.get("prod_prefixes", [])
-        if prod_prefixes:
-            prod_host: str = params.get("prod_prefix_host", hosts[0] if hosts else "")
-            prod_device_id: int = params.get("prod_prefix_device_id", 0)
+        # Production-prefix reachability + HRT plane-status collectors — ONE
+        # instance each, holding ALL monitored hosts (one file with a host
+        # column). Each host monitors its OWN prefixes via
+        # ``prefixes_by_host``. Wiring inputs:
+        #
+        #   ``prod_prefixes_by_host`` ({host: [prefixes]}): the per-host prefix
+        #     map, preferred. Every host in the map is monitored.
+        #   Legacy (``prod_prefixes`` + ``prod_prefix_host``): a single host's
+        #     prefixes, folded into a one-entry prefixes_by_host map.
+        #
+        # FpfProdHrtPrefixStabilityHealthCheck / FpfHrtPlaneStatusHealthCheck read
+        # the single collector and iterate its hosts internally.
+        prod_device_id: int = params.get("prod_prefix_device_id", 0)
+        prod_by_host: t.Dict[str, t.List[str]] = (
+            params.get("prod_prefixes_by_host") or {}
+        )
+        if not prod_by_host:
+            prod_prefixes: t.List[str] = params.get("prod_prefixes", [])
+            if prod_prefixes:
+                prod_host: str = params.get(
+                    "prod_prefix_host", hosts[0] if hosts else ""
+                )
+                prod_by_host = {prod_host: prod_prefixes}
+        # Drop hosts with no prefixes, and guard against an empty host key: the
+        # legacy fallback yields "" when no hosts were supplied, which would
+        # otherwise build ProdHrtPrefixCollector(hosts=[""]) / get_hrt_client("").
+        dropped = [h for h, p in prod_by_host.items() if p and not h]
+        if dropped:
+            logger.warning(
+                "[FpfStartCollectors] dropping prod-prefix entry with empty host "
+                "key (no hosts supplied and no prod_prefix_host given)"
+            )
+        prod_by_host = {h: p for h, p in prod_by_host.items() if p and h}
+        if prod_by_host:
+            prod_hosts = list(prod_by_host.keys())
             prod_collector = ProdHrtPrefixCollector(
-                host=prod_host,
+                hosts=prod_hosts,
                 device_id=prod_device_id,
-                prefixes=prod_prefixes,
+                prefixes_by_host=prod_by_host,
                 interval_sec=poll_interval_sec,
             )
             prod_collector.set_append_mode(True)
             prod_collector.start()
             register_collector("prod_hrt_prefix", prod_collector)
-            logger.info(
-                f"[FpfStartCollectors] Production-prefix collector started on "
-                f"{prod_host} dev{prod_device_id} for {len(prod_prefixes)} prefix(es)"
-            )
 
-            # Device-level HRT plane-status collector (hrtctl show plane-status):
-            # tracks per-plane Up/Drained state on the same monitored GPU device.
-            # Consumed by FpfHrtPlaneStatusHealthCheck (all_up / drain contracts).
             plane_status_collector = HrtPlaneStatusCollector(
-                host=prod_host,
+                hosts=prod_hosts,
                 device_id=prod_device_id,
                 interval_sec=poll_interval_sec,
             )
@@ -227,8 +252,9 @@ class FpfStartCollectorsTask(BaseTask):
             plane_status_collector.start()
             register_collector("hrt_plane_status", plane_status_collector)
             logger.info(
-                f"[FpfStartCollectors] HRT plane-status collector started on "
-                f"{prod_host} dev{prod_device_id}"
+                f"[FpfStartCollectors] Production-prefix + plane-status collectors "
+                f"started on {prod_hosts} dev{prod_device_id} "
+                f"({sum(len(p) for p in prod_by_host.values())} prefix(es) total)"
             )
 
         logger.info(

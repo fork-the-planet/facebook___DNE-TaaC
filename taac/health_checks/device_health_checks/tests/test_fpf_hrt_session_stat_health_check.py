@@ -3,11 +3,13 @@
 # pyre-unsafe
 """Unit tests for FpfHrtSessionStatHealthCheck.
 
-The health check is a pure postcheck over the ``hrt_fsdb_session`` collector.
-These tests patch ``get_collector`` to return a synthetic collector whose
-``evaluate_window`` / ``evaluate_recovery_hold`` return canned, windowed results
-(simulating 32->28 drop + recovery, never-recover, never-drop, no-samples, and
-the stable-state steady / dip cases), so correctness is proven without devices.
+The health check is a pure postcheck over the single ``hrt_fsdb_session``
+collector (which holds ALL hosts; the check iterates its hosts). These tests
+patch ``get_collector`` to return a synthetic collector whose
+``hosts_in_window`` names the host(s) and whose ``evaluate_window`` /
+``evaluate_recovery_hold`` return canned, windowed results (simulating 32->28
+drop + recovery, never-recover, never-drop, no-samples, and the stable-state
+steady / dip cases), so correctness is proven without devices.
 
 ``everpaste_details_suffix`` (network) is patched to a no-op so the check logic
 is exercised in isolation.
@@ -36,9 +38,11 @@ def _make_collector(
     window_result: FsdbSessionWindowResult,
     recovery=(True, 90.0, "recovered to 32 and held for 90.0s (>= 60s floor)"),
     timeout_count: int = 0,
+    hosts=(GPU_HOST,),
 ) -> MagicMock:
     collector = MagicMock()
-    collector.host = GPU_HOST
+    collector.hosts = list(hosts)
+    collector.hosts_in_window.return_value = list(hosts)
     collector.evaluate_window.return_value = window_result
     collector.evaluate_recovery_hold.return_value = recovery
     collector.timeout_count_in_window.return_value = timeout_count
@@ -76,6 +80,8 @@ class TestFpfHrtSessionStatHealthCheck(unittest.IsolatedAsyncioTestCase):
         dt_patcher.start()
 
     async def _run(self, collector, params):
+        # The check reads the single "hrt_fsdb_session" collector via
+        # get_collector(); None models an empty registry.
         with patch(f"{HC_MODULE}.get_collector", return_value=collector):
             return await self.health_check._run(
                 self.device, hc_types.BaseHealthCheckIn(), params
@@ -366,6 +372,60 @@ class TestFpfHrtSessionStatHealthCheck(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["window_start"], 1000.0)
 
     # ---- misc --------------------------------------------------------------
+
+    # ---- multi-host (single collector holds all hosts) --------------------
+
+    async def test_multi_host_all_steady_pass(self):
+        """One collector, two hosts, both steady at 32 -> aggregate PASS."""
+        host_a = "rtptest1544.mwg2"
+        host_b = "rtptest1575.mwg2"
+
+        def _res(host):
+            return FsdbSessionWindowResult(
+                host=host,
+                samples=50,
+                error_samples=0,
+                min_connected=32,
+                max_connected=32,
+                last_connected=32,
+                reached_expected=True,
+                detail=f"connected min=32 max=32 last=32 ({host})",
+            )
+
+        collector = _make_collector(_res(host_a), hosts=(host_a, host_b))
+        collector.evaluate_window.side_effect = lambda **kw: _res(kw["host"])
+        result = await self._run(
+            collector, {"mode": "stable", "expected_connected": 32}
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS)
+        self.assertIn(host_a, result.message)
+        self.assertIn(host_b, result.message)
+
+    async def test_multi_host_one_fails_aggregate_fail(self):
+        """One collector, two hosts; host B dips -> aggregate FAIL."""
+        host_a = "rtptest1544.mwg2"
+        host_b = "rtptest1575.mwg2"
+
+        def _res(host):
+            dip = host == host_b
+            return FsdbSessionWindowResult(
+                host=host,
+                samples=50,
+                error_samples=0,
+                min_connected=30 if dip else 32,
+                max_connected=32,
+                last_connected=32,
+                reached_expected=True,
+                detail=f"connected ({host})",
+            )
+
+        collector = _make_collector(_res(host_a), hosts=(host_a, host_b))
+        collector.evaluate_window.side_effect = lambda **kw: _res(kw["host"])
+        result = await self._run(
+            collector, {"mode": "stable", "expected_connected": 32}
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.FAIL)
+        self.assertIn(host_b, result.message)
 
     async def test_no_collector_skip(self):
         """No registered collector -> SKIP."""

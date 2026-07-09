@@ -18,15 +18,31 @@ from taac.libs.fpf.fpf_collector_registry import (
 )
 from taac.health_check.health_check import types as hc_types
 
+# Registry name of the single plane-status collector (holds ALL hosts).
+_COLLECTOR_NAME = "hrt_plane_status"
+
+
+class _HostPlaneResult:
+    """Per-host plane-status evaluation outcome."""
+
+    def __init__(self, host: str) -> None:
+        self.host = host
+        self.status = "SKIP"  # PASS / FAIL / SKIP
+        self.results: t.List[t.Any] = []
+        self.timeout_count = 0
+
 
 class FpfHrtPlaneStatusHealthCheck(
     AbstractDeviceHealthCheck[hc_types.BaseHealthCheckIn]
 ):
     """Per-device HRT plane-status check — the ``hrtctl show plane-status`` signal.
 
-    Consumes the live ``hrt_plane_status`` collector (one GPU device) registered
-    in the FPF collector registry. Each poll captures the State of every plane
-    (beth0..beth7). Two contracts via ``mode``:
+    Consumes the single live ``hrt_plane_status`` collector registered in the FPF
+    collector registry. That ONE collector holds ALL monitored GPU hosts (each
+    row carries its ``host``); this check iterates the hosts present in its rows
+    and evaluates each host independently; every host must satisfy the contract.
+    Each poll captures the State of every plane (beth0..beth7). Two contracts
+    via ``mode``:
 
       mode="all_up" (default): every plane is UP across the whole window. Used
         for non-drained scenarios — baseline/precheck, interface enable, and
@@ -41,8 +57,8 @@ class FpfHrtPlaneStatusHealthCheck(
         plane's pre-drain UP samples are excluded. SKIPs (inconclusive) when the
         disruption was verified ineffective.
 
-    Status is FAIL if any plane violates its contract, SKIP if no in-window data,
-    else PASS.
+    The overall status is FAIL if any host violates its contract (or has poll
+    timeouts), SKIP if no host produced in-window data, else PASS.
     """
 
     CHECK_NAME = hc_types.CheckName.FPF_HRT_PLANE_STATUS_CHECK
@@ -55,7 +71,7 @@ class FpfHrtPlaneStatusHealthCheck(
         input: hc_types.BaseHealthCheckIn,
         check_params: t.Dict[str, t.Any],
     ) -> hc_types.HealthCheckResult:
-        collector = get_collector("hrt_plane_status")
+        collector = get_collector(check_params.get("collector_name", _COLLECTOR_NAME))
         if collector is None:
             return hc_types.HealthCheckResult(
                 status=hc_types.HealthCheckStatus.SKIP,
@@ -98,8 +114,73 @@ class FpfHrtPlaneStatusHealthCheck(
         if settle_sec > 0 and mode != "drain":
             window_start = min(window_start + settle_sec, window_end)
 
+        # The single collector holds all hosts (each row carries its host); the
+        # hosts to evaluate are those present in the in-window rows.
+        hosts = collector.hosts_in_window(window_start, window_end)
+        if not hosts:
+            hosts = list(getattr(collector, "hosts", []) or [])
+
+        host_results: t.List[_HostPlaneResult] = []
+        for host in hosts:
+            hr = self._evaluate_host(
+                host,
+                collector,
+                mode,
+                stability_mode,
+                expected_planes,
+                impacted_planes,
+                window_start,
+                window_end,
+            )
+            host_results.append(hr)
+
+        if not host_results or all(hr.status == "SKIP" for hr in host_results):
+            return hc_types.HealthCheckResult(
+                status=hc_types.HealthCheckStatus.SKIP,
+                message=(
+                    "No in-window HRT plane-status samples on any host "
+                    f"[{window_start:.0f}, {window_end:.0f}]"
+                ),
+            )
+
+        agg_fail = any(hr.status == "FAIL" for hr in host_results)
+        agg = "FAIL" if agg_fail else "PASS"
+
+        report = _format_report(host_results, mode, agg)
+        details = await everpaste_details_suffix(
+            f"HRT plane-status ({mode}) — per-host / per-plane detail",
+            report.splitlines(),
+            collectors=[collector],
+            window_start=window_start,
+            window_end=window_end,
+            result_status=agg,
+            result_reason=(
+                report.splitlines()[1] if len(report.splitlines()) > 1 else ""
+            )[:300],
+        )
+
+        status = (
+            hc_types.HealthCheckStatus.FAIL
+            if agg_fail
+            else hc_types.HealthCheckStatus.PASS
+        )
+        return hc_types.HealthCheckResult(status=status, message=report + details)
+
+    def _evaluate_host(
+        self,
+        host: str,
+        collector: t.Any,
+        mode: str,
+        stability_mode: str,
+        expected_planes: t.Optional[t.List[int]],
+        impacted_planes: t.List[int],
+        window_start: float,
+        window_end: float,
+    ) -> _HostPlaneResult:
+        hr = _HostPlaneResult(host)
         self.logger.info(
-            f"  [HRT plane-status] mode={mode} dev{getattr(collector, 'device_id', '?')} "
+            f"  [HRT plane-status][{host}] mode={mode} "
+            f"dev{getattr(collector, 'device_id', '?')} "
             f"window: {window_start:.0f} to {window_end:.0f} "
             f"({window_end - window_start:.0f}s span)"
         )
@@ -110,6 +191,7 @@ class FpfHrtPlaneStatusHealthCheck(
                 window_end=window_end,
                 impacted_planes=impacted_planes,
                 expected_planes=expected_planes,
+                host=host,
             )
         else:
             results = collector.evaluate_all_up_window(
@@ -118,59 +200,57 @@ class FpfHrtPlaneStatusHealthCheck(
                 expected_planes=expected_planes,
                 last_sample_only=(stability_mode == "last_sample"),
                 skip_null_strict=(stability_mode == "skip_null_strict"),
+                host=host,
             )
+        hr.results = results
+        hr.timeout_count = collector.timeout_count_in_window(
+            window_start, window_end, host=host
+        )
 
         for r in results:
             status = "PASS" if r.passed else "FAIL"
             self.logger.info(
-                f"  [HRT plane-status] Plane {r.plane}: [{status}] "
+                f"  [HRT plane-status][{host}] Plane {r.plane}: [{status}] "
                 f"expect={r.expected_state} {r.detail}"
             )
 
-        failures = [r for r in results if not r.passed]
-        details = await everpaste_details_suffix(
-            f"HRT plane-status ({mode}) — per-plane detail",
-            [
-                f"Plane {r.plane}: [{'PASS' if r.passed else 'FAIL'}] "
-                f"expect={r.expected_state} observed={r.observed_state} — {r.detail}"
-                for r in results
-            ],
-            collectors=[collector],
-            window_start=window_start,
-            window_end=window_end,
-            result_status=("FAIL" if failures else "PASS"),
-            result_reason="; ".join(f"Plane {r.plane}: {r.detail}" for r in failures)[
-                :300
-            ],
-        )
+        # No in-window samples for THIS host => every plane result has samples==0
+        # (the collector holds all hosts; a host with no rows yields empty-sample
+        # per-plane results). Treat that as SKIP, not FAIL.
+        no_samples = bool(results) and all(r.samples == 0 for r in results)
+        if hr.timeout_count > 0:
+            hr.status = "FAIL"
+        elif not results or no_samples:
+            hr.status = "SKIP"
+        elif any(not r.passed for r in results):
+            hr.status = "FAIL"
+        else:
+            hr.status = "PASS"
+        return hr
 
-        timeout_count = collector.timeout_count_in_window(window_start, window_end)
-        if timeout_count > 0:
-            return hc_types.HealthCheckResult(
-                status=hc_types.HealthCheckStatus.FAIL,
-                message=(
-                    f"Got null data — {timeout_count} poll timeout(s) in window "
-                    f"[{window_start:.0f}, {window_end:.0f}]{details}"
-                ),
-            )
 
-        if not results:
-            return hc_types.HealthCheckResult(
-                status=hc_types.HealthCheckStatus.SKIP,
-                message=(
-                    "No in-window HRT plane-status samples "
-                    f"[{window_start:.0f}, {window_end:.0f}]{details}"
-                ),
+def _format_report(host_results: t.List[_HostPlaneResult], mode: str, agg: str) -> str:
+    """Human-readable multi-host report (this is the everpaste'd message)."""
+    lines: t.List[str] = []
+    lines.append(f"HRT plane-status ({mode}) — {len(host_results)} host(s)")
+    for hr in host_results:
+        if hr.timeout_count > 0:
+            lines.append(
+                f"[{hr.host}] VERDICT {hr.status} | "
+                f"{hr.timeout_count} poll timeout(s) recorded null data"
             )
-
-        if failures:
-            fail_summary = "; ".join(f"Plane {r.plane}: {r.detail}" for r in failures)
-            return hc_types.HealthCheckResult(
-                status=hc_types.HealthCheckStatus.FAIL,
-                message=fail_summary + details,
+        elif not hr.results:
+            lines.append(f"[{hr.host}] VERDICT {hr.status} | no in-window samples")
+        else:
+            failures = [r for r in hr.results if not r.passed]
+            lines.append(
+                f"[{hr.host}] VERDICT {hr.status} | "
+                f"{len(hr.results) - len(failures)}/{len(hr.results)} plane(s) OK"
             )
-        pass_summary = "; ".join(f"Plane {r.plane}={r.observed_state}" for r in results)
-        return hc_types.HealthCheckResult(
-            status=hc_types.HealthCheckStatus.PASS,
-            message=f"All planes OK ({mode}) — {pass_summary}{details}",
-        )
+            for r in failures:
+                lines.append(
+                    f"    Plane {r.plane}: [FAIL] expect={r.expected_state} "
+                    f"observed={r.observed_state} — {r.detail}"
+                )
+    lines.append(f"AGGREGATE: {agg}")
+    return "\n".join(lines)

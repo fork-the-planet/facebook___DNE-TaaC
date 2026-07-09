@@ -2,6 +2,7 @@
 
 # pyre-unsafe
 
+import logging
 import time
 import typing as t
 
@@ -12,7 +13,6 @@ from taac.health_checks.abstract_health_check import (
 from taac.libs.fpf.fpf_collector_registry import (
     disruption_inconclusive_skip,
     everpaste_details_suffix,
-    get_all_collectors,
     get_collector,
     get_disruption_time,
     get_test_case_start_time,
@@ -34,10 +34,10 @@ DEFAULT_EXPECTED_DRAINED: t.List[int] = []
 DEFAULT_EXPECTED_UNREACHABLE: t.List[int] = [4, 5, 6, 7]
 DEFAULT_EXPECTED_PLANE_UP: t.List[int] = [0, 1, 2, 3, 4, 5, 6, 7]
 
-# Registry-name prefix used to discover production-prefix collectors. The single
-# legacy registration ("prod_hrt_prefix") and multi-host registrations
-# ("prod_hrt_prefix:<host>") both match.
-_COLLECTOR_NAME_PREFIX = "prod_hrt_prefix"
+logger: logging.Logger = logging.getLogger(__name__)
+
+# Registry name of the single production-prefix collector (holds ALL hosts).
+_COLLECTOR_NAME = "prod_hrt_prefix"
 
 # Plane-list fields that must always be present as integer lists (never null).
 _LIST_FIELDS = (
@@ -66,34 +66,56 @@ def _fmt(planes: t.Optional[t.List[int]]) -> str:
 def discover_prod_collectors(
     check_params: t.Dict[str, t.Any],
 ) -> t.List[t.Tuple[str, t.Any]]:
-    """Return [(host, collector)] for every registered prod-prefix collector.
+    """Return [(host, collector)] for the single prod-prefix collector.
 
-    Honors an explicit ``collector_names`` check_param; otherwise discovers all
-    registry entries whose name starts with ``prod_hrt_prefix`` (covers both the
-    legacy single registration and per-host ``prod_hrt_prefix:<host>`` ones).
+    The single collector holds ALL hosts; this returns one (host, collector)
+    pair per host present in its rows so the check can iterate hosts internally
+    (each _evaluate_* filters the collector's rows to the given host). Kept as a
+    seam so tests can patch it to inject a synthetic collector.
     """
-    names = check_params.get("collector_names")
-    out: t.List[t.Tuple[str, t.Any]] = []
-    if names:
-        for n in names:
-            c = get_collector(n)
-            if c is not None:
-                out.append((str(getattr(c, "host", n)), c))
-        return out
-    for name, c in get_all_collectors().items():
-        if name.startswith(_COLLECTOR_NAME_PREFIX) and hasattr(c, "get_rows_in_window"):
-            out.append((getattr(c, "host", name), c))
-    # Stable order by host for deterministic reporting.
-    out.sort(key=lambda hc: hc[0])
-    return out
+    if "collector_names" in check_params:
+        # The pre-multi-host API accepted a plural list override; the single
+        # multi-host collector makes it meaningless. Surface misconfigured
+        # callers instead of silently falling back to the default name.
+        logger.warning(
+            "discover_prod_collectors: 'collector_names' is deprecated and "
+            "ignored in the multi-host model; use singular 'collector_name'. "
+            "Falling back to %r.",
+            check_params.get("collector_name", _COLLECTOR_NAME),
+        )
+    name = check_params.get("collector_name", _COLLECTOR_NAME)
+    c = get_collector(name)
+    if c is None:
+        return []
+    hosts: t.List[str] = []
+    hiw = getattr(c, "hosts_in_window", None)
+    if callable(hiw):
+        window_end = check_params.get("window_end", time.time())
+        tc_start = get_test_case_start_time()
+        lookback_sec = check_params.get("lookback_sec", 900)
+        window_start = check_params.get(
+            "window_start", tc_start if tc_start else window_end - lookback_sec
+        )
+        hosts = t.cast(t.List[str], hiw(window_start, window_end) or [])
+    if not hosts:
+        hosts = list(getattr(c, "hosts", []) or [])
+    return [(h, c) for h in hosts]
 
 
 def _prefix_samples(
-    rows: t.List[t.Any], target_norms: t.Optional[t.Set[str]]
+    rows: t.List[t.Any],
+    target_norms: t.Optional[t.Set[str]],
+    host: t.Optional[str] = None,
 ) -> t.Dict[str, t.Dict[str, t.Any]]:
-    """norm -> {display, samples: [(ts_float, ts_str, rb)] sorted}."""
+    """norm -> {display, samples: [(ts_float, ts_str, rb)] sorted}.
+
+    ``host`` (when given) restricts to rows from that host — the single collector
+    holds all hosts, so each per-host evaluation filters here.
+    """
     out: t.Dict[str, t.Dict[str, t.Any]] = {}
     for row in rows:
+        if host is not None and getattr(row, "host", None) != host:
+            continue
         ts = _row_ts(row)
         if ts is None:
             continue
@@ -214,7 +236,7 @@ def _evaluate_host(
     """
     res = _HostResult(host)
     rows = collector.get_rows_in_window(window_start, window_end)
-    timeline = _prefix_samples(rows, target_norms)
+    timeline = _prefix_samples(rows, target_norms, host=host)
     if not timeline:
         res.status = "SKIP"
         return res
@@ -353,7 +375,7 @@ def _evaluate_host_transition(
     """
     res = _HostResult(host)
     rows = collector.get_rows_in_window(window_start, window_end)
-    timeline = _prefix_samples(rows, target_norms)
+    timeline = _prefix_samples(rows, target_norms, host=host)
     if not timeline:
         res.status = "SKIP"
         return res
@@ -471,7 +493,7 @@ def _evaluate_host_local_drain(
     """
     res = _HostResult(host)
     rows = collector.get_rows_in_window(window_start, window_end)
-    timeline = _prefix_samples(rows, None)
+    timeline = _prefix_samples(rows, None, host=host)
     if not timeline:
         res.status = "SKIP"
         return res
@@ -655,10 +677,11 @@ class FpfProdHrtPrefixStabilityHealthCheck(
 ):
     """Postcheck: production HRT prefix reachability stability, per host.
 
-    Consumes the live ``prod_hrt_prefix`` collector(s) registered in the FPF
-    collector registry. Discovers ALL such collectors (one per host) and
-    evaluates each host independently. For every monitored prefix on a host,
-    over the test window:
+    Consumes the single live ``prod_hrt_prefix`` collector registered in the FPF
+    collector registry. That ONE collector holds ALL monitored hosts (each row
+    carries its ``host``, and each host monitors its own prefixes); this check
+    iterates the hosts present in its rows and evaluates each host independently.
+    For every monitored prefix on a host, over the test window:
 
       Signal 1 — Compliance: every in-window sample matches the prefix's
         baseline plane sets (reachable / drained / unreachable / plane_up).
@@ -727,36 +750,7 @@ class FpfProdHrtPrefixStabilityHealthCheck(
             {normalize_prefix(p) for p in prefix_filter} if prefix_filter else None
         )
 
-        # Per-prefix baselines by default; a fixed expected set is used only if
-        # any expected_* is supplied or baseline_mode is explicitly "fixed".
-        baseline_mode = check_params.get("baseline_mode", "per_prefix")
-        has_expected = any(
-            check_params.get(k) is not None
-            for k in (
-                "expected_reachable",
-                "expected_drained",
-                "expected_unreachable",
-                "expected_plane_up",
-            )
-        )
-        fixed_expected: t.Optional[t.Dict[str, t.List[int]]] = None
-        if baseline_mode != "per_prefix" or has_expected:
-            fixed_expected = {
-                "reachable_planes": sorted(
-                    check_params.get("expected_reachable", DEFAULT_EXPECTED_REACHABLE)
-                ),
-                "drained_planes": sorted(
-                    check_params.get("expected_drained", DEFAULT_EXPECTED_DRAINED)
-                ),
-                "unreachable_planes": sorted(
-                    check_params.get(
-                        "expected_unreachable", DEFAULT_EXPECTED_UNREACHABLE
-                    )
-                ),
-                "plane_up": sorted(
-                    check_params.get("expected_plane_up", DEFAULT_EXPECTED_PLANE_UP)
-                ),
-            }
+        fixed_expected = self._build_fixed_expected(check_params)
 
         # mode="transition" (link-event): impacted planes must go reachable->
         # unreachable within max_transition_sec. mode="local_drain"/"local_undrain"
@@ -790,8 +784,80 @@ class FpfProdHrtPrefixStabilityHealthCheck(
             recorded = get_disruption_time()
             disruption_ts = recorded if recorded > 0 else None
 
+        host_results = self._evaluate_hosts(
+            collectors,
+            mode=mode,
+            window_start=window_start,
+            window_end=window_end,
+            target_norms=target_norms,
+            fixed_expected=fixed_expected,
+            stability_mode=stability_mode,
+            local_norms=local_norms,
+            impacted_by_host=impacted_by_host,
+            max_drain_sec=max_drain_sec,
+            max_transition_sec=max_transition_sec,
+            disruption_ts=disruption_ts,
+        )
+        return await self._aggregate_and_report(
+            host_results, collectors, window_start, window_end
+        )
+
+    @staticmethod
+    def _build_fixed_expected(
+        check_params: t.Dict[str, t.Any],
+    ) -> t.Optional[t.Dict[str, t.List[int]]]:
+        """Per-prefix baselines by default; return a fixed expected-plane set only
+        if any ``expected_*`` is supplied or ``baseline_mode`` is explicitly not
+        ``per_prefix`` (else None)."""
+        baseline_mode = check_params.get("baseline_mode", "per_prefix")
+        has_expected = any(
+            check_params.get(k) is not None
+            for k in (
+                "expected_reachable",
+                "expected_drained",
+                "expected_unreachable",
+                "expected_plane_up",
+            )
+        )
+        if baseline_mode == "per_prefix" and not has_expected:
+            return None
+        return {
+            "reachable_planes": sorted(
+                check_params.get("expected_reachable", DEFAULT_EXPECTED_REACHABLE)
+            ),
+            "drained_planes": sorted(
+                check_params.get("expected_drained", DEFAULT_EXPECTED_DRAINED)
+            ),
+            "unreachable_planes": sorted(
+                check_params.get("expected_unreachable", DEFAULT_EXPECTED_UNREACHABLE)
+            ),
+            "plane_up": sorted(
+                check_params.get("expected_plane_up", DEFAULT_EXPECTED_PLANE_UP)
+            ),
+        }
+
+    def _evaluate_hosts(
+        self,
+        collectors: t.List[t.Tuple[str, t.Any]],
+        *,
+        mode: str,
+        window_start: float,
+        window_end: float,
+        target_norms: t.Optional[t.Set[str]],
+        fixed_expected: t.Optional[t.Dict[str, t.List[int]]],
+        stability_mode: str,
+        local_norms: t.Set[str],
+        impacted_by_host: t.Dict[str, t.List[int]],
+        max_drain_sec: float,
+        max_transition_sec: float,
+        disruption_ts: t.Optional[float],
+    ) -> t.List[_HostResult]:
+        """Dispatch each (host, collector) to the evaluator for ``mode`` and log a
+        one-line verdict per host."""
+        dts = float(disruption_ts) if disruption_ts is not None else None
         host_results: t.List[_HostResult] = []
         for host, collector in collectors:
+            impacted = {int(p) for p in impacted_by_host.get(host, [])}
             if mode in ("local_drain", "local_undrain"):
                 res = _evaluate_host_local_drain(
                     host,
@@ -799,9 +865,9 @@ class FpfProdHrtPrefixStabilityHealthCheck(
                     window_start,
                     window_end,
                     local_norms,
-                    {int(p) for p in impacted_by_host.get(host, [])},
+                    impacted,
                     max_drain_sec,
-                    float(disruption_ts) if disruption_ts is not None else None,
+                    dts,
                     to_drained=(mode == "local_drain"),
                 )
             elif mode == "transition":
@@ -811,9 +877,9 @@ class FpfProdHrtPrefixStabilityHealthCheck(
                     window_start,
                     window_end,
                     target_norms,
-                    {int(p) for p in impacted_by_host.get(host, [])},
+                    impacted,
                     max_transition_sec,
-                    float(disruption_ts) if disruption_ts is not None else None,
+                    dts,
                 )
             else:
                 res = _evaluate_host(
@@ -832,7 +898,17 @@ class FpfProdHrtPrefixStabilityHealthCheck(
                 f"S2 {'PASS' if res.s2_ok else 'FAIL'}, "
                 f"{len(res.impacts)} impacted prefix(es)"
             )
+        return host_results
 
+    async def _aggregate_and_report(
+        self,
+        host_results: t.List[_HostResult],
+        collectors: t.List[t.Tuple[str, t.Any]],
+        window_start: float,
+        window_end: float,
+    ) -> hc_types.HealthCheckResult:
+        """Aggregate per-host verdicts (SKIP if all skipped, FAIL if any failed,
+        else PASS) and attach the full per-host report + Everpaste details."""
         if all(r.status == "SKIP" for r in host_results):
             return hc_types.HealthCheckResult(
                 status=hc_types.HealthCheckStatus.SKIP,
@@ -842,18 +918,24 @@ class FpfProdHrtPrefixStabilityHealthCheck(
                 ),
             )
 
-        if any(r.status == "FAIL" for r in host_results):
-            agg = "FAIL"
-            status = hc_types.HealthCheckStatus.FAIL
-        else:
-            agg = "PASS"
-            status = hc_types.HealthCheckStatus.PASS
+        agg = "FAIL" if any(r.status == "FAIL" for r in host_results) else "PASS"
+        status = (
+            hc_types.HealthCheckStatus.FAIL
+            if agg == "FAIL"
+            else hc_types.HealthCheckStatus.PASS
+        )
 
         report = _format_report(host_results, agg)
+        # discover_prod_collectors repeats the single collector once per host;
+        # dedupe by identity so the poll table is attached only once.
+        unique_collectors: t.List[t.Any] = []
+        for _host, c in collectors:
+            if all(c is not seen for seen in unique_collectors):
+                unique_collectors.append(c)
         details = await everpaste_details_suffix(
             "Prod HRT prefix stability — full per-host report",
             report.splitlines(),
-            collectors=[c for _host, c in collectors],
+            collectors=unique_collectors,
             window_start=window_start,
             window_end=window_end,
             result_status=("FAIL" if agg == "FAIL" else "PASS"),

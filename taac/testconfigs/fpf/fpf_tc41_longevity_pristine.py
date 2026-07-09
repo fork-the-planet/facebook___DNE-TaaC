@@ -65,7 +65,16 @@ LONGEVITY_SEC = 300
 
 PROD_PREFIX_HOST = GPU_HOSTS[0]
 PROD_PREFIX_DEVICE_ID = 0
-PROD_PREFIXES = [get_prefix(PROD_PREFIX_HOST, PROD_PREFIX_DEVICE_ID)]
+# Monitor the prod HRT prefix on BOTH GPU hosts (each host originates its own /64
+# VF1 prefix). The collector task starts one prod-prefix + plane-status collector
+# per host; FpfProdHrtPrefixStabilityHealthCheck / FpfHrtPlaneStatusHealthCheck
+# discover all per-host collectors and assert each host independently.
+PROD_PREFIXES_BY_HOST = {
+    host: [get_prefix(host, PROD_PREFIX_DEVICE_ID)] for host in GPU_HOSTS
+}
+# Flattened list retained as the v2-playbook truthiness gate (enables the
+# prod-prefix + plane-status postchecks).
+PROD_PREFIXES = [pfx for pfxs in PROD_PREFIXES_BY_HOST.values() for pfx in pfxs]
 
 
 def create_fpf_tc41_test_config() -> TestConfig:
@@ -103,9 +112,9 @@ def create_fpf_tc41_test_config() -> TestConfig:
                 gtsws=OBSERVER_GTSWS,
                 hosts=GPU_HOSTS,
                 subnet_prefix=VF_COLLECTOR_SUBNET,
-                prod_prefixes=PROD_PREFIXES,
-                prod_prefix_host=PROD_PREFIX_HOST,
+                prod_prefixes_by_host=PROD_PREFIXES_BY_HOST,
                 prod_prefix_device_id=PROD_PREFIX_DEVICE_ID,
+                fsdb_session_hosts=GPU_HOSTS,
                 fsdb_mode=FSDB_COLLECTOR_MODE,
                 allow_baseline_failures=ALLOW_BASELINE_FAILURES,
                 rf_vf_groups=RF_VF_GROUPS,

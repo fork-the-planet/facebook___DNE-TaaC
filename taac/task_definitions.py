@@ -3220,10 +3220,12 @@ def create_fpf_start_collectors_task(
     prod_prefixes: t.Optional[t.List[str]] = None,
     prod_prefix_host: t.Optional[str] = None,
     prod_prefix_device_id: int = 0,
+    prod_prefixes_by_host: t.Optional[t.Dict[str, t.List[str]]] = None,
     fsdb_mode: str = "ribmap",
     allow_baseline_failures: bool = False,
     enable_fsdb_session_collector: bool = True,
     fsdb_session_host: t.Optional[str] = None,
+    fsdb_session_hosts: t.Optional[t.List[str]] = None,
     fsdb_session_poll_interval_sec: float = 3.0,
     fsdb_session_expected: int = 32,
     rf_vf_groups: t.Optional[t.List[t.Dict[str, t.Any]]] = None,
@@ -3248,9 +3250,19 @@ def create_fpf_start_collectors_task(
     The HRT FSDB-session-count collector (HrtFsdbSessionCollector) is started by
     default whenever rtptest GPU hosts are present (``enable_fsdb_session_collector``,
     default True), polling ``getFsdbSessions()`` every
-    ``fsdb_session_poll_interval_sec`` (default 3s) on ``fsdb_session_host``
-    (defaults to the first rtptest host) to record the CONNECTED census + per-lane
-    breakdown consumed by FpfHrtSessionStatHealthCheck.
+    ``fsdb_session_poll_interval_sec`` (default 3s) to record the CONNECTED census
+    + per-lane breakdown consumed by FpfHrtSessionStatHealthCheck.
+
+    The FSDB-session / prod-prefix / plane-status signals are each ONE collector
+    holding ALL monitored hosts (one file with a host column). ``fsdb_session_hosts``
+    ([host, ...]) selects which hosts the session collector monitors (default: all
+    GPU hosts). ``prod_prefixes_by_host`` ({host: [prefixes]}) gives each host its
+    OWN prod prefixes for the prod-prefix + plane-status collectors; the legacy
+    ``prod_prefixes`` + ``prod_prefix_host`` folds into a one-host map. The matching
+    health checks read the single collector and iterate its hosts internally,
+    asserting every host independently. ``fsdb_session_host`` (singular) is
+    accepted for back-compat and, when the plural form is not given, folded into
+    a one-entry ``fsdb_session_hosts`` list to preserve single-host intent.
     """
     params: t.Dict[str, t.Any] = {
         "gtsws": gtsws,
@@ -3266,9 +3278,18 @@ def create_fpf_start_collectors_task(
     }
     if rf_vf_groups:
         params["rf_vf_groups"] = rf_vf_groups
-    if fsdb_session_host is not None:
-        params["fsdb_session_host"] = fsdb_session_host
-    if prod_prefixes:
+    if fsdb_session_hosts:
+        params["fsdb_session_hosts"] = fsdb_session_hosts
+    elif fsdb_session_host is not None:
+        # Legacy singular form: fold into the plural list the task actually reads
+        # (fpf_collector_tasks only consumes fsdb_session_hosts). Preserves the
+        # caller's single-host intent instead of silently defaulting to all GPU
+        # hosts.
+        params["fsdb_session_hosts"] = [fsdb_session_host]
+    if prod_prefixes_by_host:
+        params["prod_prefixes_by_host"] = prod_prefixes_by_host
+        params["prod_prefix_device_id"] = prod_prefix_device_id
+    elif prod_prefixes:
         params["prod_prefixes"] = prod_prefixes
         params["prod_prefix_host"] = prod_prefix_host or (hosts[0] if hosts else "")
         params["prod_prefix_device_id"] = prod_prefix_device_id

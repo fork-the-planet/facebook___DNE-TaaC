@@ -1,6 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
 # pyre-unsafe
+import time
 import typing as t
 
 from taac.constants import TestDevice
@@ -21,16 +22,54 @@ class DeviceCoreDumpsHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCh
     CHECK_NAME = hc_types.CheckName.DEVICE_CORE_DUMPS_CHECK
     OPERATING_SYSTEMS = ["FBOSS", "EOS"]
 
+    @staticmethod
+    def _resolve_time_window(
+        check_params: t.Dict[str, t.Any],
+    ) -> t.Tuple[float, float]:
+        """Resolve the [start_time, end_time] window a core dump must fall in.
+
+        A core dump counts as "new" only when ``start_time < mtime <= end_time``
+        (start exclusive, end inclusive).
+
+        ``start_time`` fail-safe: when it is ABSENT or ``None`` (e.g. a bare
+        check with no ``jq_params``, or a jq expression that resolved to
+        ``null`` because ``.test_case_start_time`` was not in the jq context) we
+        anchor to *now* instead of the epoch. Anchoring to the epoch would treat
+        every historical core dump — including cores that are days old and
+        predate the test window entirely — as "new" and FAIL the stage.
+        Anchoring to now means an unscoped check flags nothing pre-existing
+        rather than everything, which is the safe default for a detector of
+        *new* crashes.
+
+        Note: an EXPLICIT numeric ``start_time`` (including ``0``) is honored
+        verbatim — only a missing/null value triggers the fail-safe. No live
+        construction passes a literal ``0`` (a bare check omits the key
+        entirely, and a null jq resolution yields ``None``), so this preserves
+        "epoch" semantics for any caller that deliberately asks for it while
+        still fixing the bare/null regression.
+
+        ``end_time`` follows the same rule and defaults to *now* when absent or
+        null, bounding out any core with a future mtime (clock skew / bad
+        ``%T@`` parse).
+        """
+        now = time.time()
+        raw_start = check_params.get("start_time")
+        start_time = float(raw_start) if raw_start is not None else now
+        raw_end = check_params.get("end_time")
+        end_time = float(raw_end) if raw_end is not None else now
+        return start_time, end_time
+
     async def _run(
         self,
         obj: TestDevice,
         input: hc_types.BaseHealthCheckIn,
         check_params: t.Dict[str, t.Any],
     ) -> hc_types.HealthCheckResult:
-        start_time = check_params.get("start_time", 0)
+        start_time, end_time = self._resolve_time_window(check_params)
         core_dumps_to_ignore = check_params.get("core_dumps_to_ignore", [])
         self.logger.info(
-            f"Checking for new core dumps on {obj.name} since {start_time}"
+            f"Checking for new core dumps on {obj.name} in window "
+            f"({start_time}, {end_time}]"
         )
         core_dumps = await async_find_critical_core_dumps(obj.name)
         self.logger.info(
@@ -38,7 +77,10 @@ class DeviceCoreDumpsHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCh
         )
         new_core_dumps = []
         for core_dump, timestamp in core_dumps.items():
-            if timestamp > start_time and core_dump not in core_dumps_to_ignore:
+            if (
+                start_time < timestamp <= end_time
+                and core_dump not in core_dumps_to_ignore
+            ):
                 new_core_dumps.append(core_dump)
         if new_core_dumps:
             return hc_types.HealthCheckResult(
@@ -53,11 +95,11 @@ class DeviceCoreDumpsHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCh
         input: hc_types.BaseHealthCheckIn,
         check_params: t.Dict[str, t.Any],
     ) -> hc_types.HealthCheckResult:
-        start_time = check_params.get("start_time", 0)
+        start_time, end_time = self._resolve_time_window(check_params)
         core_dumps_to_ignore = check_params.get("core_dumps_to_ignore", [])
         self.logger.info(
-            f"Checking for new core dumps on EOS device {obj.name} "
-            f"since {format_timestamp(start_time) if start_time else 'epoch'}"
+            f"Checking for new core dumps on EOS device {obj.name} in window "
+            f"({format_timestamp(start_time)}, {format_timestamp(end_time)}]"
         )
         core_dumps = await async_find_critical_core_dumps(
             obj.name, start_time=start_time
@@ -75,7 +117,7 @@ class DeviceCoreDumpsHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthCh
                 file_ts = int(match.group("timestamp"))
             else:
                 file_ts = timestamp
-            if file_ts > start_time:
+            if start_time < file_ts <= end_time:
                 new_core_dumps[core_dump] = file_ts
 
         if new_core_dumps:

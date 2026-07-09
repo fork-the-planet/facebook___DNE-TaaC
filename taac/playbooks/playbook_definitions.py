@@ -21004,10 +21004,15 @@ def create_fpf_link_event_disrupt_playbook(
     convergence drop. Default 0 = unchanged for in-playbook-injection callers.
 
     ``rf_vf_groups`` (8-STSW split-per-VF injection): list of
-    ``{"suffix", "subnet", "lanes"}``. When given, the broad HRT remote-failure
-    "stable" check is replaced by one per VF group (scoped to that group's own
-    lanes, reading its per-group collector) so each group asserts zero
-    remote-failure where it IS reachable, not the other group's expected failures.
+    ``{"suffix", "subnet", "lanes"}``. When given, BOTH HRT remote-failure checks
+    are split per VF group, each scoped to that group's own lanes and reading its
+    per-group narrow-subnet collector ("hrt_remote_failure_<suffix>"): (1) the
+    "stable" check so each group asserts zero remote-failure where it IS reachable,
+    not the other group's expected cross-plane failures, and (2) the disrupt
+    "drain" convergence check so an impacted lane converges to only its own group's
+    per-lane count (the aggregate collector would double-count the other group's
+    always-failed routes on that lane -> false FAIL). Lanes spanning both groups
+    emit one check per group.
 
     ``skip_injection`` drops the in-playbook prefix-injection + stabilization
     stage steps (prefixes injected once by the ``fpf_inject_bgp_prefixes`` setup
@@ -21267,18 +21272,47 @@ def create_fpf_link_event_disrupt_playbook(
     # host(s) for the rise; the stable assertion covers the injected lanes only
     # (a non-injected lane can show unrelated nonzero samples).
     if injected_prefixes_withdrawn and impacted_lanes:
-        postchecks.append(
-            create_fpf_hrt_remote_failure_convergence_check(
-                lanes=impacted_lanes,
-                expected_per_lane={str(lane): prefix_count for lane in impacted_lanes},
-                direction="drain",
-                max_convergence_sec=remote_failure_sla_sec,
-                lane_labels=lane_labels,
-                only_hosts=impacted_hosts,
-                use_live_collectors=True,
-                check_id="fpf_remote_failure_impacted",
+        if rf_vf_groups:
+            # Per-VF-group convergence: the impacted lane counts ONLY its own
+            # group's newly-failed routes. The aggregate 5000::/16 collector would
+            # also count the other group's always-failed cross-plane routes on the
+            # same lane (VF1 lane sees dd rise 0->count PLUS ee's persistent count),
+            # yielding count*2 vs an expected count -> false FAIL. Read the group's
+            # narrow-subnet collector and scope each check to the group's own
+            # impacted lanes; split into two checks when the impacted set spans
+            # both groups.
+            for _g in rf_vf_groups:
+                _glanes = [lane for lane in _g["lanes"] if lane in impacted_lanes]
+                if not _glanes:
+                    continue
+                postchecks.append(
+                    create_fpf_hrt_remote_failure_convergence_check(
+                        lanes=_glanes,
+                        expected_per_lane={str(lane): prefix_count for lane in _glanes},
+                        direction="drain",
+                        max_convergence_sec=remote_failure_sla_sec,
+                        lane_labels=lane_labels,
+                        only_hosts=impacted_hosts,
+                        use_live_collectors=True,
+                        collector_name=f"hrt_remote_failure_{_g['suffix']}",
+                        check_id=f"fpf_remote_failure_impacted_{_g['suffix']}",
+                    )
+                )
+        else:
+            postchecks.append(
+                create_fpf_hrt_remote_failure_convergence_check(
+                    lanes=impacted_lanes,
+                    expected_per_lane={
+                        str(lane): prefix_count for lane in impacted_lanes
+                    },
+                    direction="drain",
+                    max_convergence_sec=remote_failure_sla_sec,
+                    lane_labels=lane_labels,
+                    only_hosts=impacted_hosts,
+                    use_live_collectors=True,
+                    check_id="fpf_remote_failure_impacted",
+                )
             )
-        )
     stable_rf = [
         lane
         for lane in injected_lanes

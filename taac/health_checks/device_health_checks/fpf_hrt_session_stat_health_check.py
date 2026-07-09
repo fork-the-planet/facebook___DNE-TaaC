@@ -4,9 +4,12 @@
 
 """FPF HRT FSDB-session-count statistics health check.
 
-Consumes the live ``hrt_fsdb_session`` collector (one GPU host) registered in
-the FPF collector registry. Each poll captures the total CONNECTED FSDB-session
-count plus a per-lane breakdown. Two contracts via ``mode``:
+Consumes the single live ``hrt_fsdb_session`` collector registered in the FPF
+collector registry. That ONE collector holds ALL monitored GPU hosts (each row
+carries its ``host``); this check iterates the hosts present in its rows and
+evaluates each host independently; every host must satisfy the contract. Each
+poll captures the total CONNECTED FSDB-session count plus a per-lane breakdown.
+Two contracts via ``mode``:
 
   mode="disruption": two independent signals over the test window.
     Signal 1 — DURING the disruption the CONNECTED count drops to
@@ -22,7 +25,9 @@ count plus a per-lane breakdown. Two contracts via ``mode``:
   mode="stable": the CONNECTED count stays at ``expected_connected`` across the
     whole window with no churn — used for stable-state configs.
 
-Mirrors the everpaste-suffix + logging style of the plane-status check.
+The overall status is FAIL if any host violates its contract, SKIP if no host
+produced in-window data, else PASS. Mirrors the everpaste-suffix + logging style
+of the plane-status check.
 """
 
 import time
@@ -46,11 +51,24 @@ DEFAULT_EXPECTED_CONNECTED_DURING = 28
 DEFAULT_RECOVERY_MIN_SEC = 60.0
 DEFAULT_LOOKBACK_SEC = 900
 
+# Registry name of the single FSDB-session collector (holds ALL hosts).
+_COLLECTOR_NAME = "hrt_fsdb_session"
+
+
+class _HostSessionResult:
+    """Per-host FSDB-session evaluation outcome."""
+
+    def __init__(self, host: str) -> None:
+        self.host = host
+        self.status = "SKIP"  # PASS / FAIL / SKIP
+        self.reason = ""
+        self.detail_lines: t.List[str] = []
+
 
 class FpfHrtSessionStatHealthCheck(
     AbstractDeviceHealthCheck[hc_types.BaseHealthCheckIn]
 ):
-    """Postcheck over the ``hrt_fsdb_session`` collector — CONNECTED census.
+    """Postcheck over the ``hrt_fsdb_session`` collector(s) — CONNECTED census.
 
     check_params:
         mode (str): "disruption" (default) | "stable".
@@ -79,7 +97,7 @@ class FpfHrtSessionStatHealthCheck(
         input: hc_types.BaseHealthCheckIn,
         check_params: t.Dict[str, t.Any],
     ) -> hc_types.HealthCheckResult:
-        collector = get_collector("hrt_fsdb_session")
+        collector = get_collector(check_params.get("collector_name", _COLLECTOR_NAME))
         if collector is None:
             return hc_types.HealthCheckResult(
                 status=hc_types.HealthCheckStatus.SKIP,
@@ -136,9 +154,13 @@ class FpfHrtSessionStatHealthCheck(
             default_start = tc_start if tc_start else window_end - lookback_sec
             window_start = float(check_params.get("window_start", default_start))
 
-        host = getattr(collector, "host", "?")
+        # The single collector holds all hosts (each row carries its host); the
+        # hosts to evaluate are those present in the in-window rows.
+        hosts = collector.hosts_in_window(window_start, window_end)
+        if not hosts:
+            hosts = list(getattr(collector, "hosts", []) or [])
         self.logger.info(
-            f"  [HRT session-stat] mode={mode} host={host} "
+            f"  [HRT session-stat] mode={mode} hosts={hosts} "
             f"window: {window_start:.0f} to {window_end:.0f} "
             f"({window_end - window_start:.0f}s span)"
             + (
@@ -149,36 +171,75 @@ class FpfHrtSessionStatHealthCheck(
             )
         )
 
-        if mode == "stable":
-            return await self._run_stable(
-                collector,
-                window_start,
-                window_end,
-                expected_connected,
-                impacted_lanes,
-            )
-        return await self._run_disruption(
-            collector,
-            window_start,
-            window_end,
-            expected_connected,
-            expected_during,
-            impacted_lanes,
-            recovery_min_sec,
-        )
+        host_results: t.List[_HostSessionResult] = []
+        for host in hosts:
+            if mode == "stable":
+                hr = self._eval_host_stable(
+                    host,
+                    collector,
+                    window_start,
+                    window_end,
+                    expected_connected,
+                    impacted_lanes,
+                )
+            else:
+                hr = self._eval_host_disruption(
+                    host,
+                    collector,
+                    window_start,
+                    window_end,
+                    expected_connected,
+                    expected_during,
+                    impacted_lanes,
+                    recovery_min_sec,
+                )
+            host_results.append(hr)
 
-    async def _run_stable(
+        if not host_results or all(hr.status == "SKIP" for hr in host_results):
+            return hc_types.HealthCheckResult(
+                status=hc_types.HealthCheckStatus.SKIP,
+                message=(
+                    "No in-window HRT session samples on any host "
+                    f"[{window_start:.0f}, {window_end:.0f}]"
+                ),
+            )
+
+        agg_fail = any(hr.status == "FAIL" for hr in host_results)
+        agg = "FAIL" if agg_fail else "PASS"
+        report = _format_report(host_results, mode, agg)
+        details = await everpaste_details_suffix(
+            f"HRT session-stat ({mode}) — per-host CONNECTED census detail",
+            report.splitlines(),
+            collectors=[collector],
+            window_start=window_start,
+            window_end=window_end,
+            result_status=agg,
+            result_reason=(
+                report.splitlines()[1] if len(report.splitlines()) > 1 else ""
+            )[:300],
+        )
+        status = (
+            hc_types.HealthCheckStatus.FAIL
+            if agg_fail
+            else hc_types.HealthCheckStatus.PASS
+        )
+        return hc_types.HealthCheckResult(status=status, message=report + details)
+
+    def _eval_host_stable(
         self,
+        host: str,
         collector: t.Any,
         window_start: float,
         window_end: float,
         expected_connected: int,
         impacted_lanes: t.Optional[t.List[int]] = None,
-    ) -> hc_types.HealthCheckResult:
+    ) -> _HostSessionResult:
+        hr = _HostSessionResult(host)
         res = collector.evaluate_window(
             window_start=window_start,
             window_end=window_end,
             expected_connected=expected_connected,
+            host=host,
         )
         # PASS iff every non-null sample held the full census (min == expected).
         ok = (
@@ -186,9 +247,6 @@ class FpfHrtSessionStatHealthCheck(
             and res.min_connected == expected_connected
             and res.max_connected == expected_connected
         )
-        # Color: name the window span + the impacted lane(s) this steady census
-        # reflects + the observed per-host connected min/max/last, so the
-        # returned message is self-describing in the results table.
         span_sec = window_end - window_start
         impacted_str = (
             "lane(s) " + ",".join(f"L{lane}" for lane in (impacted_lanes or []))
@@ -202,36 +260,30 @@ class FpfHrtSessionStatHealthCheck(
             f"last={res.last_connected} on {host_label(res)}"
         )
         if res.samples == 0:
-            status = hc_types.HealthCheckStatus.SKIP
-            reason = f"No in-window HRT session samples — {res.detail}"
+            hr.status = "SKIP"
+            hr.reason = f"No in-window HRT session samples — {res.detail}"
         elif ok:
-            status = hc_types.HealthCheckStatus.PASS
-            reason = (
+            hr.status = "PASS"
+            hr.reason = (
                 f"CONNECTED held steady at {expected_connected} across "
                 f"{res.samples} samples (no churn; {window_color}) — {res.detail}"
             )
         else:
-            status = hc_types.HealthCheckStatus.FAIL
-            reason = (
+            hr.status = "FAIL"
+            hr.reason = (
                 f"CONNECTED dipped to {res.min_connected} "
                 f"(expected steady {expected_connected}; {window_color}) "
                 f"— {res.detail}"
             )
-
-        self.logger.info(f"  [HRT session-stat] (stable) [{status}] {reason}")
-        details = await everpaste_details_suffix(
-            "HRT session-stat (stable) — CONNECTED census detail",
-            [res.detail],
-            collectors=[collector],
-            window_start=window_start,
-            window_end=window_end,
-            result_status=str(status).split(".")[-1],
-            result_reason=reason[:300],
+        hr.detail_lines = [res.detail]
+        self.logger.info(
+            f"  [HRT session-stat][{host}] (stable) [{hr.status}] {hr.reason}"
         )
-        return hc_types.HealthCheckResult(status=status, message=reason + details)
+        return hr
 
-    async def _run_disruption(
+    def _eval_host_disruption(
         self,
+        host: str,
         collector: t.Any,
         window_start: float,
         window_end: float,
@@ -239,28 +291,23 @@ class FpfHrtSessionStatHealthCheck(
         expected_during: int,
         impacted_lanes: t.List[int],
         recovery_min_sec: float,
-    ) -> hc_types.HealthCheckResult:
+    ) -> _HostSessionResult:
+        hr = _HostSessionResult(host)
         res = collector.evaluate_window(
             window_start=window_start,
             window_end=window_end,
             expected_connected=expected_connected,
             impacted_lanes=impacted_lanes,
+            host=host,
         )
         if res.samples == 0:
-            reason = f"No in-window HRT session samples — {res.detail}"
-            self.logger.info(f"  [HRT session-stat] (disruption) [SKIP] {reason}")
-            details = await everpaste_details_suffix(
-                "HRT session-stat (disruption) — CONNECTED census detail",
-                [res.detail],
-                collectors=[collector],
-                window_start=window_start,
-                window_end=window_end,
-                result_status="SKIP",
-                result_reason=reason[:300],
+            hr.status = "SKIP"
+            hr.reason = f"No in-window HRT session samples — {res.detail}"
+            hr.detail_lines = [res.detail]
+            self.logger.info(
+                f"  [HRT session-stat][{host}] (disruption) [SKIP] {hr.reason}"
             )
-            return hc_types.HealthCheckResult(
-                status=hc_types.HealthCheckStatus.SKIP, message=reason + details
-            )
+            return hr
 
         # Signal 1: census dropped to expected_during during the disruption, and
         # every requested impacted lane churned (connected dropped below total).
@@ -277,46 +324,47 @@ class FpfHrtSessionStatHealthCheck(
         )
 
         # Signal 2: census recovered to expected and held >= recovery_min_sec.
-        recover_ok, held_sec, recover_detail = collector.evaluate_recovery_hold(
+        recover_ok, _held_sec, recover_detail = collector.evaluate_recovery_hold(
             window_start=window_start,
             window_end=window_end,
             expected_connected=expected_connected,
             recovery_min_sec=recovery_min_sec,
+            host=host,
         )
         signal2_msg = f"Signal2[recover]: {recover_detail}"
 
-        passed = signal1_ok and recover_ok
-        status = (
-            hc_types.HealthCheckStatus.PASS
-            if passed
-            else hc_types.HealthCheckStatus.FAIL
+        timeout_count = collector.timeout_count_in_window(
+            window_start, window_end, host=host
         )
-        summary = f"{host_label(res)} — {signal1_msg} | {signal2_msg}"
-        if passed:
-            self.logger.info(f"  [HRT session-stat] (disruption) [PASS] {summary}")
-        else:
-            self.logger.error(f"  [HRT session-stat] (disruption) [FAIL] {summary}")
-
-        details = await everpaste_details_suffix(
-            "HRT session-stat (disruption) — CONNECTED census detail",
-            [signal1_msg, signal2_msg, res.detail],
-            collectors=[collector],
-            window_start=window_start,
-            window_end=window_end,
-            result_status=str(status).split(".")[-1],
-            result_reason=summary[:300],
-        )
-
-        timeout_count = collector.timeout_count_in_window(window_start, window_end)
+        passed = signal1_ok and recover_ok and timeout_count == 0
+        hr.status = "PASS" if passed else "FAIL"
+        hr.reason = f"{signal1_msg} | {signal2_msg}"
         if timeout_count > 0:
-            return hc_types.HealthCheckResult(
-                status=hc_types.HealthCheckStatus.FAIL,
-                message=(
-                    f"Got null data — {timeout_count} poll timeout(s) in window "
-                    f"[{window_start:.0f}, {window_end:.0f}] | {summary}{details}"
-                ),
+            hr.reason = (
+                f"{timeout_count} poll timeout(s) recorded null data | {hr.reason}"
             )
-        return hc_types.HealthCheckResult(status=status, message=summary + details)
+        hr.detail_lines = [signal1_msg, signal2_msg, res.detail]
+        if passed:
+            self.logger.info(
+                f"  [HRT session-stat][{host}] (disruption) [PASS] {hr.reason}"
+            )
+        else:
+            self.logger.error(
+                f"  [HRT session-stat][{host}] (disruption) [FAIL] {hr.reason}"
+            )
+        return hr
+
+
+def _format_report(
+    host_results: t.List[_HostSessionResult], mode: str, agg: str
+) -> str:
+    """Human-readable multi-host report (this is the everpaste'd message)."""
+    lines: t.List[str] = []
+    lines.append(f"HRT session-stat ({mode}) — {len(host_results)} host(s)")
+    for hr in host_results:
+        lines.append(f"[{hr.host}] VERDICT {hr.status} | {hr.reason}")
+    lines.append(f"AGGREGATE: {agg}")
+    return "\n".join(lines)
 
 
 def host_label(res: t.Any) -> str:

@@ -42,8 +42,15 @@ def create_bare_health_check(check_name: hc_types.CheckName) -> PointInTimeHealt
 def create_device_core_dumps_check(
     core_dumps_to_ignore: t.Optional[t.List[str]] = None,
     use_start_time: bool = True,
+    use_end_time: bool = False,
 ) -> PointInTimeHealthCheck:
     """DEVICE_CORE_DUMPS_CHECK — detects new device core dumps.
+
+    Only cores whose mtime falls in ``(start_time, end_time]`` are flagged. The
+    check itself is fail-safe: if ``start_time`` resolves to 0/null/missing it
+    anchors to *now* (flags nothing pre-existing) rather than the epoch (which
+    would flag every historical core), and ``end_time`` defaults to *now* when
+    not supplied. See ``DeviceCoreDumpsHealthCheck._resolve_time_window``.
 
     Args:
         core_dumps_to_ignore: Process names whose core dumps should NOT cause
@@ -51,23 +58,28 @@ def create_device_core_dumps_check(
         use_start_time: When True (default), scopes the check to dumps after
             ``.test_case_start_time``. Set False for the bare variant (no
             check_params).
+        use_end_time: When True, additionally emits ``end_time`` from
+            ``.test_case_end_time`` to bound the upper edge of the window.
+            Note: ``test_case_end_time`` is not yet populated in the jq context
+            at POST_TEST-check evaluation time, so it currently resolves to
+            null — the check then falls back to *now*, which is the desired
+            behavior anyway. Kept for forward-compatibility.
     """
-    if not use_start_time and core_dumps_to_ignore is None:
+    if not use_start_time and not use_end_time and core_dumps_to_ignore is None:
         return PointInTimeHealthCheck(name=hc_types.CheckName.DEVICE_CORE_DUMPS_CHECK)
     json_payload: t.Dict[str, t.Any] = {}
     if core_dumps_to_ignore is not None:
         json_payload["core_dumps_to_ignore"] = core_dumps_to_ignore
+    jq_params: t.Dict[str, str] = {}
+    if use_start_time:
+        jq_params["start_time"] = ".test_case_start_time"
+    if use_end_time:
+        jq_params["end_time"] = ".test_case_end_time"
     return PointInTimeHealthCheck(
         name=hc_types.CheckName.DEVICE_CORE_DUMPS_CHECK,
         check_params=Params(
             json_params=json.dumps(json_payload),
-            jq_params=(
-                {
-                    "start_time": ".test_case_start_time",
-                }
-                if use_start_time
-                else None
-            ),
+            jq_params=jq_params if jq_params else None,
         ),
     )
 

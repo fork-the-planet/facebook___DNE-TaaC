@@ -138,7 +138,7 @@ ALL_GTSWS = [f"gtsw00{i}.l1002.c087.mwg2" for i in range(1, 9)]
 
 GPU_HOSTS = [
     "rtptest1544.mwg2",
-    "rtptest1575.mwg2",
+    "rtptest1599.mwg2",
 ]
 
 # ib_write_bw traffic endpoints (server <-> clients). The server runs the
@@ -150,7 +150,7 @@ IB_TRAFFIC_CLIENTS = [GPU_HOSTS[1]]
 SPRAY_HOSTS = [IB_TRAFFIC_SERVER, *IB_TRAFFIC_CLIENTS]
 
 # RTP hosts whose HRT service system-memory is monitored (ODS-based check).
-HRT_MEMORY_HOSTS = ["rtptest1544.mwg2", "rtptest1575.mwg2"]
+HRT_MEMORY_HOSTS = ["rtptest1544.mwg2", "rtptest1599.mwg2"]
 
 
 def fpf_clean_slate_setup_task():

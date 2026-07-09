@@ -55,6 +55,14 @@ def _now_str() -> str:
     ] + datetime.now(timezone.utc).astimezone().strftime("%z")
 
 
+def _single_host(hosts: List[str]) -> str:
+    """Best-effort single-host label for a result built without a host filter
+    (multi-host collectors carry ``hosts``): the sole host, else a joined label."""
+    if len(hosts) == 1:
+        return hosts[0]
+    return ",".join(hosts) if hosts else "?"
+
+
 def _parse_ts(ts_str: str) -> datetime:
     """Parse a timestamp string like '2026-05-19 22:36:32.560-0700'."""
     for fmt in ["%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z"]:
@@ -409,7 +417,11 @@ class BaseCollector:
         self._thread: Optional[threading.Thread] = None
         self._thread_loop: Optional[asyncio.AbstractEventLoop] = None
         self.rows: List = []
+        # Whole-cycle timeouts (outer _run_loop wait_for) — affect every host.
         self.timeout_timestamps: List[float] = []
+        # Per-host timeouts (a single hung host in a concurrent multi-host cycle)
+        # — attributed only to that host. host -> [epoch, ...].
+        self.host_timeout_timestamps: Dict[str, List[float]] = {}
         self._file: Any = None
         self._json_file: Any = None
         self._append_mode: bool = False
@@ -421,6 +433,11 @@ class BaseCollector:
         pass
 
     def _write_json_row(self, row_dict: Dict) -> None:
+        # JSON output disabled by request — human-readable .log files are the
+        # only artifact. Kept as a guarded no-op so the per-collector call sites
+        # need no changes; re-enable by opening self._json_file in _run_loop.
+        if self._json_file is None:
+            return
         self._json_file.write(json.dumps(row_dict) + "\n")
         self._json_file.flush()
 
@@ -430,9 +447,11 @@ class BaseCollector:
     async def _run_loop(self) -> None:
         mode = "a" if self._append_mode else "w"
         poll_timeout = self.POLL_TIMEOUT_SEC
-        with open(self.tmp_path, mode) as f, open(self.json_path, mode) as jf:
+        # JSON (.jsonl) output disabled by request — only the human-readable
+        # .log file is written. self._json_file stays None so _write_json_row
+        # is a no-op.
+        with open(self.tmp_path, mode) as f:
             self._file = f
-            self._json_file = jf
             if not self._append_mode or f.tell() == 0:
                 f.write("=" * 100 + "\n")
                 self._write_header(f)
@@ -486,13 +505,43 @@ class BaseCollector:
             except Exception:
                 pass
 
-    def had_timeout_in_window(self, window_start: float, window_end: float) -> bool:
-        return any(window_start <= ts <= window_end for ts in self.timeout_timestamps)
+    def _record_host_timeout(self, host: str, poll_timeout: float) -> None:
+        epoch = datetime.now(timezone.utc).timestamp()
+        self.host_timeout_timestamps.setdefault(host, []).append(epoch)
+        logger.warning(
+            f"[{self.__class__.__name__}] {host} poll exceeded {poll_timeout:.0f}s — "
+            f"recording per-host NULL data point"
+        )
+        if self._file is not None:
+            try:
+                self._file.write(
+                    f"{_now_str():<34}  *** NULL DATA — {host} poll timeout "
+                    f"({poll_timeout:.0f}s) ***\n"
+                )
+                self._file.flush()
+            except Exception:
+                pass
 
-    def timeout_count_in_window(self, window_start: float, window_end: float) -> int:
-        return sum(
+    def had_timeout_in_window(
+        self, window_start: float, window_end: float, host: Optional[str] = None
+    ) -> bool:
+        return self.timeout_count_in_window(window_start, window_end, host) > 0
+
+    def timeout_count_in_window(
+        self, window_start: float, window_end: float, host: Optional[str] = None
+    ) -> int:
+        # Whole-cycle timeouts affect every host, so they count for any host.
+        # When a host is given, add that host's own per-host timeouts on top.
+        count = sum(
             1 for ts in self.timeout_timestamps if window_start <= ts <= window_end
         )
+        if host is not None:
+            count += sum(
+                1
+                for ts in self.host_timeout_timestamps.get(host, [])
+                if window_start <= ts <= window_end
+            )
+        return count
 
     def _thread_target(self) -> None:
         loop = asyncio.new_event_loop()
@@ -604,7 +653,7 @@ class FsdbRibmapCollector(BaseCollector):
         subnet_prefix: str,
         tmp_path: str = "/tmp/fpf_stress_fsdb_ribmap.log",
         interval_sec: float = 2.0,
-        fsdb_mode: str = "ribmap",
+        fsdb_mode: str = "canonical",
     ) -> None:
         super().__init__(tmp_path, interval_sec)
         self.gtsws = gtsws
@@ -1481,22 +1530,29 @@ class ProdHrtPrefixCollector(BaseCollector):
 
     A single GPU ``device_id`` is required — the collector never assumes all
     GPUs (matching the standalone binary's contract).
+
+    ONE collector instance holds ALL monitored hosts (``hosts``); each host
+    monitors its OWN prefixes via ``prefixes_by_host`` ({host: [prefixes]}). Each
+    poll loops the hosts and queries each with ITS prefixes; every row carries
+    its ``host``; a single file with a host column.
     """
 
     def __init__(
         self,
-        host: str,
+        hosts: List[str],
         device_id: int,
-        prefixes: List[str],
+        prefixes_by_host: Dict[str, List[str]],
         tmp_path: str = "/tmp/fpf_prod_hrt_prefix.log",
         interval_sec: float = 3.0,
     ) -> None:
         super().__init__(tmp_path, interval_sec)
-        self.host = host
+        self.hosts = hosts
         self.device_id = device_id
-        self.target_prefixes = (
-            {normalize_prefix(p) for p in prefixes} if prefixes else None
-        )
+        # host -> normalized target-prefix set (None = monitor all prefixes).
+        self.target_prefixes_by_host: Dict[str, Optional[set]] = {
+            h: ({normalize_prefix(p) for p in prefixes_by_host.get(h, [])} or None)
+            for h in hosts
+        }
         self.rows: List[ProdHrtPrefixRow] = []
 
     def _write_header(self, f) -> None:
@@ -1507,8 +1563,38 @@ class ProdHrtPrefixCollector(BaseCollector):
         )
 
     async def _poll_once(self) -> None:
+        # Poll all hosts concurrently so a slow/hung host never serializes behind
+        # (or stalls) its siblings. Each host is capped by its OWN timeout: a
+        # single hung host records only its own per-host NULL (via
+        # _record_host_timeout) instead of tripping the base _run_loop's
+        # whole-cycle wait_for and marking every host FAIL. The per-host budget
+        # is kept just under POLL_TIMEOUT_SEC so the outer backstop fires only
+        # when the entire cycle genuinely stalls.
+        host_timeout = max(1.0, self.POLL_TIMEOUT_SEC - 10.0)
+
+        async def _poll_guarded(host: str) -> None:
+            try:
+                await asyncio.wait_for(self._poll_host(host), timeout=host_timeout)
+            except asyncio.TimeoutError:
+                self._record_host_timeout(host, host_timeout)
+
+        results = await asyncio.gather(
+            *(_poll_guarded(host) for host in self.hosts),
+            return_exceptions=True,
+        )
+        # _poll_guarded swallows per-host errors, so a returned exception means
+        # one escaped it (e.g. during row-writing); surface it per host rather
+        # than letting return_exceptions discard it silently.
+        for host, result in zip(self.hosts, results):
+            if isinstance(result, BaseException):
+                logger.error(
+                    f"[{self.__class__.__name__}] {host} poll raised: {result}"
+                )
+
+    async def _poll_host(self, host: str) -> None:
+        target_prefixes = self.target_prefixes_by_host.get(host)
         try:
-            client_ctx = await get_hrt_client(self.host)
+            client_ctx = await get_hrt_client(host)
             async with client_ctx as client:
                 prefixes = await client.getPrefixTable()
                 neg_routes = await client.getRemoteFailures()
@@ -1517,19 +1603,15 @@ class ProdHrtPrefixCollector(BaseCollector):
                 prefixes,
                 neg_routes,
                 plane_status_entries,
-                self.target_prefixes,
+                target_prefixes,
                 {self.device_id},
             )
         except Exception as e:
-            logger.error(
-                f"[ProdHrtPrefixCollector] {self.host} dev{self.device_id}: {e}"
-            )
+            logger.error(f"[ProdHrtPrefixCollector] {host} dev{self.device_id}: {e}")
             prefix_map = {}
 
         ts = _now_str()
-        self.rows.append(
-            ProdHrtPrefixRow(timestamp=ts, host=self.host, prefixes=prefix_map)
-        )
+        self.rows.append(ProdHrtPrefixRow(timestamp=ts, host=host, prefixes=prefix_map))
 
         def _fmt(planes: List[int]) -> str:
             return ",".join(str(p) for p in planes) if planes else "-"
@@ -1537,7 +1619,7 @@ class ProdHrtPrefixCollector(BaseCollector):
         for pfx in sorted(prefix_map):
             rb = prefix_map[pfx]
             self._file.write(
-                f"{ts:<30}  {self.host:<22}  {pfx:<40}  "
+                f"{ts:<30}  {host:<22}  {pfx:<40}  "
                 f"{_fmt(rb.reachable_planes):<16}  {_fmt(rb.drained_planes):<12}  "
                 f"{_fmt(rb.unreachable_planes):<14}  {_fmt(rb.plane_up):<16}  "
                 f"{_fmt(rb.plane_down)}\n"
@@ -1546,7 +1628,7 @@ class ProdHrtPrefixCollector(BaseCollector):
                 {
                     "collector": "prod_hrt_prefix",
                     "timestamp": ts,
-                    "host": self.host,
+                    "host": host,
                     "device_id": self.device_id,
                     "prefix": pfx,
                     "reachable_planes": rb.reachable_planes,
@@ -1558,6 +1640,14 @@ class ProdHrtPrefixCollector(BaseCollector):
                 }
             )
         self._file.flush()
+
+    def hosts_in_window(self, window_start: float, window_end: float) -> List[str]:
+        """Distinct hosts present in the in-window rows (stable-sorted)."""
+        seen: List[str] = []
+        for r in self.get_rows_in_window(window_start, window_end):
+            if r.host not in seen:
+                seen.append(r.host)
+        return sorted(seen)
 
     def evaluate_prefix_stability_window(
         self,
@@ -1584,17 +1674,18 @@ class ProdHrtPrefixCollector(BaseCollector):
         results: List[ProdPrefixStabilityResult] = []
         for pfx in sorted(all_prefixes):
             samples = [
-                (self._row_ts(row), row.prefixes[pfx])
+                (self._row_ts(row), row.host, row.prefixes[pfx])
                 for row in windowed
                 if pfx in row.prefixes
             ]
-            samples = [(ts, rb) for ts, rb in samples if ts is not None]
+            samples = [(ts, h, rb) for ts, h, rb in samples if ts is not None]
             samples.sort(key=lambda x: x[0])
             if not samples:
                 continue
-            baseline = set(samples[0][1].reachable_planes)
+            pfx_host = samples[0][1]
+            baseline = set(samples[0][2].reachable_planes)
             regression = None
-            for ts, rb in samples:
+            for ts, _h, rb in samples:
                 missing = baseline - set(rb.reachable_planes)
                 if missing:
                     regression = (ts, sorted(missing), rb)
@@ -1603,7 +1694,7 @@ class ProdHrtPrefixCollector(BaseCollector):
                 results.append(
                     ProdPrefixStabilityResult(
                         prefix=pfx,
-                        host=self.host,
+                        host=pfx_host,
                         passed=True,
                         baseline_reachable=sorted(baseline),
                         samples=len(samples),
@@ -1621,7 +1712,7 @@ class ProdHrtPrefixCollector(BaseCollector):
                 results.append(
                     ProdPrefixStabilityResult(
                         prefix=pfx,
-                        host=self.host,
+                        host=pfx_host,
                         passed=False,
                         baseline_reachable=sorted(baseline),
                         samples=len(samples),
@@ -1680,6 +1771,7 @@ class PlaneStatusResult:
     observed_state: str
     samples: int
     detail: str = ""
+    host: str = ""
 
 
 class HrtPlaneStatusCollector(BaseCollector):
@@ -1699,14 +1791,14 @@ class HrtPlaneStatusCollector(BaseCollector):
 
     def __init__(
         self,
-        host: str,
+        hosts: List[str],
         device_id: int,
         tmp_path: str = "/tmp/fpf_stress_hrt_plane_status.log",
         interval_sec: float = 3.0,
         num_planes: int = NUM_PLANES,
     ) -> None:
         super().__init__(tmp_path, interval_sec)
-        self.host = host
+        self.hosts = hosts
         self.device_id = device_id
         self.num_planes = num_planes
         self.rows: List[HrtPlaneStatusRow] = []
@@ -1718,43 +1810,76 @@ class HrtPlaneStatusCollector(BaseCollector):
         )
 
     async def _poll_once(self) -> None:
+        # Poll all hosts concurrently so a slow/hung host never serializes behind
+        # (or stalls) its siblings. Each host is capped by its OWN timeout: a
+        # single hung host records only its own per-host NULL (via
+        # _record_host_timeout) instead of tripping the base _run_loop's
+        # whole-cycle wait_for and marking every host FAIL. The per-host budget
+        # is kept just under POLL_TIMEOUT_SEC so the outer backstop fires only
+        # when the entire cycle genuinely stalls.
+        host_timeout = max(1.0, self.POLL_TIMEOUT_SEC - 10.0)
+
+        async def _poll_guarded(host: str) -> None:
+            try:
+                await asyncio.wait_for(self._poll_host(host), timeout=host_timeout)
+            except asyncio.TimeoutError:
+                self._record_host_timeout(host, host_timeout)
+
+        results = await asyncio.gather(
+            *(_poll_guarded(host) for host in self.hosts),
+            return_exceptions=True,
+        )
+        # _poll_guarded swallows per-host errors, so a returned exception means
+        # one escaped it (e.g. during row-writing); surface it per host rather
+        # than letting return_exceptions discard it silently.
+        for host, result in zip(self.hosts, results):
+            if isinstance(result, BaseException):
+                logger.error(
+                    f"[{self.__class__.__name__}] {host} poll raised: {result}"
+                )
+
+    async def _poll_host(self, host: str) -> None:
         states: Dict[int, str] = {}
         try:
-            client_ctx = await get_hrt_client(self.host)
+            client_ctx = await get_hrt_client(host)
             async with client_ctx as client:
                 plane_status_entries = await client.getPlaneStatus()
             by_dev = build_plane_status_map(plane_status_entries, {self.device_id})
             states = {int(p): str(s) for p, s in by_dev.get(self.device_id, {}).items()}
         except Exception as e:
-            logger.error(
-                f"[HrtPlaneStatusCollector] {self.host} dev{self.device_id}: {e}"
-            )
+            logger.error(f"[HrtPlaneStatusCollector] {host} dev{self.device_id}: {e}")
             states = {}
 
         ts = _now_str()
         self.rows.append(
             HrtPlaneStatusRow(
                 timestamp=ts,
-                host=self.host,
+                host=host,
                 device_id=self.device_id,
                 plane_states=states,
             )
         )
         rendered = " ".join(f"{p}={states[p]}" for p in sorted(states)) or "-"
         if self._file is not None:
-            self._file.write(
-                f"{ts:<30}  {self.host:<22}  {self.device_id:<7}  {rendered}\n"
-            )
+            self._file.write(f"{ts:<30}  {host:<22}  {self.device_id:<7}  {rendered}\n")
             self._file.flush()
         self._write_json_row(
             {
                 "collector": "hrt_plane_status",
                 "timestamp": ts,
-                "host": self.host,
+                "host": host,
                 "device_id": self.device_id,
                 "plane_states": {str(p): s for p, s in states.items()},
             }
         )
+
+    def hosts_in_window(self, window_start: float, window_end: float) -> List[str]:
+        """Distinct hosts present in the in-window rows (stable-sorted)."""
+        seen: List[str] = []
+        for r in self.get_rows_in_window(window_start, window_end):
+            if r.host not in seen:
+                seen.append(r.host)
+        return sorted(seen)
 
     def _planes(self, expected_planes: Optional[List[int]]) -> List[int]:
         if expected_planes is not None:
@@ -1768,6 +1893,7 @@ class HrtPlaneStatusCollector(BaseCollector):
         expected_planes: Optional[List[int]] = None,
         last_sample_only: bool = False,
         skip_null_strict: bool = False,
+        host: Optional[str] = None,
     ) -> List[PlaneStatusResult]:
         """Every plane must be UP across the in-window samples.
 
@@ -1781,8 +1907,12 @@ class HrtPlaneStatusCollector(BaseCollector):
         null/missing plane samples but require every NON-NULL sample (and the
         last non-null) to be UP. ``"UP"`` is the golden value; any other state
         (UNKNOWN/DOWN/...) is a failure; a missing plane state is a null sample.
+        ``host`` (when given) restricts evaluation to that host's rows.
         """
         windowed = self.get_rows_in_window(window_start, window_end)
+        if host is not None:
+            windowed = [r for r in windowed if r.host == host]
+        result_host = host if host is not None else _single_host(self.hosts)
         results: List[PlaneStatusResult] = []
         for plane in self._planes(expected_planes):
             samples = 0
@@ -1834,6 +1964,7 @@ class HrtPlaneStatusCollector(BaseCollector):
                     observed_state=last_state,
                     samples=samples,
                     detail=detail,
+                    host=result_host,
                 )
             )
         return results
@@ -1844,6 +1975,7 @@ class HrtPlaneStatusCollector(BaseCollector):
         window_end: float,
         impacted_planes: List[int],
         expected_planes: Optional[List[int]] = None,
+        host: Optional[str] = None,
     ) -> List[PlaneStatusResult]:
         """Impacted plane(s) DRAINED by window end; all other planes stay UP.
 
@@ -1851,9 +1983,13 @@ class HrtPlaneStatusCollector(BaseCollector):
         plane's pre-drain UP samples are excluded (a drain takes a few seconds to
         reflect). An impacted plane PASSES iff its last in-window sample is
         DRAINED; a non-impacted plane PASSES iff it is UP in every sample.
+        ``host`` (when given) restricts evaluation to that host's rows.
         """
         impacted = {int(p) for p in impacted_planes}
         windowed = self.get_rows_in_window(window_start, window_end)
+        if host is not None:
+            windowed = [r for r in windowed if r.host == host]
+        result_host = host if host is not None else _single_host(self.hosts)
         results: List[PlaneStatusResult] = []
         for plane in self._planes(expected_planes):
             states = [(r.timestamp, r.plane_states.get(plane)) for r in windowed]
@@ -1882,6 +2018,7 @@ class HrtPlaneStatusCollector(BaseCollector):
                         observed_state=last_disp,
                         samples=samples,
                         detail=detail,
+                        host=result_host,
                     )
                 )
             else:
@@ -1906,6 +2043,7 @@ class HrtPlaneStatusCollector(BaseCollector):
                         observed_state=last_disp,
                         samples=samples,
                         detail=detail,
+                        host=result_host,
                     )
                 )
         return results
@@ -1982,20 +2120,21 @@ class HrtFsdbSessionCollector(BaseCollector):
     interprets for both the disruption (drop-then-recover) and stable (no churn)
     contracts.
 
-    One collector instance per host (mirroring the per-host session health
-    check). A poll whose HRT query fails records an error row (null data) rather
-    than a misleading all-zero census.
+    ONE collector instance holds ALL monitored hosts (``hosts``): each poll
+    loops the hosts and each row carries its ``host``; a single file with a host
+    column. A poll whose HRT query fails on a host records an error row (null
+    data) for that host rather than a misleading all-zero census.
     """
 
     def __init__(
         self,
-        host: str,
+        hosts: List[str],
         expected_connected: int = 32,
         tmp_path: str = "/tmp/fpf_stress_hrt_fsdb_session.log",
         interval_sec: float = 3.0,
     ) -> None:
         super().__init__(tmp_path, interval_sec)
-        self.host = host
+        self.hosts = hosts
         self.expected_connected = expected_connected
         self.rows: List[HrtFsdbSessionRow] = []
 
@@ -2006,16 +2145,45 @@ class HrtFsdbSessionCollector(BaseCollector):
         )
 
     async def _poll_once(self) -> None:
+        # Poll all hosts concurrently so a slow/hung host never serializes behind
+        # (or stalls) its siblings. Each host is capped by its OWN timeout: a
+        # single hung host records only its own per-host NULL (via
+        # _record_host_timeout) instead of tripping the base _run_loop's
+        # whole-cycle wait_for and marking every host FAIL. The per-host budget
+        # is kept just under POLL_TIMEOUT_SEC so the outer backstop fires only
+        # when the entire cycle genuinely stalls.
+        host_timeout = max(1.0, self.POLL_TIMEOUT_SEC - 10.0)
+
+        async def _poll_guarded(host: str) -> None:
+            try:
+                await asyncio.wait_for(self._poll_host(host), timeout=host_timeout)
+            except asyncio.TimeoutError:
+                self._record_host_timeout(host, host_timeout)
+
+        results = await asyncio.gather(
+            *(_poll_guarded(host) for host in self.hosts),
+            return_exceptions=True,
+        )
+        # _poll_guarded swallows per-host errors, so a returned exception means
+        # one escaped it (e.g. during row-writing); surface it per host rather
+        # than letting return_exceptions discard it silently.
+        for host, result in zip(self.hosts, results):
+            if isinstance(result, BaseException):
+                logger.error(
+                    f"[{self.__class__.__name__}] {host} poll raised: {result}"
+                )
+
+    async def _poll_host(self, host: str) -> None:
         error = ""
         # `client.getFsdbSessions()` returns a Sequence (from generated thrift),
         # so we annotate as Sequence rather than List to avoid invariance issues.
         sessions: Sequence[Any] = []
         try:
-            client_ctx = await get_hrt_client(self.host)
+            client_ctx = await get_hrt_client(host)
             async with client_ctx as client:
                 sessions = await client.getFsdbSessions()
         except Exception as e:
-            logger.error(f"[HrtFsdbSessionCollector] {self.host}: {e}")
+            logger.error(f"[HrtFsdbSessionCollector] {host}: {e}")
             error = f"error: {e}"
 
         lane_connected: Dict[int, int] = {}
@@ -2037,7 +2205,7 @@ class HrtFsdbSessionCollector(BaseCollector):
         ts = _now_str()
         row = HrtFsdbSessionRow(
             timestamp=ts,
-            host=self.host,
+            host=host,
             connected=connected,
             expected=self.expected_connected,
             lane_connected=lane_connected,
@@ -2058,7 +2226,7 @@ class HrtFsdbSessionCollector(BaseCollector):
             )
         if self._file is not None:
             self._file.write(
-                f"{ts:<30}  {self.host:<22}  {connected:>9}  "
+                f"{ts:<30}  {host:<22}  {connected:>9}  "
                 f"{self.expected_connected:>8}  {rendered}\n"
             )
             self._file.flush()
@@ -2066,7 +2234,7 @@ class HrtFsdbSessionCollector(BaseCollector):
             {
                 "collector": "hrt_fsdb_session",
                 "timestamp": ts,
-                "host": self.host,
+                "host": host,
                 "connected": connected,
                 "expected": self.expected_connected,
                 "lane_connected": {str(k): v for k, v in lane_connected.items()},
@@ -2075,12 +2243,21 @@ class HrtFsdbSessionCollector(BaseCollector):
             }
         )
 
+    def hosts_in_window(self, window_start: float, window_end: float) -> List[str]:
+        """Distinct hosts present in the in-window rows (stable-sorted)."""
+        seen: List[str] = []
+        for r in self.get_rows_in_window(window_start, window_end):
+            if r.host not in seen:
+                seen.append(r.host)
+        return sorted(seen)
+
     def evaluate_window(
         self,
         window_start: float,
         window_end: float,
         expected_connected: Optional[int] = None,
         impacted_lanes: Optional[List[int]] = None,
+        host: Optional[str] = None,
     ) -> FsdbSessionWindowResult:
         """Summarize the CONNECTED census over [window_start, window_end].
 
@@ -2089,6 +2266,8 @@ class HrtFsdbSessionCollector(BaseCollector):
         expected to churn; the result records, per impacted lane, whether its
         connected count was observed to drop below its total. Errored/null polls
         are excluded from the count statistics but counted in ``error_samples``.
+        ``host`` (when given) restricts evaluation to that host's rows — the
+        collector holds all hosts, so a caller iterates hosts and filters here.
         """
         expected = (
             expected_connected
@@ -2097,13 +2276,16 @@ class HrtFsdbSessionCollector(BaseCollector):
         )
         impacted = [int(x) for x in (impacted_lanes or [])]
         windowed = self.get_rows_in_window(window_start, window_end)
+        if host is not None:
+            windowed = [r for r in windowed if r.host == host]
+        result_host = host if host is not None else _single_host(self.hosts)
 
         good = [r for r in windowed if not r.error]
         error_samples = sum(1 for r in windowed if r.error)
 
         if not good:
             return FsdbSessionWindowResult(
-                host=self.host,
+                host=result_host,
                 samples=0,
                 error_samples=error_samples,
                 min_connected=None,
@@ -2156,7 +2338,7 @@ class HrtFsdbSessionCollector(BaseCollector):
             )
 
         return FsdbSessionWindowResult(
-            host=self.host,
+            host=result_host,
             samples=len(good),
             error_samples=error_samples,
             min_connected=min_connected,
@@ -2174,6 +2356,7 @@ class HrtFsdbSessionCollector(BaseCollector):
         window_end: float,
         expected_connected: Optional[int] = None,
         recovery_min_sec: float = 60.0,
+        host: Optional[str] = None,
     ) -> Tuple[bool, Optional[float], str]:
         """Did the CONNECTED census recover to ``expected_connected`` and hold
         there for >= ``recovery_min_sec`` continuously up to window end?
@@ -2183,7 +2366,8 @@ class HrtFsdbSessionCollector(BaseCollector):
         is True iff the tail run reaches window end and spans >= recovery_min_sec
         (a tail that is at expected but shorter than the floor fails; a census
         that drops below expected after recovering also fails). With < 2 samples
-        the duration cannot be measured -> not passed.
+        the duration cannot be measured -> not passed. ``host`` (when given)
+        restricts evaluation to that host's rows.
         """
         expected = (
             expected_connected
@@ -2194,6 +2378,7 @@ class HrtFsdbSessionCollector(BaseCollector):
             (ts, r)
             for r in self.get_rows_in_window(window_start, window_end)
             if not r.error
+            if host is None or r.host == host
             for ts in [self._row_ts(r)]
             if ts is not None
         ]

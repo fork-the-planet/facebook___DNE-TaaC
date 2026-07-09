@@ -95,6 +95,10 @@ def _make_session_collector(
     """Build a synthetic HRT FSDB-session collector for the session-stat HC."""
     collector = MagicMock()
     collector.host = _GPU_HOST
+    # Multi-host session-stat HC iterates collector.hosts_in_window(...); a bare
+    # MagicMock would return an empty iterable and make the check SKIP.
+    collector.hosts = [_GPU_HOST]
+    collector.hosts_in_window.return_value = [_GPU_HOST]
     collector.evaluate_window.return_value = window_result
     collector.evaluate_recovery_hold.return_value = recovery
     collector.timeout_count_in_window.return_value = timeout_count
