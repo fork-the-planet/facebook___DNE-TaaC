@@ -8,8 +8,6 @@ and ``create_bgp_ug_backpressure_topology_smoke_test_config`` into one
 factory switched by ``smoke_only=False`` (default) / ``True``.
 """
 
-import typing as t
-
 from ixia.ixia import types as ixia_types
 from neteng.test_infra.dne.taac.constants import BgpPlusPlusProfile, Gigabyte
 from taac.playbooks.routing.factories.qual_bgp_update_group.tc3_backpressure import (
@@ -67,6 +65,8 @@ from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConf
 
 
 # =============================================================================
+# SHARED CONSTANTS (EBB full-scale topology)
+# -----------------------------------------------------------------------------
 # BGP UG Backpressure & Blocking Behavior (spec 2.3.1 / 2.3.2 / 2.3.3 / 2.3.4)
 # -- EBB full-scale topology (bag010 / bag011 / bag012 / bag013).
 #
@@ -76,8 +76,6 @@ from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConf
 # topology. bag013 is the only testbed exercising it today.
 # =============================================================================
 
-
-# ─── EBB full-scale topology constants ──────────────────────────────────────
 _BACKPRESSURE_PROFILE = BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R
 _BACKPRESSURE_STORM_PREFIX_POOL_REGEX = "PREFIX_POOL_IBGP_IPV6_PLANE_1_REMOTE_EB_DRAIN"
 _BACKPRESSURE_STORM_DEVICE_GROUP_REGEX = (
@@ -108,7 +106,14 @@ _BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS = (
 _BACKPRESSURE_MEMORY_THRESHOLD_BYTES = Gigabyte.GIG_10.value
 _BACKPRESSURE_LOAD_AVG_BASELINE = 12.0
 
+# Permit-anchor community: all storms carry it so DUT eBGP egress policy
+# accepts the storm routes on the wire.
 _BACKPRESSURE_EB_FA_OUT_PERMIT_COMMUNITY = "65531:50300"
+
+
+# =============================================================================
+# SHARED ATTRIBUTE POOLS (heavy-attribute carve-outs, reused by all 4 tests)
+# =============================================================================
 
 
 def _backpressure_heavy_communities_32() -> list:
@@ -151,6 +156,11 @@ def _backpressure_storm_dg_v6_attribute_overrides() -> list:
     ]
 
 
+# =============================================================================
+# SHARED PEER-ADDRESS DERIVATIONS (from full-scale peer-index math)
+# =============================================================================
+
+
 def _backpressure_peer_addr(parent: str, idx: int) -> str:
     """Derive IXIA-side peer address (idx-th, 0-based) for a given parent
     network. Matches ``_generate_ixia_v6_peer_entries_for_bgpcpp`` arithmetic
@@ -159,7 +169,6 @@ def _backpressure_peer_addr(parent: str, idx: int) -> str:
     return f"{parent}::{0x11 + 2 * idx:x}"
 
 
-# ─── Peer address lists (derived from shared EBB scale constants) ──────────
 _BACKPRESSURE_EBGP_V6_PEER_ADDRS = [
     _backpressure_peer_addr(IXIA_EBGP_IC_PARENT_NETWORK_V6, i)
     for i in range(EBGP_PEER_COUNT_V6)
@@ -173,57 +182,28 @@ _BACKPRESSURE_IBGP_RECEIVER_PEER_ADDRS = [
 ]
 _BACKPRESSURE_IBGP_PEER_ADDRS = list(_BACKPRESSURE_IBGP_RECEIVER_PEER_ADDRS)
 
-# 2.3.1 fast vs slow (same UG, TCP-throttled subset)
-_BACKPRESSURE_EBGP_SLOW_PEER_COUNT_V6 = 20
-_BACKPRESSURE_FAST_EBGP_V6_PEER_ADDRS = list(
+
+# =============================================================================
+# TEST-CASE-2.3.1 CARVE-OUT (slow-peer split — only 2.3.1 needs this)
+# -----------------------------------------------------------------------------
+# 2.3.1 splits eBGP peers into fast (majority) + slow (20 with throttled TCP)
+# so the DUT adj-RIB-out has one slow subset while the rest drain at line rate.
+# =============================================================================
+
+_BACKPRESSURE_2_3_1_SLOW_PEER_COUNT = 20
+_BACKPRESSURE_2_3_1_SLOW_DG_NAME = "DEVICE_GROUP_IPV6_EBGP_SLOW"
+_BACKPRESSURE_2_3_1_SLOW_TCP_WINDOW_BYTES = 1500
+
+_BACKPRESSURE_2_3_1_FAST_EBGP_V6_PEER_ADDRS = list(
     _BACKPRESSURE_EBGP_V6_PEER_ADDRS[
-        : EBGP_PEER_COUNT_V6 - _BACKPRESSURE_EBGP_SLOW_PEER_COUNT_V6
+        : EBGP_PEER_COUNT_V6 - _BACKPRESSURE_2_3_1_SLOW_PEER_COUNT
     ]
 )
-_BACKPRESSURE_SLOW_EBGP_V6_PEER_ADDRS = list(
+_BACKPRESSURE_2_3_1_SLOW_EBGP_V6_PEER_ADDRS = list(
     _BACKPRESSURE_EBGP_V6_PEER_ADDRS[
-        EBGP_PEER_COUNT_V6 - _BACKPRESSURE_EBGP_SLOW_PEER_COUNT_V6 :
+        EBGP_PEER_COUNT_V6 - _BACKPRESSURE_2_3_1_SLOW_PEER_COUNT :
     ]
 )
-_BACKPRESSURE_SLOW_EBGP_V6_DG_NAME = "DEVICE_GROUP_IPV6_EBGP_SLOW"
-_BACKPRESSURE_SLOW_EBGP_V6_TCP_WINDOW_BYTES = 1500
-
-_BACKPRESSURE_FAST_PEER_ADDRS = _BACKPRESSURE_FAST_EBGP_V6_PEER_ADDRS
-_BACKPRESSURE_EBGP_V6_PEER_ADDRS_NO_SLOW = _BACKPRESSURE_FAST_EBGP_V6_PEER_ADDRS
-_BACKPRESSURE_SHUTDOWN_PEER_ADDRS = list(_BACKPRESSURE_EBGP_V6_PEER_ADDRS_NO_SLOW[:16])
-_BACKPRESSURE_SURVIVING_RECEIVER_ADDRS = (
-    _BACKPRESSURE_EBGP_V6_PEER_ADDRS_NO_SLOW[16:]
-    + _BACKPRESSURE_IBGP_RECEIVER_PEER_ADDRS
-)
-_BACKPRESSURE_SURVIVING_EBGP_RECEIVER_ADDRS = list(
-    _BACKPRESSURE_EBGP_V6_PEER_ADDRS_NO_SLOW[16:]
-)
-_BACKPRESSURE_SURVIVING_IBGP_RECEIVER_ADDRS = list(
-    _BACKPRESSURE_IBGP_RECEIVER_PEER_ADDRS
-)
-_BACKPRESSURE_EBGP_PEER_ADDRS = list(_BACKPRESSURE_EBGP_V6_PEER_ADDRS_NO_SLOW)
-
-# ─── Per-playbook spec parameters ───────────────────────────────────────────
-_BACKPRESSURE_2_3_1_PREFIX_COUNT = 10000
-
-_BACKPRESSURE_2_3_2_INITIAL_PREFIX_COUNT = 5000
-_BACKPRESSURE_2_3_2_FOLLOWUP_PREFIX_COUNT = 500
-_BACKPRESSURE_2_3_2_SHUTDOWN_COUNT = 16
-
-_BACKPRESSURE_2_3_3_IBGP_STORM_PREFIX_COUNT = 5000
-_BACKPRESSURE_2_3_3_EBGP_ATTR_CHANGE_PREFIX_COUNT = 400
-_BACKPRESSURE_2_3_3_WITHDRAW_COUNT = 200
-_BACKPRESSURE_2_3_3_LP_MODIFY_COUNT = 100
-_BACKPRESSURE_2_3_3_INITIAL_COMMUNITY = "65529:34814"
-# NOTE: 16-bit constraint — BGP RFC 1997 community low field is 16 bits.
-# IXIA silently truncates writes above 65535; keep both parts within range.
-_BACKPRESSURE_2_3_3_MUTATED_COMMUNITY = "65529:1234"
-_BACKPRESSURE_2_3_3_TARGET_LOCAL_PREF = 200
-_BACKPRESSURE_2_3_3_EBGP_ATTR_PREFIX_POOL_REGEX = "PREFIX_POOL_IPV6_EBGP"
-_BACKPRESSURE_2_3_3_EBGP_ATTR_DEVICE_GROUP_REGEX = "DEVICE_GROUP_IPV6_EBGP"
-
-_BACKPRESSURE_2_3_4_INITIAL_PREFIX_COUNT = 10000
-_BACKPRESSURE_2_3_4_FOLLOWUP_PREFIX_COUNT = 500
 
 
 def _backpressure_split_ebgp_v6_for_slow_peers(
@@ -324,184 +304,69 @@ def _backpressure_split_ebgp_v6_for_slow_peers(
     return out_ports
 
 
-def _backpressure_pb_2_3_1(
-    *,
-    device_name: str,
-    ixia_interface_mimic_ebgp: str,
-    ixia_interface_mimic_ibgp: str,
-) -> taac_types.Playbook:
-    slow_peer_throttle_setup = create_configure_bgp_peer_tcp_window_size_step(
-        hostname=device_name,
-        interface=ixia_interface_mimic_ebgp,
-        device_group_regex=f"^{_BACKPRESSURE_SLOW_EBGP_V6_DG_NAME}$",
-        tcp_window_size_bytes=_BACKPRESSURE_SLOW_EBGP_V6_TCP_WINDOW_BYTES,
-        description=(
-            f"Setup (2.3.1): throttle TCP WindowSize="
-            f"{_BACKPRESSURE_SLOW_EBGP_V6_TCP_WINDOW_BYTES} on "
-            f"{_BACKPRESSURE_SLOW_EBGP_V6_DG_NAME} "
-            f"({_BACKPRESSURE_EBGP_SLOW_PEER_COUNT_V6} slow eBGP peers) "
-            f"to induce DUT adj-RIB-out backpressure -- required for spec 2.3.1 "
-            f"fast/slow asymmetry to be exercised on IXIA testbeds where "
-            f"peers otherwise drain at line rate."
-        ),
-    )
-    _per_peer_wire_snapshot_key = f"pb_2_3_1_per_peer_rx_pre_storm_{device_name}"
-    _per_peer_wire_snapshot = create_snapshot_per_peer_bgp_rx_stats_step(
-        hostname=device_name,
-        interface=ixia_interface_mimic_ebgp,
-        snapshot_key=_per_peer_wire_snapshot_key,
-        peer_addrs=list(_BACKPRESSURE_FAST_EBGP_V6_PEER_ADDRS)
-        + list(_BACKPRESSURE_SLOW_EBGP_V6_PEER_ADDRS),
-        description=(
-            f"Phase 0 wire-per-peer snapshot (2.3.1): capture per-peer "
-            f"IXIA Messages Rx baseline on "
-            f"{device_name}:{ixia_interface_mimic_ebgp} across "
-            f"{len(_BACKPRESSURE_FAST_EBGP_V6_PEER_ADDRS)} fast + "
-            f"{len(_BACKPRESSURE_SLOW_EBGP_V6_PEER_ADDRS)} slow peer(s), "
-            f"for post-storm wire-side asymmetry verification"
-        ),
-    )
-    _per_peer_wire_verify = create_verify_per_peer_bgp_rx_asymmetry_step(
-        hostname=device_name,
-        interface=ixia_interface_mimic_ebgp,
-        snapshot_key=_per_peer_wire_snapshot_key,
-        fast_peer_addrs=list(_BACKPRESSURE_FAST_EBGP_V6_PEER_ADDRS),
-        slow_peer_addrs=list(_BACKPRESSURE_SLOW_EBGP_V6_PEER_ADDRS),
-        min_ratio=1.0,
-        description=(
-            f"Phase 3.5 wire-per-peer asymmetry gate (2.3.1 CENTRAL CLAIM): "
-            f"median IXIA Messages Rx on fast peers must exceed slow peers "
-            f"since Phase 0 snapshot on "
-            f"{device_name}:{ixia_interface_mimic_ebgp} -- proves DUT drains "
-            f"fast independently of slow on the WIRE inside the same UG"
-        ),
-    )
-    return create_bgp_ug_backpressure_fast_peers_not_held_back_playbook(
-        device_name=device_name,
-        ixia_interface=ixia_interface_mimic_ibgp,
-        storm_prefix_pool_regex=_BACKPRESSURE_STORM_PREFIX_POOL_REGEX,
-        storm_device_group_regex=_BACKPRESSURE_STORM_DEVICE_GROUP_REGEX,
-        storm_prefix_count=_BACKPRESSURE_2_3_1_PREFIX_COUNT,
-        community_combinations=_backpressure_heavy_communities_32(),
-        extended_community_combinations=_backpressure_heavy_extended_communities_16(),
-        as_path=_backpressure_heavy_as_path_255(),
-        fast_peer_addrs=_BACKPRESSURE_FAST_PEER_ADDRS,
-        bgp_mon_peer_addrs=_BACKPRESSURE_BGP_MON_PEER_ADDRS,
-        iBGP_receiver_peer_addrs=_BACKPRESSURE_IBGP_RECEIVER_PEER_ADDRS,
-        slow_ebgp_peer_addrs=_BACKPRESSURE_SLOW_EBGP_V6_PEER_ADDRS,
-        expected_established_sessions=_BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS,
-        memory_threshold_bytes=_BACKPRESSURE_MEMORY_THRESHOLD_BYTES,
-        storm_sender_peer_addr_prefix=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
-        setup_steps=[slow_peer_throttle_setup, _per_peer_wire_snapshot],
-        stage_2_extra_steps=[_per_peer_wire_verify],
-        enable_fast_peer_ixia_wire_check=True,
-        fast_peer_ixia_interface=ixia_interface_mimic_ebgp,
-    )
+# =============================================================================
+# TEST-CASE-2.3.2 CARVE-OUT (shutdown subset — only 2.3.2 needs this)
+# -----------------------------------------------------------------------------
+# 2.3.2 picks 16 eBGP peers to bounce during the storm and computes the
+# expected-survivor peer address lists so the health checks can assert only
+# the non-bounced peers stayed Established.
+# =============================================================================
+
+_BACKPRESSURE_2_3_2_SHUTDOWN_PEER_ADDRS = list(
+    _BACKPRESSURE_2_3_1_FAST_EBGP_V6_PEER_ADDRS[:16]
+)
+_BACKPRESSURE_2_3_2_SURVIVING_EBGP_RECEIVER_ADDRS = list(
+    _BACKPRESSURE_2_3_1_FAST_EBGP_V6_PEER_ADDRS[16:]
+)
+_BACKPRESSURE_2_3_2_SURVIVING_IBGP_RECEIVER_ADDRS = list(
+    _BACKPRESSURE_IBGP_RECEIVER_PEER_ADDRS
+)
+_BACKPRESSURE_2_3_2_SURVIVING_RECEIVER_ADDRS = (
+    _BACKPRESSURE_2_3_2_SURVIVING_EBGP_RECEIVER_ADDRS
+    + _BACKPRESSURE_2_3_2_SURVIVING_IBGP_RECEIVER_ADDRS
+)
 
 
-def _backpressure_pb_2_3_2(
-    *,
-    device_name: str,
-    ixia_interface_mimic_ibgp: str,
-) -> taac_types.Playbook:
-    return create_bgp_ug_backpressure_peer_blocks_down_recover_playbook(
-        device_name=device_name,
-        ixia_interface=ixia_interface_mimic_ibgp,
-        storm_prefix_pool_regex=_BACKPRESSURE_STORM_PREFIX_POOL_REGEX,
-        storm_device_group_regex=_BACKPRESSURE_STORM_DEVICE_GROUP_REGEX,
-        storm_initial_prefix_count=_BACKPRESSURE_2_3_2_INITIAL_PREFIX_COUNT,
-        storm_followup_prefix_count=_BACKPRESSURE_2_3_2_FOLLOWUP_PREFIX_COUNT,
-        community_combinations=_backpressure_heavy_communities_32(),
-        extended_community_combinations=_backpressure_heavy_extended_communities_16(),
-        as_path=_backpressure_heavy_as_path_255(),
-        shutdown_peer_regex=_BACKPRESSURE_EBGP_V6_PEER_REGEX,
-        shutdown_peer_addrs=_BACKPRESSURE_SHUTDOWN_PEER_ADDRS,
-        shutdown_count=_BACKPRESSURE_2_3_2_SHUTDOWN_COUNT,
-        surviving_receiver_peer_addrs=_BACKPRESSURE_SURVIVING_RECEIVER_ADDRS,
-        surviving_ebgp_receiver_peer_addrs=_BACKPRESSURE_SURVIVING_EBGP_RECEIVER_ADDRS,
-        surviving_ibgp_receiver_peer_addrs=_BACKPRESSURE_SURVIVING_IBGP_RECEIVER_ADDRS,
-        expected_established_sessions=_BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS,
-        memory_threshold_bytes=_BACKPRESSURE_MEMORY_THRESHOLD_BYTES,
-        storm_sender_peer_addr_prefix=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
-    )
+# =============================================================================
+# TEST-CASE-2.3.4 CARVE-OUT (all-eBGP list — only 2.3.4 needs this)
+# -----------------------------------------------------------------------------
+# 2.3.4 bounces the entire eBGP list (fast peer subset since slow isn't part
+# of this test's setup); computed from EBGP_V6_PEER_ADDRS with the slow subset
+# excluded so 2.3.4's expected-survivor accounting matches 2.3.1's leftover set.
+# =============================================================================
+
+_BACKPRESSURE_2_3_4_EBGP_PEER_ADDRS = list(_BACKPRESSURE_2_3_1_FAST_EBGP_V6_PEER_ADDRS)
 
 
-def _backpressure_pb_2_3_3(
-    *,
-    device_name: str,
-    ixia_interface_mimic_ibgp: str,
-) -> taac_types.Playbook:
-    return create_bgp_ug_backpressure_withdraw_attr_change_playbook(
-        device_name=device_name,
-        ixia_interface=ixia_interface_mimic_ibgp,
-        ibgp_storm_prefix_pool_regex=_BACKPRESSURE_STORM_PREFIX_POOL_REGEX,
-        ibgp_storm_device_group_regex=_BACKPRESSURE_STORM_DEVICE_GROUP_REGEX,
-        ibgp_storm_prefix_count=_BACKPRESSURE_2_3_3_IBGP_STORM_PREFIX_COUNT,
-        community_combinations=_backpressure_heavy_communities_32(),
-        extended_community_combinations=_backpressure_heavy_extended_communities_16(),
-        as_path=_backpressure_heavy_as_path_255(),
-        ebgp_attr_change_prefix_pool_regex=_BACKPRESSURE_2_3_3_EBGP_ATTR_PREFIX_POOL_REGEX,
-        ebgp_attr_change_device_group_regex=_BACKPRESSURE_2_3_3_EBGP_ATTR_DEVICE_GROUP_REGEX,
-        ebgp_attr_change_prefix_count=_BACKPRESSURE_2_3_3_EBGP_ATTR_CHANGE_PREFIX_COUNT,
-        withdraw_count=_BACKPRESSURE_2_3_3_WITHDRAW_COUNT,
-        lp_modify_count=_BACKPRESSURE_2_3_3_LP_MODIFY_COUNT,
-        initial_community=_BACKPRESSURE_2_3_3_INITIAL_COMMUNITY,
-        mutated_community=_BACKPRESSURE_2_3_3_MUTATED_COMMUNITY,
-        target_local_pref=_BACKPRESSURE_2_3_3_TARGET_LOCAL_PREF,
-        ibgp_receiver_peer_addrs=_BACKPRESSURE_IBGP_RECEIVER_PEER_ADDRS,
-        expected_established_sessions=_BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS,
-        memory_threshold_bytes=_BACKPRESSURE_MEMORY_THRESHOLD_BYTES,
-        skip_community_swap_for_cascade_safety=False,
-        use_peer_scoped_community_swap=True,
-        ebgp_sender_peer_addr=_BACKPRESSURE_EBGP_V6_PEER_ADDRS[0],
-    )
+# =============================================================================
+# PUBLIC FACTORY
+# =============================================================================
 
 
-def _backpressure_pb_2_3_4(
-    *,
-    device_name: str,
-    ixia_interface_mimic_ibgp: str,
-) -> taac_types.Playbook:
-    return create_bgp_ug_backpressure_all_peers_block_down_recover_playbook(
-        device_name=device_name,
-        ixia_interface=ixia_interface_mimic_ibgp,
-        storm_prefix_pool_regex=_BACKPRESSURE_STORM_PREFIX_POOL_REGEX,
-        storm_device_group_regex=_BACKPRESSURE_STORM_DEVICE_GROUP_REGEX,
-        storm_initial_prefix_count=_BACKPRESSURE_2_3_4_INITIAL_PREFIX_COUNT,
-        storm_followup_prefix_count=_BACKPRESSURE_2_3_4_FOLLOWUP_PREFIX_COUNT,
-        community_combinations=_backpressure_heavy_communities_32(),
-        extended_community_combinations=_backpressure_heavy_extended_communities_16(),
-        as_path=_backpressure_heavy_as_path_255(),
-        ebgp_group_dg_regex=_BACKPRESSURE_EBGP_ALL_DEVICE_GROUP_REGEX,
-        ebgp_peer_addrs=_BACKPRESSURE_EBGP_PEER_ADDRS,
-        bgp_mon_peer_addrs=_BACKPRESSURE_BGP_MON_PEER_ADDRS,
-        ibgp_peer_addrs=_BACKPRESSURE_IBGP_PEER_ADDRS,
-        expected_established_sessions=_BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS,
-        memory_threshold_bytes=_BACKPRESSURE_MEMORY_THRESHOLD_BYTES,
-        storm_sender_peer_addr_prefix=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
-    )
-
-
-def _backpressure_pb_topology_smoke() -> taac_types.Playbook:
-    return create_bgp_ug_backpressure_topology_smoke_playbook(
-        expected_established_sessions=_BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS,
-    )
-
-
-def _backpressure_build_test_config(
+def create_bgp_ug_backpressure_test_config(
     testbed: Testbed,
     *,
-    name: str,
-    playbooks: t.List[taac_types.Playbook],
+    smoke_only: bool = False,
 ) -> taac_types.TestConfig:
-    """Shared topology builder for the backpressure catalog TestConfigs.
+    """BGP++ Update Group qualification 2.3.x (Backpressure & Blocking) on
+    the EBB full-scale topology.
 
-    Encapsulates the setup_tasks / teardown_tasks / basic_port_configs /
-    endpoints construction so both catalog TestConfigs (main + smoke) land
-    on the SAME topology definition -- only the playbook list differs.
-    Testbed-agnostic; requires an EBB full-scale wiring (>= 3 IXIA ports
-    + bgpcpp + openr configerator paths on the testbed).
+    Default (``smoke_only=False``): four playbooks (2.3.1 / 2.3.2 / 2.3.3 /
+    2.3.4) sharing the EBB full-scale topology; ``enable_update_group=True``
+    hard-coded (UG MUST be on for these specs). TestConfig ``name`` field
+    grandfathered as ``BGP_UG_BACKPRESSURE_TEST``.
+
+    ``smoke_only=True``: brings up the full EBB-scale topology + runs
+    a longevity playbook (precheck + 30-min longevity + postcheck) so the
+    operator can hands-on probe the device. Designed to be paired with
+    ``--skip-teardown-tasks --skip-ixia-cleanup``. TestConfig ``name`` field
+    grandfathered as ``BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE``.
+
+    Only bag013 is wired to run this today (see catalog binding in
+    ``qual_bgp_update_group.py``); factory itself is testbed-agnostic
+    given any EBB full-scale testbed.
     """
+    # ── Shape asserts ──
     assert testbed.dut_bgp_as is not None, "Testbed must have dut_bgp_as set"
     assert testbed.bgpcpp_configerator_path is not None, (
         "Testbed must have bgpcpp_configerator_path set for BGP++ deployment"
@@ -513,12 +378,14 @@ def _backpressure_build_test_config(
         "Testbed must have >= 3 IXIA ports (eBGP + iBGP + BGP-MON)"
     )
 
+    # ── Extract testbed fields ──
     device_name = testbed.device_name
     ixia_chassis_ip = testbed.ixia_chassis_ip
     ixia_interface_mimic_ebgp, ixia_port_ebgp = testbed.ixia_ports[0]
     ixia_interface_mimic_ibgp, ixia_port_ibgp = testbed.ixia_ports[1]
     ixia_interface_mimic_bgp_mon, ixia_port_bgp_mon = testbed.ixia_ports[2]
 
+    # ── Common setup / teardown / port-configs / endpoints ──
     setup_tasks = get_common_setup_tasks(
         device_name=device_name,
         bgp_asn=testbed.dut_bgp_as,
@@ -579,106 +446,227 @@ def _backpressure_build_test_config(
                 1: _backpressure_storm_dg_v6_attribute_overrides(),
             },
         ),
-        slow_peer_count=_BACKPRESSURE_EBGP_SLOW_PEER_COUNT_V6,
-        slow_dg_name=_BACKPRESSURE_SLOW_EBGP_V6_DG_NAME,
+        slow_peer_count=_BACKPRESSURE_2_3_1_SLOW_PEER_COUNT,
+        slow_dg_name=_BACKPRESSURE_2_3_1_SLOW_DG_NAME,
+    )
+    endpoints = [
+        Endpoint(
+            name=device_name,
+            dut=True,
+            ixia_ports=[
+                ixia_interface_mimic_ebgp,
+                ixia_interface_mimic_ibgp,
+                ixia_interface_mimic_bgp_mon,
+            ],
+            direct_ixia_connections=[
+                DirectIxiaConnection(
+                    interface=ixia_interface_mimic_ebgp,
+                    ixia_chassis_ip=ixia_chassis_ip,
+                    ixia_port=ixia_port_ebgp,
+                ),
+                DirectIxiaConnection(
+                    interface=ixia_interface_mimic_ibgp,
+                    ixia_chassis_ip=ixia_chassis_ip,
+                    ixia_port=ixia_port_ibgp,
+                ),
+                DirectIxiaConnection(
+                    interface=ixia_interface_mimic_bgp_mon,
+                    ixia_chassis_ip=ixia_chassis_ip,
+                    ixia_port=ixia_port_bgp_mon,
+                ),
+            ],
+        ),
+    ]
+
+    # ── Smoke variant returns early ──
+    if smoke_only:
+        return TestConfig(
+            name="BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE",
+            skip_ixia_protocol_verification=True,
+            log_collection_timeout=600,
+            basset_pool="dne.test",
+            ixia_config_cache=taac_types.IxiaConfigCache(enabled=False),
+            endpoints=endpoints,
+            host_os_type_map={device_name: taac_types.DeviceOsType.ARISTA_FBOSS},
+            startup_checks=[],
+            setup_tasks=setup_tasks,
+            teardown_tasks=teardown_tasks,
+            basic_port_configs=basic_port_configs,
+            playbooks=[
+                # Bring-up smoke: full EBB-scale + 30-min longevity. No spec test.
+                create_bgp_ug_backpressure_topology_smoke_playbook(
+                    expected_established_sessions=_BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS,
+                ),
+            ],
+        )
+
+    # ── 2.3.1 — Fast peers not held back by slow peers ─────────────────────
+    # Carve: split eBGP into fast (majority) + slow (20 with TCP throttled).
+    # Traffic: heavy iBGP storm targeting the shared iBGP receiver group.
+    _2_3_1_slow_peer_throttle = create_configure_bgp_peer_tcp_window_size_step(
+        hostname=device_name,
+        interface=ixia_interface_mimic_ebgp,
+        device_group_regex=f"^{_BACKPRESSURE_2_3_1_SLOW_DG_NAME}$",
+        tcp_window_size_bytes=_BACKPRESSURE_2_3_1_SLOW_TCP_WINDOW_BYTES,
+        description=(
+            f"Setup (2.3.1): throttle TCP WindowSize="
+            f"{_BACKPRESSURE_2_3_1_SLOW_TCP_WINDOW_BYTES} on "
+            f"{_BACKPRESSURE_2_3_1_SLOW_DG_NAME} "
+            f"({_BACKPRESSURE_2_3_1_SLOW_PEER_COUNT} slow eBGP peers) "
+            f"to induce DUT adj-RIB-out backpressure -- required for spec 2.3.1 "
+            f"fast/slow asymmetry to be exercised on IXIA testbeds where "
+            f"peers otherwise drain at line rate."
+        ),
+    )
+    _2_3_1_wire_snapshot_key = f"pb_2_3_1_per_peer_rx_pre_storm_{device_name}"
+    _2_3_1_wire_snapshot = create_snapshot_per_peer_bgp_rx_stats_step(
+        hostname=device_name,
+        interface=ixia_interface_mimic_ebgp,
+        snapshot_key=_2_3_1_wire_snapshot_key,
+        peer_addrs=list(_BACKPRESSURE_2_3_1_FAST_EBGP_V6_PEER_ADDRS)
+        + list(_BACKPRESSURE_2_3_1_SLOW_EBGP_V6_PEER_ADDRS),
+        description=(
+            f"Phase 0 wire-per-peer snapshot (2.3.1): capture per-peer "
+            f"IXIA Messages Rx baseline on "
+            f"{device_name}:{ixia_interface_mimic_ebgp} across "
+            f"{len(_BACKPRESSURE_2_3_1_FAST_EBGP_V6_PEER_ADDRS)} fast + "
+            f"{len(_BACKPRESSURE_2_3_1_SLOW_EBGP_V6_PEER_ADDRS)} slow peer(s), "
+            f"for post-storm wire-side asymmetry verification"
+        ),
+    )
+    _2_3_1_wire_verify = create_verify_per_peer_bgp_rx_asymmetry_step(
+        hostname=device_name,
+        interface=ixia_interface_mimic_ebgp,
+        snapshot_key=_2_3_1_wire_snapshot_key,
+        fast_peer_addrs=list(_BACKPRESSURE_2_3_1_FAST_EBGP_V6_PEER_ADDRS),
+        slow_peer_addrs=list(_BACKPRESSURE_2_3_1_SLOW_EBGP_V6_PEER_ADDRS),
+        min_ratio=1.0,
+        description=(
+            f"Phase 3.5 wire-per-peer asymmetry gate (2.3.1 CENTRAL CLAIM): "
+            f"median IXIA Messages Rx on fast peers must exceed slow peers "
+            f"since Phase 0 snapshot on "
+            f"{device_name}:{ixia_interface_mimic_ebgp} -- proves DUT drains "
+            f"fast independently of slow on the WIRE inside the same UG"
+        ),
     )
 
+    # ── 2.3.2 — Peer blocks, goes down, comes back — full recovery ─────────
+    # Carve: shutdown 16 eBGP peers; survivors = remaining eBGP + all iBGP.
+    # Traffic: initial + follow-up storms; the follow-up is smaller (500 prefixes)
+    # to exercise UG re-programming under a live workload.
+    # (no per-test setup steps beyond the shared setup_tasks)
+
+    # ── 2.3.3 — Withdraw and attribute change under backpressure ───────────
+    # Carve: pick one eBGP sender peer to fire attribute changes at while the
+    # iBGP storm is running; mutate community + local-pref on 100 prefixes.
+    # (no per-test setup steps)
+
+    # ── 2.3.4 — All peers block, then all go down, then all come back ──────
+    # Carve: bounce the entire (fast) eBGP list + all iBGP peers.
+    # Traffic: initial + follow-up (smaller) storms.
+    # (no per-test setup steps)
+
     return TestConfig(
-        name=name,
+        name="BGP_UG_BACKPRESSURE_TEST",
         skip_ixia_protocol_verification=True,
         log_collection_timeout=600,
         basset_pool="dne.test",
         ixia_config_cache=taac_types.IxiaConfigCache(enabled=False),
-        endpoints=[
-            Endpoint(
-                name=device_name,
-                dut=True,
-                ixia_ports=[
-                    ixia_interface_mimic_ebgp,
-                    ixia_interface_mimic_ibgp,
-                    ixia_interface_mimic_bgp_mon,
-                ],
-                direct_ixia_connections=[
-                    DirectIxiaConnection(
-                        interface=ixia_interface_mimic_ebgp,
-                        ixia_chassis_ip=ixia_chassis_ip,
-                        ixia_port=ixia_port_ebgp,
-                    ),
-                    DirectIxiaConnection(
-                        interface=ixia_interface_mimic_ibgp,
-                        ixia_chassis_ip=ixia_chassis_ip,
-                        ixia_port=ixia_port_ibgp,
-                    ),
-                    DirectIxiaConnection(
-                        interface=ixia_interface_mimic_bgp_mon,
-                        ixia_chassis_ip=ixia_chassis_ip,
-                        ixia_port=ixia_port_bgp_mon,
-                    ),
-                ],
-            ),
-        ],
+        endpoints=endpoints,
         host_os_type_map={device_name: taac_types.DeviceOsType.ARISTA_FBOSS},
         startup_checks=[],
         setup_tasks=setup_tasks,
         teardown_tasks=teardown_tasks,
         basic_port_configs=basic_port_configs,
-        playbooks=playbooks,
-    )
-
-
-def create_bgp_ug_backpressure_test_config(
-    testbed: Testbed,
-    *,
-    smoke_only: bool = False,
-) -> taac_types.TestConfig:
-    """BGP++ Update Group qualification 2.3.x (Backpressure & Blocking) on
-    the EBB full-scale topology.
-
-    Default (``smoke_only=False``): four playbooks (2.3.1 / 2.3.2 / 2.3.3 /
-    2.3.4) sharing the EBB full-scale topology; ``enable_update_group=True``
-    hard-coded (UG MUST be on for these specs). TestConfig ``name`` field
-    grandfathered as ``BGP_UG_BACKPRESSURE_TEST``.
-
-    ``smoke_only=True``: brings up the full EBB-scale topology + runs
-    a longevity playbook (precheck + 30-min longevity + postcheck) so the
-    operator can hands-on probe the device. Designed to be paired with
-    ``--skip-teardown-tasks --skip-ixia-cleanup``. TestConfig ``name`` field
-    grandfathered as ``BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE``.
-
-    Only bag013 is wired to run this today (see catalog binding in
-    ``qual_bgp_update_group.py``); factory itself is testbed-agnostic
-    given any EBB full-scale testbed.
-    """
-    device_name = testbed.device_name
-    ixia_interface_mimic_ebgp, _ = testbed.ixia_ports[0]
-    ixia_interface_mimic_ibgp, _ = testbed.ixia_ports[1]
-    if smoke_only:
-        return _backpressure_build_test_config(
-            testbed,
-            name="BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE",
-            playbooks=[_backpressure_pb_topology_smoke()],
-        )
-    playbooks = [
-        _backpressure_pb_2_3_1(
-            device_name=device_name,
-            ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
-            ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
-        ),
-        _backpressure_pb_2_3_2(
-            device_name=device_name,
-            ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
-        ),
-        _backpressure_pb_2_3_3(
-            device_name=device_name,
-            ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
-        ),
-        _backpressure_pb_2_3_4(
-            device_name=device_name,
-            ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
-        ),
-    ]
-    return _backpressure_build_test_config(
-        testbed,
-        name="BGP_UG_BACKPRESSURE_TEST",
-        playbooks=playbooks,
+        playbooks=[
+            # ── 2.3.1 ──
+            create_bgp_ug_backpressure_fast_peers_not_held_back_playbook(
+                device_name=device_name,
+                ixia_interface=ixia_interface_mimic_ibgp,
+                storm_prefix_pool_regex=_BACKPRESSURE_STORM_PREFIX_POOL_REGEX,
+                storm_device_group_regex=_BACKPRESSURE_STORM_DEVICE_GROUP_REGEX,
+                storm_prefix_count=10000,  # 2.3.1 storm prefixes
+                community_combinations=_backpressure_heavy_communities_32(),
+                extended_community_combinations=_backpressure_heavy_extended_communities_16(),
+                as_path=_backpressure_heavy_as_path_255(),
+                fast_peer_addrs=_BACKPRESSURE_2_3_1_FAST_EBGP_V6_PEER_ADDRS,
+                bgp_mon_peer_addrs=_BACKPRESSURE_BGP_MON_PEER_ADDRS,
+                iBGP_receiver_peer_addrs=_BACKPRESSURE_IBGP_RECEIVER_PEER_ADDRS,
+                slow_ebgp_peer_addrs=_BACKPRESSURE_2_3_1_SLOW_EBGP_V6_PEER_ADDRS,
+                expected_established_sessions=_BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS,
+                memory_threshold_bytes=_BACKPRESSURE_MEMORY_THRESHOLD_BYTES,
+                storm_sender_peer_addr_prefix=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
+                setup_steps=[_2_3_1_slow_peer_throttle, _2_3_1_wire_snapshot],
+                stage_2_extra_steps=[_2_3_1_wire_verify],
+                enable_fast_peer_ixia_wire_check=True,
+                fast_peer_ixia_interface=ixia_interface_mimic_ebgp,
+            ),
+            # ── 2.3.2 ──
+            create_bgp_ug_backpressure_peer_blocks_down_recover_playbook(
+                device_name=device_name,
+                ixia_interface=ixia_interface_mimic_ibgp,
+                storm_prefix_pool_regex=_BACKPRESSURE_STORM_PREFIX_POOL_REGEX,
+                storm_device_group_regex=_BACKPRESSURE_STORM_DEVICE_GROUP_REGEX,
+                storm_initial_prefix_count=5000,  # 2.3.2 initial storm prefixes
+                storm_followup_prefix_count=500,  # 2.3.2 follow-up storm prefixes
+                community_combinations=_backpressure_heavy_communities_32(),
+                extended_community_combinations=_backpressure_heavy_extended_communities_16(),
+                as_path=_backpressure_heavy_as_path_255(),
+                shutdown_peer_regex=_BACKPRESSURE_EBGP_V6_PEER_REGEX,
+                shutdown_peer_addrs=_BACKPRESSURE_2_3_2_SHUTDOWN_PEER_ADDRS,
+                shutdown_count=16,  # 2.3.2 peers to bounce
+                surviving_receiver_peer_addrs=_BACKPRESSURE_2_3_2_SURVIVING_RECEIVER_ADDRS,
+                surviving_ebgp_receiver_peer_addrs=_BACKPRESSURE_2_3_2_SURVIVING_EBGP_RECEIVER_ADDRS,
+                surviving_ibgp_receiver_peer_addrs=_BACKPRESSURE_2_3_2_SURVIVING_IBGP_RECEIVER_ADDRS,
+                expected_established_sessions=_BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS,
+                memory_threshold_bytes=_BACKPRESSURE_MEMORY_THRESHOLD_BYTES,
+                storm_sender_peer_addr_prefix=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
+            ),
+            # ── 2.3.3 ──
+            create_bgp_ug_backpressure_withdraw_attr_change_playbook(
+                device_name=device_name,
+                ixia_interface=ixia_interface_mimic_ibgp,
+                ibgp_storm_prefix_pool_regex=_BACKPRESSURE_STORM_PREFIX_POOL_REGEX,
+                ibgp_storm_device_group_regex=_BACKPRESSURE_STORM_DEVICE_GROUP_REGEX,
+                ibgp_storm_prefix_count=5000,  # 2.3.3 background iBGP storm prefixes
+                community_combinations=_backpressure_heavy_communities_32(),
+                extended_community_combinations=_backpressure_heavy_extended_communities_16(),
+                as_path=_backpressure_heavy_as_path_255(),
+                ebgp_attr_change_prefix_pool_regex="PREFIX_POOL_IPV6_EBGP",  # 2.3.3-only
+                ebgp_attr_change_device_group_regex="DEVICE_GROUP_IPV6_EBGP",  # 2.3.3-only
+                ebgp_attr_change_prefix_count=400,  # 2.3.3 attr-change target
+                withdraw_count=200,  # 2.3.3 withdraws
+                lp_modify_count=100,  # 2.3.3 LP mutations
+                initial_community="65529:34814",  # 2.3.3 seed community
+                # NOTE: 16-bit constraint — BGP RFC 1997 community low field is
+                # 16 bits; IXIA silently truncates writes above 65535.
+                mutated_community="65529:1234",  # 2.3.3 mutated community
+                target_local_pref=200,  # 2.3.3 target LP
+                ibgp_receiver_peer_addrs=_BACKPRESSURE_IBGP_RECEIVER_PEER_ADDRS,
+                expected_established_sessions=_BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS,
+                memory_threshold_bytes=_BACKPRESSURE_MEMORY_THRESHOLD_BYTES,
+                skip_community_swap_for_cascade_safety=False,
+                use_peer_scoped_community_swap=True,
+                ebgp_sender_peer_addr=_BACKPRESSURE_EBGP_V6_PEER_ADDRS[0],
+            ),
+            # ── 2.3.4 ──
+            create_bgp_ug_backpressure_all_peers_block_down_recover_playbook(
+                device_name=device_name,
+                ixia_interface=ixia_interface_mimic_ibgp,
+                storm_prefix_pool_regex=_BACKPRESSURE_STORM_PREFIX_POOL_REGEX,
+                storm_device_group_regex=_BACKPRESSURE_STORM_DEVICE_GROUP_REGEX,
+                storm_initial_prefix_count=10000,  # 2.3.4 initial storm prefixes
+                storm_followup_prefix_count=500,  # 2.3.4 follow-up storm prefixes
+                community_combinations=_backpressure_heavy_communities_32(),
+                extended_community_combinations=_backpressure_heavy_extended_communities_16(),
+                as_path=_backpressure_heavy_as_path_255(),
+                ebgp_group_dg_regex=_BACKPRESSURE_EBGP_ALL_DEVICE_GROUP_REGEX,
+                ebgp_peer_addrs=_BACKPRESSURE_2_3_4_EBGP_PEER_ADDRS,
+                bgp_mon_peer_addrs=_BACKPRESSURE_BGP_MON_PEER_ADDRS,
+                ibgp_peer_addrs=_BACKPRESSURE_IBGP_PEER_ADDRS,
+                expected_established_sessions=_BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS,
+                memory_threshold_bytes=_BACKPRESSURE_MEMORY_THRESHOLD_BYTES,
+                storm_sender_peer_addr_prefix=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
+            ),
+        ],
     )
