@@ -17,7 +17,7 @@ Each factory is verified for:
 import json
 import unittest
 
-from taac.playbooks.routing.bgp_ug_playbooks import (
+from taac.playbooks.routing.factories.qual_bgp_update_group.tc4_new_peer_join import (
     create_bgp_ug_new_peer_join_attribute_change_playbook,
     create_bgp_ug_new_peer_join_full_sync_resilience_playbook,
     create_bgp_ug_new_peer_join_routes_withdrawn_playbook,

@@ -26,11 +26,11 @@ Asserts per factory:
 import json
 import unittest
 
-from taac.playbooks.routing.bgp_ug_playbooks import (
-    create_ug_backpressure_all_peers_block_down_recover_playbook,
-    create_ug_backpressure_fast_peers_not_held_back_playbook,
-    create_ug_backpressure_peer_blocks_down_recover_playbook,
-    create_ug_backpressure_withdraw_attr_change_playbook,
+from taac.playbooks.routing.factories.qual_bgp_update_group.tc3_backpressure import (
+    create_bgp_ug_backpressure_all_peers_block_down_recover_playbook,
+    create_bgp_ug_backpressure_fast_peers_not_held_back_playbook,
+    create_bgp_ug_backpressure_peer_blocks_down_recover_playbook,
+    create_bgp_ug_backpressure_withdraw_attr_change_playbook,
 )
 
 
@@ -91,7 +91,7 @@ class FastPeersNotHeldBackPlaybookTest(unittest.TestCase):
     PREFIX_COUNT = 10000
 
     def setUp(self):
-        self.playbook = create_ug_backpressure_fast_peers_not_held_back_playbook(
+        self.playbook = create_bgp_ug_backpressure_fast_peers_not_held_back_playbook(
             device_name=DEVICE,
             ixia_interface=IFACE,
             storm_prefix_pool_regex=STORM_POOL,
@@ -176,7 +176,7 @@ class PeerBlocksDownRecoverPlaybookTest(unittest.TestCase):
     SHUTDOWN_COUNT = 16
 
     def setUp(self):
-        self.playbook = create_ug_backpressure_peer_blocks_down_recover_playbook(
+        self.playbook = create_bgp_ug_backpressure_peer_blocks_down_recover_playbook(
             device_name=DEVICE,
             ixia_interface=IFACE,
             storm_prefix_pool_regex=STORM_POOL,
@@ -249,7 +249,7 @@ class WithdrawAttrChangePlaybookTest(unittest.TestCase):
     TARGET_LP = 200
 
     def setUp(self):
-        self.playbook = create_ug_backpressure_withdraw_attr_change_playbook(
+        self.playbook = create_bgp_ug_backpressure_withdraw_attr_change_playbook(
             device_name=DEVICE,
             ixia_interface=IFACE,
             ibgp_storm_prefix_pool_regex=STORM_POOL,
@@ -346,7 +346,7 @@ class WithdrawAttrChangeCascadeSafePlaybookTest(unittest.TestCase):
     TARGET_LP = 200
 
     def setUp(self):
-        self.playbook = create_ug_backpressure_withdraw_attr_change_playbook(
+        self.playbook = create_bgp_ug_backpressure_withdraw_attr_change_playbook(
             device_name=DEVICE,
             ixia_interface=IFACE,
             ibgp_storm_prefix_pool_regex=STORM_POOL,
@@ -445,7 +445,7 @@ class WithdrawAttrChangePeerScopedPlaybookTest(unittest.TestCase):
     TARGET_LP = 200
 
     def setUp(self):
-        self.playbook = create_ug_backpressure_withdraw_attr_change_playbook(
+        self.playbook = create_bgp_ug_backpressure_withdraw_attr_change_playbook(
             device_name=DEVICE,
             ixia_interface=IFACE,
             ibgp_storm_prefix_pool_regex=STORM_POOL,
@@ -567,22 +567,24 @@ class AllPeersBlockDownRecoverPlaybookTest(unittest.TestCase):
     FOLLOWUP = 500
 
     def setUp(self):
-        self.playbook = create_ug_backpressure_all_peers_block_down_recover_playbook(
-            device_name=DEVICE,
-            ixia_interface=IFACE,
-            storm_prefix_pool_regex=STORM_POOL,
-            storm_device_group_regex=STORM_DG,
-            storm_initial_prefix_count=self.INITIAL,
-            storm_followup_prefix_count=self.FOLLOWUP,
-            community_combinations=COMMUNITIES_32,
-            extended_community_combinations=EXT_COMMUNITIES_16,
-            as_path=AS_PATH_255,
-            ebgp_group_dg_regex=EBGP_DG_ALL,
-            ebgp_peer_addrs=EBGP_PEERS,
-            bgp_mon_peer_addrs=BGP_MON,
-            ibgp_peer_addrs=IBGP_PEERS,
-            expected_established_sessions=10,
-            memory_threshold_bytes=MEMORY_THRESHOLD,
+        self.playbook = (
+            create_bgp_ug_backpressure_all_peers_block_down_recover_playbook(
+                device_name=DEVICE,
+                ixia_interface=IFACE,
+                storm_prefix_pool_regex=STORM_POOL,
+                storm_device_group_regex=STORM_DG,
+                storm_initial_prefix_count=self.INITIAL,
+                storm_followup_prefix_count=self.FOLLOWUP,
+                community_combinations=COMMUNITIES_32,
+                extended_community_combinations=EXT_COMMUNITIES_16,
+                as_path=AS_PATH_255,
+                ebgp_group_dg_regex=EBGP_DG_ALL,
+                ebgp_peer_addrs=EBGP_PEERS,
+                bgp_mon_peer_addrs=BGP_MON,
+                ibgp_peer_addrs=IBGP_PEERS,
+                expected_established_sessions=10,
+                memory_threshold_bytes=MEMORY_THRESHOLD,
+            )
         )
 
     def test_name_and_single_trigger_stage(self):

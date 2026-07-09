@@ -1,19 +1,36 @@
 # (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
 # pyre-unsafe
-"""BGP Update Group qualification testconfigs (active qualification project).
+"""BGP Update Group qualification testconfigs — one catalog constant per spec section.
 
-Covers UG specs 2.1.1, 2.3.x, 2.4.x, 2.7.2.
+Post-Wave-6 layout: all 7 sub-sections (2.1 through 2.7) have a catalog
+constant here. Sections 2.2, 2.5, 2.6 are SKELETON — empty-playbook
+TestConfigs establishing the catalog surface pending implementation. See
+``factories/qual_bgp_update_group/tc{N}_*.py`` for per-section factories.
 
-External consumers import via ``testconfigs.routing`` root; see README.md §7.
+Grandfathered Python constant names (referenced from cconf and elsewhere)
+retained verbatim alongside the newer spec-anchored names.
 """
 
-from taac.testconfigs.routing.factories.bgp_update_group import (
+from taac.testconfigs.routing.factories.qual_bgp_update_group.tc1_distribution_correctness import (
+    create_bgp_ug_distribution_correctness_test_config,
+)
+from taac.testconfigs.routing.factories.qual_bgp_update_group.tc2_peer_lifecycle import (
+    create_bgp_ug_peer_lifecycle_test_config,
+)
+from taac.testconfigs.routing.factories.qual_bgp_update_group.tc3_backpressure import (
     create_bgp_ug_backpressure_test_config,
-    create_bgp_ug_backpressure_topology_smoke_test_config,
-    create_bgp_ug_eb03_initial_dump_identical_routes_test_config,
-    create_bgp_ug_initial_dump_identical_routes_test_config,
+)
+from taac.testconfigs.routing.factories.qual_bgp_update_group.tc4_new_peer_join import (
     create_bgp_ug_new_peer_join_test_config,
-    create_bgp_ug_sustained_link_flap_test_config,
+)
+from taac.testconfigs.routing.factories.qual_bgp_update_group.tc5_multigroup_formation import (
+    create_bgp_ug_multigroup_formation_test_config,
+)
+from taac.testconfigs.routing.factories.qual_bgp_update_group.tc6_bit_alloc_group_stab_under_flap import (
+    create_bgp_ug_bit_alloc_group_stab_under_flap_test_config,
+)
+from taac.testconfigs.routing.factories.qual_bgp_update_group.tc7_disruption_recovery import (
+    create_bgp_ug_disruption_recovery_test_config,
 )
 from taac.testconfigs.routing.testbed import (
     BAG012_ASH6,
@@ -22,46 +39,41 @@ from taac.testconfigs.routing.testbed import (
 )
 
 
-# ─── Diff 2 — BAG012 UG new-peer-join (specs 2.4.1 + 2.4.2 + 2.4.3) ────────
-# TestConfig constant name grandfathered from bag012_ash6_test_config.py
-# (Wave 4 renames to BAG012_ASH6_BGP_UG_NEW_PEER_JOIN_TEST_CONFIG per the
-# {TESTBED}_{FACTORY}_{VARIANT}_TEST_CONFIG framework naming rule).
+# ─── Spec 2.1 Distribution Correctness ──────────────────────────────────
+BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG = (
+    create_bgp_ug_distribution_correctness_test_config(BAG013_ASH6)
+)
+EB03_LAB_ASH6_BGP_TEST_UPDATE_GROUP_CONFIG = (
+    create_bgp_ug_distribution_correctness_test_config(EB03_LAB_ASH6)
+)
+
+# ─── Spec 2.2 Peer Lifecycle (SKELETON) ─────────────────────────────────
+BGP_UG_PEER_LIFECYCLE_TEST_CONFIG = create_bgp_ug_peer_lifecycle_test_config(
+    BAG013_ASH6
+)
+
+# ─── Spec 2.3 Backpressure ──────────────────────────────────────────────
+BGP_UG_BACKPRESSURE_TEST_CONFIG = create_bgp_ug_backpressure_test_config(BAG013_ASH6)
+BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG = create_bgp_ug_backpressure_test_config(
+    BAG013_ASH6, smoke_only=True
+)
+
+# ─── Spec 2.4 New Peer Join ─────────────────────────────────────────────
 BGP_UG_NEW_PEER_JOIN_TEST_CONFIG = create_bgp_ug_new_peer_join_test_config(BAG012_ASH6)
 
-
-# ─── Diff 3 — BAG013 conveyor (spec 2.1.1 initial-dump + 2.7.2 sustained-link-flap)
-# Python module-level constants renamed to the framework
-# ``{TESTBED}_{BGP_UG_}{VARIANT}_TEST_CONFIG`` shape (Wave 4-ish); the internal
-# ``TestConfig.name`` field is preserved verbatim
-# (``BAG013_ASH6_BGP_CONVEYOR_TEST`` / ``..._UPDATE_GROUP``) so the golden
-# manifest stays byte-wise identical.
-BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG = (
-    create_bgp_ug_initial_dump_identical_routes_test_config(BAG013_ASH6)
+# ─── Spec 2.5 Multi-Group Formation (SKELETON) ──────────────────────────
+BGP_UG_MULTIGROUP_FORMATION_TEST_CONFIG = (
+    create_bgp_ug_multigroup_formation_test_config(BAG013_ASH6)
 )
+
+# ─── Spec 2.6 Bit Allocation Under Flaps (SKELETON) ─────────────────────
+BGP_UG_BIT_ALLOC_GROUP_STAB_UNDER_FLAP_TEST_CONFIG = (
+    create_bgp_ug_bit_alloc_group_stab_under_flap_test_config(BAG013_ASH6)
+)
+
+# ─── Spec 2.7 Disruption and Recovery ───────────────────────────────────
 BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG = (
-    create_bgp_ug_sustained_link_flap_test_config(BAG013_ASH6)
-)
-
-
-# ─── Diff 4 — EB03 lab-box UG initial-dump (spec 2.1.1 + longevity debugging)
-# TestConfig.name field grandfathered from eb03_update_group_test_config.py
-# so the golden manifest stays byte-wise identical (hash 56b3fa16bf520c5f).
-EB03_LAB_ASH6_BGP_TEST_UPDATE_GROUP_CONFIG = (
-    create_bgp_ug_eb03_initial_dump_identical_routes_test_config(EB03_LAB_ASH6)
-)
-
-
-# ─── Wave 2B — BAG013 BGP UG Backpressure (spec 2.3.1 / 2.3.2 / 2.3.3 / 2.3.4)
-# TestConfig.name field is preserved verbatim as ``BGP_UG_BACKPRESSURE_TEST`` /
-# ``BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE`` so the golden manifest stays byte-wise
-# identical to the legacy ``bag013_ash6_backpressure_test_config.py`` outputs.
-BGP_UG_BACKPRESSURE_TEST_CONFIG = create_bgp_ug_backpressure_test_config(
-    BAG013_ASH6, name="BGP_UG_BACKPRESSURE_TEST"
-)
-BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG = (
-    create_bgp_ug_backpressure_topology_smoke_test_config(
-        BAG013_ASH6, name="BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE"
-    )
+    create_bgp_ug_disruption_recovery_test_config(BAG013_ASH6)
 )
 
 
@@ -70,6 +82,9 @@ __all__ = [
     "BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG",
     "BGP_UG_BACKPRESSURE_TEST_CONFIG",
     "BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG",
+    "BGP_UG_BIT_ALLOC_GROUP_STAB_UNDER_FLAP_TEST_CONFIG",
+    "BGP_UG_MULTIGROUP_FORMATION_TEST_CONFIG",
     "BGP_UG_NEW_PEER_JOIN_TEST_CONFIG",
+    "BGP_UG_PEER_LIFECYCLE_TEST_CONFIG",
     "EB03_LAB_ASH6_BGP_TEST_UPDATE_GROUP_CONFIG",
 ]
