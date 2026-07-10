@@ -78,6 +78,7 @@ from taac.testconfigs.routing.util.bgp_ebb_constants import (
     OPENR_PORT_CHANNEL_MEMBER,
     UPDATE_GROUP_CONFIG,
 )
+from pyre_extensions import none_throws
 from taac.test_as_a_config.types import Task
 
 BGPCPP_CONFIG_PATH = "/mnt/flash/bgpcpp_config"
@@ -567,7 +568,8 @@ def _get_full_scale_ip_config_tasks(
     device_name: str,
     ixia_interface_mimic_ebgp: str,
     ixia_interface_mimic_ibgp: str,
-    ixia_interface_mimic_bgp_mon: str,
+    ixia_interface_mimic_bgp_mon: t.Optional[str] = None,
+    include_bgp_mon: bool = True,
 ) -> t.List[Task]:
     """
     Configure full-scale IP addresses for all IXIA interfaces.
@@ -575,13 +577,17 @@ def _get_full_scale_ip_config_tasks(
     Full-scale EBB topology:
     - eBGP: 140 peers, dual-stack (IPv4 + IPv6)
     - iBGP: 8 planes (4 DC + 4 MP) × 63 peers each, dual-stack
-    - BGP MON: 2 peers, IPv6 only
+    - BGP MON: 2 peers, IPv6 only (only when ``include_bgp_mon`` is True)
 
     Args:
         device_name: Device hostname
         ixia_interface_mimic_ebgp: eBGP IXIA interface
         ixia_interface_mimic_ibgp: iBGP IXIA interface
-        ixia_interface_mimic_bgp_mon: BGP MON IXIA interface
+        ixia_interface_mimic_bgp_mon: BGP MON IXIA interface. Required when
+            ``include_bgp_mon`` is True; ignored otherwise.
+        include_bgp_mon: When False, skip the BGP-MON IP block entirely.
+            Callers on 2-port testbeds or UG qualification tests that do not
+            exercise BGP-MON should pass False.
 
     Returns:
         List of Task objects for IP configuration
@@ -656,20 +662,24 @@ def _get_full_scale_ip_config_tasks(
             )
         )
 
-    # Configure BGP MON interface IPs
-    tasks.append(
-        create_interface_ip_configuration_task(
-            interface=ixia_interface_mimic_bgp_mon,
-            peer_count=BGP_MON_PEER_COUNT,
-            ipv6_base_network=IXIA_BGP_MON_IC_PARENT_NETWORK,
-            address_families=["ipv6"],
-            clear_existing=True,
-            ipv4_start_offset=IXIA_IPV4_START_OFFSET,
-            ipv6_start_offset=IXIA_IPV6_START_OFFSET,
-            hostname=device_name,
-            ixia_needed=True,
+    # Configure BGP MON interface IPs (skipped when include_bgp_mon is False)
+    if include_bgp_mon:
+        assert ixia_interface_mimic_bgp_mon is not None, (
+            "include_bgp_mon=True requires ixia_interface_mimic_bgp_mon"
         )
-    )
+        tasks.append(
+            create_interface_ip_configuration_task(
+                interface=ixia_interface_mimic_bgp_mon,
+                peer_count=BGP_MON_PEER_COUNT,
+                ipv6_base_network=IXIA_BGP_MON_IC_PARENT_NETWORK,
+                address_families=["ipv6"],
+                clear_existing=True,
+                ipv4_start_offset=IXIA_IPV4_START_OFFSET,
+                ipv6_start_offset=IXIA_IPV6_START_OFFSET,
+                hostname=device_name,
+                ixia_needed=True,
+            )
+        )
 
     return tasks
 
@@ -1202,9 +1212,10 @@ def get_common_setup_tasks(
     bgp_asn: int,
     ixia_interface_mimic_ebgp: str,
     ixia_interface_mimic_ibgp: str,
-    ixia_interface_mimic_bgp_mon: str,
     bgpcpp_configerator_path: str,
     profile: BgpPlusPlusProfile,
+    ixia_interface_mimic_bgp_mon: t.Optional[str] = None,
+    include_bgp_mon: bool = True,
     openr_configerator_path: t.Optional[str] = None,
     openr_port_channel_member: t.Optional[str] = None,
     openr_port_channel_ipv4: t.Optional[str] = None,
@@ -1220,11 +1231,21 @@ def get_common_setup_tasks(
     Includes core BGP++ setup plus full-scale IP configuration for:
     - 140 eBGP peers (dual-stack)
     - 8 iBGP planes (4 DC + 4 MP) × 63 peers each (dual-stack)
-    - 2 BGP MON peers
+    - 2 BGP MON peers (only when ``include_bgp_mon`` is True)
+
+    Args:
+        include_bgp_mon: When False, the BGP-MON IXIA interface + IP config is
+            skipped entirely. Callers on 2-port testbeds (or UG qualification
+            tests that do not exercise BGP-MON) should pass False and omit
+            ``ixia_interface_mimic_bgp_mon``.
 
     Returns:
         List of setup Task objects.
     """
+    if include_bgp_mon:
+        assert ixia_interface_mimic_bgp_mon is not None, (
+            "include_bgp_mon=True requires ixia_interface_mimic_bgp_mon"
+        )
     setup_tasks: t.List[Task] = []
 
     # Disable BgpTcpdump daemon before any setup
@@ -1237,15 +1258,19 @@ def get_common_setup_tasks(
         )
     )
 
-    # 1. Pre-IXIA interface configuration (3 interfaces)
+    # 1. Pre-IXIA interface configuration (2 or 3 interfaces).
+    ixia_interfaces: t.List[t.Tuple[str, str]] = [
+        (ixia_interface_mimic_ebgp, "IXIA_MIMIC_EBGP"),
+        (ixia_interface_mimic_ibgp, "IXIA_MIMIC_IBGP"),
+    ]
+    if include_bgp_mon:
+        ixia_interfaces.append(
+            (none_throws(ixia_interface_mimic_bgp_mon), "IXIA_MIMIC_BGP_MON")
+        )
     setup_tasks.extend(
         _get_pre_ixia_interface_tasks(
             device_name=device_name,
-            ixia_interfaces=[
-                (ixia_interface_mimic_ebgp, "IXIA_MIMIC_EBGP"),
-                (ixia_interface_mimic_ibgp, "IXIA_MIMIC_IBGP"),
-                (ixia_interface_mimic_bgp_mon, "IXIA_MIMIC_BGP_MON"),
-            ],
+            ixia_interfaces=ixia_interfaces,
         )
     )
 
@@ -1277,6 +1302,7 @@ def get_common_setup_tasks(
             ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
             ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
             ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
+            include_bgp_mon=include_bgp_mon,
         )
     )
 
