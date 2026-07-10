@@ -261,7 +261,7 @@ BAG012_ASH6 = Testbed(
     ixia_ports=[
         ("Ethernet3/36/1", "7/7"),  # eBGP
         ("Ethernet3/36/2", "7/8"),  # iBGP
-        # bag012 has NO BGP-MON port
+        ("Ethernet3/36/3", "8/1"),  # BGP-MON (LLDP-confirmed 2026-07-09)
     ],
     dut_bgp_as=65012,
     # bag012 is the only bag testbed that pins ``router_id`` explicitly
@@ -269,7 +269,34 @@ BAG012_ASH6 = Testbed(
     # Preserved verbatim from the legacy bag012 config for golden-manifest identity.
     router_id="10.163.28.11",
     bgpcpp_configerator_path=_EBB_BGPCPP_PATH,
+    openr_configerator_path="taac/ebb_ci_cd_configs/bag012_ash6_openr_config",
     peer_groups=ebb_peer_groups(),
+    extras={
+        # OpenR link-config knobs consumed by
+        # ``conveyor_common_tasks.get_common_setup_tasks`` for the bag012.ash6
+        # DUT — same shape as bag010/bag011/bag013. Not yet exercised by any
+        # BAG012 catalog binding (all 6 current bindings run
+        # ``factories/bgp_ebb_characteristic.py`` factories that skip OpenR
+        # setup); dormant capability unlocked when a full-scale factory is
+        # added for BAG012 (Wave 7A/7B/7C).
+        "openr_port_channel_member": "Ethernet3/9/1",
+        "openr_port_channel_ipv4": "10.131.97.234/31",
+        "openr_port_channel_link_local": "fe80::eba:a7f:fcfe/64",
+        "openr_local_link": {
+            "ipv4": "10.131.97.234",
+            "ipv6": "fe80::eba:a7f:fcfe",
+            "ifName": "po100211",
+            "weight": 0,
+            "metric": 10,
+        },
+        "openr_other_link": {
+            "ipv4": "10.131.97.235",
+            "ipv6": "fe80::eba:a7f:fcff",
+            "ifName": "po100211",
+            "weight": 0,
+            "metric": 10,
+        },
+    },
 )
 
 BAG013_ASH6 = Testbed(
