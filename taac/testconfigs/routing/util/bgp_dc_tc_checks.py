@@ -23,10 +23,23 @@ from taac.health_checks.healthcheck_definitions import (
     create_systemctl_active_state_check,
     create_unclean_exit_check,
 )
+from taac.playbooks.playbook_definitions import (
+    WEDGE_AGENT_BINDS_TO_CASCADE,
+)
 from taac.testconfigs.routing.util.bgp_dc_healthchecks import (
     BGP_SESSION_HEALTHCHECK_NO_V6_LOSS_EXPECTED,
     get_ixia_healthcheck_stable_state,
 )
+from taac.health_check.health_check import types as hc_types
+
+# Playbooks that intentionally restart one or more services: those restarts
+# (and their systemd BindsTo cascade) must NOT be flagged by the TC-level
+# SERVICE_RESTART_CHECK. Map playbook name -> services expected to restart.
+# `test_agent_restart` restarts wedge_agent, which cascades (BindsTo) to
+# bgpd / fboss_sw_agent / fboss_hw_agent@0 and brings openr down with it.
+_PLAYBOOK_EXPECTED_RESTARTED_SERVICES = {
+    "test_agent_restart": WEDGE_AGENT_BINDS_TO_CASCADE + ["openr"],
+}
 
 
 def _apply_tc_checks_to_playbooks(
@@ -36,15 +49,35 @@ def _apply_tc_checks_to_playbooks(
 
     For each playbook, append tc_prechecks/tc_postchecks/tc_snapshot_checks
     to the playbook's existing checks (if any).
+
+    For playbooks that intentionally restart services (see
+    ``_PLAYBOOK_EXPECTED_RESTARTED_SERVICES``), the TC-level
+    SERVICE_RESTART_CHECK is rebuilt with the matching
+    ``expected_restarted_services`` so the by-design restart + its BindsTo
+    cascade are not flagged as failures.
     """
-    return [
-        pb(
-            prechecks=list(pb.prechecks or []) + tc_prechecks,
-            postchecks=list(pb.postchecks or []) + tc_postchecks,
-            snapshot_checks=list(pb.snapshot_checks or []) + tc_snapshot_checks,
+    applied = []
+    for pb in playbooks:
+        postchecks = list(pb.postchecks or []) + tc_postchecks
+        expected = _PLAYBOOK_EXPECTED_RESTARTED_SERVICES.get(pb.name)
+        if expected:
+            postchecks = [
+                (
+                    create_service_restart_check(expected_restarted_services=expected)
+                    if getattr(c, "name", None)
+                    == hc_types.CheckName.SERVICE_RESTART_CHECK
+                    else c
+                )
+                for c in postchecks
+            ]
+        applied.append(
+            pb(
+                prechecks=list(pb.prechecks or []) + tc_prechecks,
+                postchecks=postchecks,
+                snapshot_checks=list(pb.snapshot_checks or []) + tc_snapshot_checks,
+            )
         )
-        for pb in playbooks
-    ]
+    return applied
 
 
 # Policy term that unconditionally accepts all routes (ALWAYS match, no actions
