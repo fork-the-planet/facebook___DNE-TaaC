@@ -61,10 +61,10 @@ from taac.testconfigs.routing.cicd_ebb_int_tc import (
 # manifest is byte-wise identical) now live in
 # testconfigs/routing/qual_bgp_update_group.py; import via that path.
 from taac.testconfigs.routing.qual_bgp_update_group import (
+    BAG013_ASH6_BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG,
     BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG,
     BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG,
     BGP_UG_BACKPRESSURE_TEST_CONFIG,
-    BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG,
     BGP_UG_NEW_PEER_JOIN_TEST_CONFIG,
 )
 
@@ -151,7 +151,7 @@ EBB_BGP_PLUS_PLUS_CONVEYOR_NODE_TEST_CONFIGS = [
     # Topology-smoke sibling -- 30-min longevity hold on the same testbed,
     # paired with --skip-teardown --skip-ixia-cleanup so the DUT + IXIA
     # session stay live for hands-on inspection. Ad-hoc; not in conveyor.
-    BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG,
+    BAG013_ASH6_BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG,
     # bag013.ash6 (ad-hoc, not in conveyor stages).
     # ``_UPDATE_GROUP`` variant adds the Update Group qualification 2.7.2
     # sustained-link-flap playbook (rotates flapping the 3 IXIA ports on

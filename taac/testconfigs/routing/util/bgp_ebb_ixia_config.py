@@ -351,18 +351,16 @@ def get_bgp_route_file_path(profile: BgpPlusPlusProfile, base_filename: str) -> 
 
 def create_ebb_scale_basic_port_configs(
     device_name: str,
+    *,
     ixia_interface_mimic_ebgp: str,
     ixia_interface_mimic_ibgp: str,
-    ixia_interface_mimic_bgp_mon: str,
     ebgp_peer_count_v6: int,
     ebgp_peer_count_v4: int,
     ebgp_peer_to_drain: int,
     ibgp_peer_scale_per_plane: int,
     ibgp_peer_to_drain_per_plane: int,
-    bgp_mon_peer_count: int,
     ebgp_remote_as: int,
     ibgp_remote_as: int,
-    bgp_mon_remote_as: int,
     ixia_ebgp_ic_parent_network_v6: str,
     ixia_ebgp_ic_parent_network_v4: str,
     ixia_ibgp_ic_parent_network_v6_dc_plane1: str,
@@ -381,7 +379,14 @@ def create_ebb_scale_basic_port_configs(
     ixia_ibgp_ic_parent_network_v4_mp_plane2: str,
     ixia_ibgp_ic_parent_network_v4_mp_plane3: str,
     ixia_ibgp_ic_parent_network_v4_mp_plane4: str,
-    ixia_bgp_mon_ic_parent_network: str,
+    # BGP-MON args are gated on ``include_bgp_mon`` (default True). Set
+    # ``include_bgp_mon=False`` on 2-port testbeds or UG qualification tests
+    # that do not exercise BGP-MON; the BGP-MON args may then be omitted.
+    include_bgp_mon: bool = True,
+    ixia_interface_mimic_bgp_mon: str | None = None,
+    bgp_mon_peer_count: int = 0,
+    bgp_mon_remote_as: int | None = None,
+    ixia_bgp_mon_ic_parent_network: str | None = None,
     profile: BgpPlusPlusProfile = BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
     multiplier: int = 750,
     multiport_ibgp_sessions: bool = False,
@@ -453,8 +458,16 @@ def create_ebb_scale_basic_port_configs(
         When multiport_ibgp_sessions=False (default):
         - Port 1: eBGP sessions (IPv4/IPv6)
         - Port 2: All iBGP sessions (all 4 planes, DC + MP, IPv4/IPv6)
-        - Port 3: BGP monitoring sessions (if bgp_mon_peer_count > 0)
+        - Port 3: BGP monitoring sessions (if include_bgp_mon and bgp_mon_peer_count > 0)
     """
+    if include_bgp_mon:
+        assert (
+            ixia_interface_mimic_bgp_mon is not None
+            and ixia_bgp_mon_ic_parent_network is not None
+        ), (
+            "include_bgp_mon=True requires ixia_interface_mimic_bgp_mon "
+            "and ixia_bgp_mon_ic_parent_network"
+        )
     # Validate multiport configuration and set up plane interfaces
     if multiport_ibgp_sessions:
         if not all(
@@ -774,8 +787,12 @@ def create_ebb_scale_basic_port_configs(
             )
         )
 
-    # Only add BGP monitoring port config if bgp_mon_peer_count is greater than 0
-    if bgp_mon_peer_count > 0:
+    # Only add BGP monitoring port config if include_bgp_mon and bgp_mon_peer_count > 0
+    if (
+        include_bgp_mon
+        and bgp_mon_peer_count > 0
+        and ixia_interface_mimic_bgp_mon is not None
+    ):
         basic_configs.append(
             BasicPortConfig(
                 endpoint=f"{device_name}:{ixia_interface_mimic_bgp_mon}",

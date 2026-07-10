@@ -1864,7 +1864,7 @@ def create_bgp_ug_backpressure_topology_smoke_playbook(
     expected_established_sessions: int,
     longevity_duration_s: int = 1800,
 ) -> Playbook:
-    """Topology-smoke playbook for `BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE`:
+    """Topology-smoke playbook for ``<TESTBED>_BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE``:
     brings the EBB-scale testbed up, asserts all expected sessions Established
     + UG enabled, sits on a longevity step so the operator can hands-on probe
     the device, then a final session-establish + UG-enabled gate.

@@ -22,8 +22,6 @@ from taac.steps.step_definitions import (
 )
 from taac.testconfigs.routing.testbed import Testbed
 from taac.testconfigs.routing.util.bgp_ebb_constants import (
-    BGP_MON_PEER_COUNT,
-    BGP_MON_REMOTE_AS,
     EBGP_PEER_COUNT_V4,
     EBGP_PEER_COUNT_V6,
     EBGP_PEER_TO_DRAIN,
@@ -31,7 +29,6 @@ from taac.testconfigs.routing.util.bgp_ebb_constants import (
     IBGP_PEER_SCALE_PER_PLANE,
     IBGP_PEER_TO_DRAIN_PER_PLANE,
     IBGP_REMOTE_AS,
-    IXIA_BGP_MON_IC_PARENT_NETWORK,
     IXIA_EBGP_IC_PARENT_NETWORK_V4,
     IXIA_EBGP_IC_PARENT_NETWORK_V6,
     IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE1,
@@ -74,7 +71,7 @@ from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConf
 # topology. bag013 is the only testbed exercising it today.
 # =============================================================================
 
-_BACKPRESSURE_PROFILE = BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R
+_BACKPRESSURE_PROFILE = BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R
 _BACKPRESSURE_STORM_PREFIX_POOL_REGEX = "PREFIX_POOL_IBGP_IPV6_PLANE_1_REMOTE_EB_DRAIN"
 _BACKPRESSURE_STORM_DEVICE_GROUP_REGEX = (
     "DEVICE_GROUP_IPV6_IBGP_PLANE_1_REMOTE_EB_DRAIN"
@@ -85,20 +82,11 @@ _BACKPRESSURE_EBGP_ALL_DEVICE_GROUP_REGEX = "DEVICE_GROUP_IPV[46]_EBGP$"
 _BACKPRESSURE_BGP_MON_PEER_REGEX = "BGP_PEER_IPV6_BGPMON"
 
 # Total expected ESTABLISHED sessions on EBB full-scale.
-# bgpcpp configures 1274 peers total = 280 eBGP (140 V4 + 140 V6) + 992 iBGP
-# (62/plane * 8 planes * 2 AFIs) + 2 BGP_MON -- confirmed via thrift probe.
-# BGP_MON peers stay IDLE on bag013 as a known device quirk (see project
-# memory: "bag013 EBB-scale testbed facts"); subtracting BGP_MON from the
-# expected-Established count is generic and applies to any EBB device with
-# the same BGP_MON IDLE behavior. Established = 1274 - 2 = 1272.
-_BACKPRESSURE_TOTAL_CONFIGURED_PEERS = (
-    EBGP_PEER_COUNT_V6
-    + EBGP_PEER_COUNT_V4
-    + IBGP_PEER_SCALE_PER_PLANE * 8 * 2
-    + BGP_MON_PEER_COUNT
-)
+# bgpcpp configures 1272 peers total = 280 eBGP (140 V4 + 140 V6) + 992 iBGP
+# (62/plane * 8 planes * 2 AFIs). BGP-MON is not exercised on UG so this
+# factory skips it entirely (``include_bgp_mon=False``).
 _BACKPRESSURE_EXPECTED_ESTABLISHED_SESSIONS = (
-    _BACKPRESSURE_TOTAL_CONFIGURED_PEERS - BGP_MON_PEER_COUNT
+    EBGP_PEER_COUNT_V6 + EBGP_PEER_COUNT_V4 + IBGP_PEER_SCALE_PER_PLANE * 8 * 2
 )
 
 _BACKPRESSURE_MEMORY_THRESHOLD_BYTES = Gigabyte.GIG_10.value
@@ -365,11 +353,8 @@ def create_bgp_ug_backpressure_test_config(
     assert testbed.bgpcpp_configerator_path is not None, (
         "Testbed must have bgpcpp_configerator_path set for BGP++ deployment"
     )
-    assert testbed.openr_configerator_path is not None, (
-        "Testbed must have openr_configerator_path set for OpenR deployment"
-    )
-    assert len(testbed.ixia_ports) >= 3, (
-        "Testbed must have >= 3 IXIA ports (eBGP + iBGP + BGP-MON)"
+    assert len(testbed.ixia_ports) >= 2, (
+        "Testbed must have >= 2 IXIA ports (eBGP + iBGP)"
     )
 
     # ── Extract testbed fields ──
@@ -377,7 +362,6 @@ def create_bgp_ug_backpressure_test_config(
     ixia_chassis_ip = testbed.ixia_chassis_ip
     ixia_interface_mimic_ebgp, ixia_port_ebgp = testbed.ixia_ports[0]
     ixia_interface_mimic_ibgp, ixia_port_ibgp = testbed.ixia_ports[1]
-    ixia_interface_mimic_bgp_mon, ixia_port_bgp_mon = testbed.ixia_ports[2]
 
     # ── Common setup / teardown / port-configs / endpoints ──
     setup_tasks = get_common_setup_tasks(
@@ -385,37 +369,27 @@ def create_bgp_ug_backpressure_test_config(
         bgp_asn=testbed.dut_bgp_as,
         ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
         ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
-        ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
         bgpcpp_configerator_path=testbed.bgpcpp_configerator_path,
         profile=_BACKPRESSURE_PROFILE,
-        openr_configerator_path=testbed.openr_configerator_path,
-        openr_port_channel_member=testbed.extras["openr_port_channel_member"],
-        openr_port_channel_ipv4=testbed.extras["openr_port_channel_ipv4"],
-        openr_port_channel_link_local=testbed.extras["openr_port_channel_link_local"],
-        openr_local_link=testbed.extras["openr_local_link"],
-        openr_other_link=testbed.extras["openr_other_link"],
+        include_bgp_mon=False,
         enable_update_group=True,
     )
     teardown_tasks = get_teardown_tasks(
         ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
         ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
-        ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
     )
     basic_port_configs = _backpressure_split_ebgp_v6_for_slow_peers(
         create_ebb_scale_basic_port_configs(
             device_name=device_name,
             ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
             ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
-            ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
             ebgp_peer_count_v6=EBGP_PEER_COUNT_V6,
             ebgp_peer_count_v4=EBGP_PEER_COUNT_V4,
             ebgp_peer_to_drain=EBGP_PEER_TO_DRAIN,
             ibgp_peer_scale_per_plane=IBGP_PEER_SCALE_PER_PLANE,
             ibgp_peer_to_drain_per_plane=IBGP_PEER_TO_DRAIN_PER_PLANE,
-            bgp_mon_peer_count=BGP_MON_PEER_COUNT,
             ebgp_remote_as=EBGP_REMOTE_AS,
             ibgp_remote_as=IBGP_REMOTE_AS,
-            bgp_mon_remote_as=BGP_MON_REMOTE_AS,
             ixia_ebgp_ic_parent_network_v6=IXIA_EBGP_IC_PARENT_NETWORK_V6,
             ixia_ebgp_ic_parent_network_v4=IXIA_EBGP_IC_PARENT_NETWORK_V4,
             ixia_ibgp_ic_parent_network_v6_dc_plane1=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
@@ -434,7 +408,7 @@ def create_bgp_ug_backpressure_test_config(
             ixia_ibgp_ic_parent_network_v4_mp_plane2=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE2,
             ixia_ibgp_ic_parent_network_v4_mp_plane3=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE3,
             ixia_ibgp_ic_parent_network_v4_mp_plane4=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE4,
-            ixia_bgp_mon_ic_parent_network=IXIA_BGP_MON_IC_PARENT_NETWORK,
+            include_bgp_mon=False,
             profile=_BACKPRESSURE_PROFILE,
             plane_drain_dg_v6_attribute_overrides={
                 1: _backpressure_storm_dg_v6_attribute_overrides(),
@@ -450,7 +424,6 @@ def create_bgp_ug_backpressure_test_config(
             ixia_ports=[
                 ixia_interface_mimic_ebgp,
                 ixia_interface_mimic_ibgp,
-                ixia_interface_mimic_bgp_mon,
             ],
             direct_ixia_connections=[
                 DirectIxiaConnection(
@@ -463,11 +436,6 @@ def create_bgp_ug_backpressure_test_config(
                     ixia_chassis_ip=ixia_chassis_ip,
                     ixia_port=ixia_port_ibgp,
                 ),
-                DirectIxiaConnection(
-                    interface=ixia_interface_mimic_bgp_mon,
-                    ixia_chassis_ip=ixia_chassis_ip,
-                    ixia_port=ixia_port_bgp_mon,
-                ),
             ],
         ),
     ]
@@ -475,13 +443,15 @@ def create_bgp_ug_backpressure_test_config(
     # ── Smoke variant returns early ──
     if smoke_only:
         return TestConfig(
-            name="BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE",
+            name=f"{device_name.replace('.', '_').upper()}_BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE",
             skip_ixia_protocol_verification=True,
             log_collection_timeout=600,
             basset_pool="dne.test",
             ixia_config_cache=taac_types.IxiaConfigCache(enabled=False),
             endpoints=endpoints,
             host_os_type_map={device_name: taac_types.DeviceOsType.ARISTA_FBOSS},
+            host_driver_args=testbed.host_driver_args,
+            oss_mock_device_data=testbed.oss_mock_device_data,
             startup_checks=[],
             setup_tasks=setup_tasks,
             teardown_tasks=teardown_tasks,
@@ -549,6 +519,8 @@ def create_bgp_ug_backpressure_test_config(
         ixia_config_cache=taac_types.IxiaConfigCache(enabled=False),
         endpoints=endpoints,
         host_os_type_map={device_name: taac_types.DeviceOsType.ARISTA_FBOSS},
+        host_driver_args=testbed.host_driver_args,
+        oss_mock_device_data=testbed.oss_mock_device_data,
         startup_checks=[],
         setup_tasks=setup_tasks,
         teardown_tasks=teardown_tasks,

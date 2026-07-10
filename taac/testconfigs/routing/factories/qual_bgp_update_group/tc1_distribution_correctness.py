@@ -20,22 +20,10 @@ import json
 import os
 import typing as t
 
-from taac.constants import (
-    BgpPlusPlusProfile,
-    DEFAULT_LOCAL_LINK,
-    DEFAULT_OPENR_START_IPV4S,
-    DEFAULT_OPENR_START_IPV6S,
-    DEFAULT_OTHER_LINK,
-    Gigabyte,
-    OpenRRouteAction,
-)
+from taac.constants import BgpPlusPlusProfile
 from taac.health_checks.healthcheck_definitions import (
     create_bgp_graceful_restart_check,
-    create_bgp_session_establish_check,
     create_bgp_update_group_check,
-    create_cpu_utilization_check,
-    create_drain_state_check,
-    create_memory_utilization_check,
 )
 from taac.playbooks.playbook_definitions import (
     build_arista_ebb_scale_playbook,
@@ -49,11 +37,8 @@ from taac.steps.step_definitions import (
     create_longevity_step,
     create_validation_step,
 )
-from taac.task_definitions import create_openr_route_action_task
 from taac.testconfigs.routing.testbed import Testbed
 from taac.testconfigs.routing.util.bgp_ebb_constants import (
-    BGP_MON_PEER_COUNT,
-    BGP_MON_REMOTE_AS,
     DEFAULT_PROFILE,
     EBGP_PEER_COUNT_V4,
     EBGP_PEER_COUNT_V6,
@@ -62,7 +47,6 @@ from taac.testconfigs.routing.util.bgp_ebb_constants import (
     IBGP_PEER_SCALE_PER_PLANE,
     IBGP_PEER_TO_DRAIN_PER_PLANE,
     IBGP_REMOTE_AS,
-    IXIA_BGP_MON_IC_PARENT_NETWORK,
     IXIA_EBGP_IC_PARENT_NETWORK_V4,
     IXIA_EBGP_IC_PARENT_NETWORK_V6,
     IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE1,
@@ -119,7 +103,7 @@ def build_bag013_conveyor_test_config(
     *,
     name: str,
     playbooks: t.List[taac_types.Playbook],
-    profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
+    profile: BgpPlusPlusProfile = BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
     enable_update_group: bool = True,
 ) -> taac_types.TestConfig:
     """Shared bag013 conveyor topology TestConfig builder.
@@ -127,8 +111,9 @@ def build_bag013_conveyor_test_config(
     Wave 6 factoring of the legacy
     ``bag013_ash6_test_config.create_bag013_ash6_conveyor_test_config()``
     body. Callers pass the exact TestConfig ``name`` + playbook list they
-    need; underlying setup / teardown / port config are byte-wise-identical
-    to the legacy default.
+    need. UG qualification never exercises BGP-MON or OpenR, so this
+    builder wires only the eBGP + iBGP topology (``include_bgp_mon=False``)
+    and defaults ``profile`` to ``WITHOUT_OPEN_R``.
     """
     assert testbed.device_name == "bag013.ash6", (
         f"bag013 conveyor topology builder is hardcoded to bag013.ash6; "
@@ -138,52 +123,29 @@ def build_bag013_conveyor_test_config(
     assert testbed.bgpcpp_configerator_path is not None, (
         "Testbed must have bgpcpp_configerator_path set for BGP++ deployment"
     )
-    assert testbed.openr_configerator_path is not None, (
-        "Testbed must have openr_configerator_path set for OpenR deployment"
-    )
-    assert len(testbed.ixia_ports) >= 3, (
-        "Testbed must have >= 3 IXIA ports (eBGP + iBGP + BGP-MON)"
+    assert len(testbed.ixia_ports) >= 2, (
+        "Testbed must have >= 2 IXIA ports (eBGP + iBGP)"
     )
 
     device_name = testbed.device_name
     ixia_chassis_ip = testbed.ixia_chassis_ip
     ixia_interface_mimic_ebgp, ixia_port_ebgp = testbed.ixia_ports[0]
     ixia_interface_mimic_ibgp, ixia_port_ibgp = testbed.ixia_ports[1]
-    ixia_interface_mimic_bgp_mon, ixia_port_bgp_mon = testbed.ixia_ports[2]
 
     setup_tasks = get_common_setup_tasks(
         device_name=device_name,
         bgp_asn=testbed.dut_bgp_as,
         ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
         ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
-        ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
         bgpcpp_configerator_path=testbed.bgpcpp_configerator_path,
         profile=profile,
-        openr_configerator_path=testbed.openr_configerator_path,
-        openr_port_channel_member="Ethernet3/9/1",
-        openr_port_channel_ipv4="10.131.97.232/31",
-        openr_port_channel_link_local="fe80::eba:a7f:fcfc/64",
-        openr_local_link={
-            "ipv4": "10.131.97.232",
-            "ipv6": "fe80::eba:a7f:fcfc",
-            "ifName": "po100211",
-            "weight": 0,
-            "metric": 10,
-        },
-        openr_other_link={
-            "ipv4": "10.131.97.233",
-            "ipv6": "fe80::eba:a7f:fcfd",
-            "ifName": "po100211",
-            "weight": 0,
-            "metric": 10,
-        },
+        include_bgp_mon=False,
         enable_update_group=enable_update_group,
     )
 
     teardown_tasks = get_teardown_tasks(
         ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
         ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
-        ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
     )
 
     return taac_types.TestConfig(
@@ -198,7 +160,6 @@ def build_bag013_conveyor_test_config(
                 ixia_ports=[
                     ixia_interface_mimic_ebgp,
                     ixia_interface_mimic_ibgp,
-                    ixia_interface_mimic_bgp_mon,
                 ],
                 direct_ixia_connections=[
                     taac_types.DirectIxiaConnection(
@@ -211,11 +172,6 @@ def build_bag013_conveyor_test_config(
                         ixia_chassis_ip=ixia_chassis_ip,
                         ixia_port=ixia_port_ibgp,
                     ),
-                    taac_types.DirectIxiaConnection(
-                        interface=ixia_interface_mimic_bgp_mon,
-                        ixia_chassis_ip=ixia_chassis_ip,
-                        ixia_port=ixia_port_bgp_mon,
-                    ),
                 ],
             ),
         ],
@@ -227,16 +183,13 @@ def build_bag013_conveyor_test_config(
             device_name=device_name,
             ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
             ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
-            ixia_interface_mimic_bgp_mon=ixia_interface_mimic_bgp_mon,
             ebgp_peer_count_v6=EBGP_PEER_COUNT_V6,
             ebgp_peer_count_v4=EBGP_PEER_COUNT_V4,
             ebgp_peer_to_drain=EBGP_PEER_TO_DRAIN,
             ibgp_peer_scale_per_plane=IBGP_PEER_SCALE_PER_PLANE,
             ibgp_peer_to_drain_per_plane=IBGP_PEER_TO_DRAIN_PER_PLANE,
-            bgp_mon_peer_count=BGP_MON_PEER_COUNT,
             ebgp_remote_as=EBGP_REMOTE_AS,
             ibgp_remote_as=IBGP_REMOTE_AS,
-            bgp_mon_remote_as=BGP_MON_REMOTE_AS,
             ixia_ebgp_ic_parent_network_v6=IXIA_EBGP_IC_PARENT_NETWORK_V6,
             ixia_ebgp_ic_parent_network_v4=IXIA_EBGP_IC_PARENT_NETWORK_V4,
             ixia_ibgp_ic_parent_network_v6_dc_plane1=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
@@ -255,7 +208,7 @@ def build_bag013_conveyor_test_config(
             ixia_ibgp_ic_parent_network_v4_mp_plane2=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE2,
             ixia_ibgp_ic_parent_network_v4_mp_plane3=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE3,
             ixia_ibgp_ic_parent_network_v4_mp_plane4=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE4,
-            ixia_bgp_mon_ic_parent_network=IXIA_BGP_MON_IC_PARENT_NETWORK,
+            include_bgp_mon=False,
             profile=profile,
         ),
         playbooks=playbooks,
@@ -275,6 +228,11 @@ def _create_eb03_2_1_1_initial_dump_identical_routes_playbook(testbed: Testbed):
     Pinned expected_member_counts (EB-EB-V6=496, EB-FA-V6=140, BGP-MON=2) and
     policy_names are eb03-specific golden values from the live device.
     """
+    assert len(testbed.ixia_ports) >= 3, (
+        "eb03 2.1.1 playbook requires >= 3 IXIA ports; ixia_ports[2] is the "
+        "BGP-MON DUT interface used by the pcap-capture step even though "
+        "the containing test config skips BGP-MON in setup/teardown."
+    )
     ibgp_dut_iface, _ = testbed.ixia_ports[1]
     bgp_mon_dut_iface, _ = testbed.ixia_ports[2]
 
@@ -377,19 +335,21 @@ def _create_eb03_distribution_correctness_test_config(
     testbed: Testbed,
     profile: BgpPlusPlusProfile,
 ) -> taac_types.TestConfig:
-    """eb03.lab.ash6 branch of tc1. Byte-wise identical to the legacy
-    ``eb03_update_group_test_config.create_eb03_update_group_test_config()``.
+    """eb03.lab.ash6 branch of tc1.
+
+    UG qualification never exercises BGP-MON or OpenR, so this branch wires
+    only eBGP + iBGP (``include_bgp_mon=False``) and hard-codes
+    ``WITHOUT_OPEN_R``. ``profile`` is accepted for signature parity with the
+    outer factory but no longer affects setup / port-config wiring.
 
     Differs from the bag013 branch:
       - ``host_driver_args`` for admin/password auth (svc-netcastle_bot not
         authorized on the lab device)
       - ``oss_mock_device_data`` MockDeviceInfo (netwhoami returns #INVALID#)
-      - Setup path uses WITHOUT_OPEN_R + conditional openr_route_action_task
-        (eb03 is route-injection only, no bag-style Port-Channel)
       - Playbooks pin eb03-specific expected_member_counts / policy_names
     """
-    assert len(testbed.ixia_ports) >= 3, (
-        "eb03 UG initial-dump requires >= 3 IXIA ports (eBGP + iBGP + BGP-MON)."
+    assert len(testbed.ixia_ports) >= 2, (
+        "eb03 UG initial-dump requires >= 2 IXIA ports (eBGP + iBGP)."
     )
     assert testbed.dut_bgp_as is not None, "Testbed must have dut_bgp_as set"
     assert testbed.bgpcpp_configerator_path is not None, (
@@ -398,7 +358,6 @@ def _create_eb03_distribution_correctness_test_config(
 
     ebgp_dut_iface, ebgp_chassis_port = testbed.ixia_ports[0]
     ibgp_dut_iface, ibgp_chassis_port = testbed.ixia_ports[1]
-    bgp_mon_dut_iface, bgp_mon_chassis_port = testbed.ixia_ports[2]
 
     lab_password_env = (
         testbed.lab_device_password_env_var or "TAAC_EBB_LAB_DEVICE_PASSWORD"
@@ -415,33 +374,15 @@ def _create_eb03_distribution_correctness_test_config(
         bgp_asn=testbed.dut_bgp_as,
         ixia_interface_mimic_ebgp=ebgp_dut_iface,
         ixia_interface_mimic_ibgp=ibgp_dut_iface,
-        ixia_interface_mimic_bgp_mon=bgp_mon_dut_iface,
         bgpcpp_configerator_path=testbed.bgpcpp_configerator_path,
         profile=BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
+        include_bgp_mon=False,
         enable_update_group=True,
     )
-
-    if profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R:
-        setup_tasks.append(
-            create_openr_route_action_task(
-                device_name=testbed.device_name,
-                action=OpenRRouteAction.INJECT.value,
-                start_ipv4s=DEFAULT_OPENR_START_IPV4S,
-                start_ipv6s=DEFAULT_OPENR_START_IPV6S,
-                local_link=DEFAULT_LOCAL_LINK,
-                other_link=DEFAULT_OTHER_LINK,
-                count=63,
-                step=2,
-                ixia_needed=True,
-                set_outer_hostname=True,
-                description="Inject Open/R routes during test setup",
-            )
-        )
 
     teardown_tasks = get_teardown_tasks(
         ixia_interface_mimic_ebgp=ebgp_dut_iface,
         ixia_interface_mimic_ibgp=ibgp_dut_iface,
-        ixia_interface_mimic_bgp_mon=bgp_mon_dut_iface,
     )
 
     return TestConfig(
@@ -461,7 +402,6 @@ def _create_eb03_distribution_correctness_test_config(
                 ixia_ports=[
                     ebgp_dut_iface,
                     ibgp_dut_iface,
-                    bgp_mon_dut_iface,
                 ],
                 direct_ixia_connections=[
                     DirectIxiaConnection(
@@ -473,11 +413,6 @@ def _create_eb03_distribution_correctness_test_config(
                         interface=ibgp_dut_iface,
                         ixia_chassis_ip=testbed.ixia_chassis_ip,
                         ixia_port=ibgp_chassis_port,
-                    ),
-                    DirectIxiaConnection(
-                        interface=bgp_mon_dut_iface,
-                        ixia_chassis_ip=testbed.ixia_chassis_ip,
-                        ixia_port=bgp_mon_chassis_port,
                     ),
                 ],
             ),
@@ -507,16 +442,13 @@ def _create_eb03_distribution_correctness_test_config(
             device_name=testbed.device_name,
             ixia_interface_mimic_ebgp=ebgp_dut_iface,
             ixia_interface_mimic_ibgp=ibgp_dut_iface,
-            ixia_interface_mimic_bgp_mon=bgp_mon_dut_iface,
             ebgp_peer_count_v6=EBGP_PEER_COUNT_V6,
             ebgp_peer_count_v4=EBGP_PEER_COUNT_V4,
             ebgp_peer_to_drain=EBGP_PEER_TO_DRAIN,
             ibgp_peer_scale_per_plane=IBGP_PEER_SCALE_PER_PLANE,
             ibgp_peer_to_drain_per_plane=IBGP_PEER_TO_DRAIN_PER_PLANE,
-            bgp_mon_peer_count=BGP_MON_PEER_COUNT,
             ebgp_remote_as=EBGP_REMOTE_AS,
             ibgp_remote_as=IBGP_REMOTE_AS,
-            bgp_mon_remote_as=BGP_MON_REMOTE_AS,
             ixia_ebgp_ic_parent_network_v6=IXIA_EBGP_IC_PARENT_NETWORK_V6,
             ixia_ebgp_ic_parent_network_v4=IXIA_EBGP_IC_PARENT_NETWORK_V4,
             ixia_ibgp_ic_parent_network_v6_dc_plane1=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
@@ -535,8 +467,8 @@ def _create_eb03_distribution_correctness_test_config(
             ixia_ibgp_ic_parent_network_v4_mp_plane2=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE2,
             ixia_ibgp_ic_parent_network_v4_mp_plane3=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE3,
             ixia_ibgp_ic_parent_network_v4_mp_plane4=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE4,
-            ixia_bgp_mon_ic_parent_network=IXIA_BGP_MON_IC_PARENT_NETWORK,
-            profile=profile,
+            include_bgp_mon=False,
+            profile=BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
         ),
         playbooks=[
             _create_eb03_2_1_1_initial_dump_identical_routes_playbook(testbed),
@@ -549,10 +481,23 @@ def _create_bag013_distribution_correctness_test_config(
     testbed: Testbed,
     profile: BgpPlusPlusProfile,
 ) -> taac_types.TestConfig:
-    """bag013 branch of tc1 — wires ONLY the 2.1.1 playbook (golden regen
-    expected relative to the pre-Wave-6 empty-playbook TestConfig)."""
+    """bag013 branch of tc1 — wires ONLY the 2.1.1 playbook.
+
+    UG qualification does not exercise BGP-MON, but the underlying
+    ``create_bgp_ug_initial_dump_identical_routes_playbook`` still uses the
+    BGP-MON DUT interface as a pcap-capture handle in its 2.1.1 pcap
+    compare step. The interface is left addressed on the DUT (see the
+    testbed's third ixia port); only the BGP-MON IXIA session + IP config
+    are removed via ``include_bgp_mon=False`` inside
+    ``build_bag013_conveyor_test_config``. ``profile`` is accepted for
+    signature parity with the outer factory but forced to ``WITHOUT_OPEN_R``.
+    """
+    assert len(testbed.ixia_ports) >= 3, (
+        "bag013 tc1 branch requires >= 3 IXIA ports; ixia_ports[2] is the "
+        "BGP-MON DUT interface used by the playbook's pcap-capture step "
+        "even though the shared builder skips BGP-MON in setup/teardown."
+    )
     device_name = testbed.device_name
-    _, _ = testbed.ixia_ports[0]
     ixia_interface_mimic_ibgp, _ = testbed.ixia_ports[1]
     ixia_interface_mimic_bgp_mon, _ = testbed.ixia_ports[2]
 
@@ -569,7 +514,7 @@ def _create_bag013_distribution_correctness_test_config(
         testbed,
         name="BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST",
         playbooks=[playbook],
-        profile=profile,
+        profile=BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
         enable_update_group=True,
     )
 

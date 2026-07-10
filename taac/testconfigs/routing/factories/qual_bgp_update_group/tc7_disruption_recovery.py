@@ -207,6 +207,6 @@ def create_bgp_ug_disruption_recovery_test_config(
         testbed,
         name="BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST",
         playbooks=[playbook],
-        profile=profile,
+        profile=BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
         enable_update_group=True,
     )
