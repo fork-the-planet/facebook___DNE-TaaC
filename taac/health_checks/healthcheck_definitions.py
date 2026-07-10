@@ -1158,6 +1158,7 @@ def create_dsf_pfc_check(
     json_params: t.Optional[t.Dict[str, t.Any]] = None,
     thresholds: t.Optional[t.List["hc_types.DsfPfcThreshold"]] = None,
     check_scope: t.Optional["hc_types.Scope"] = None,
+    mode: t.Optional[str] = None,
 ) -> PointInTimeHealthCheck:
     """DSF_PFC_CHECK — verifies DSF PFC counters.
 
@@ -1165,9 +1166,19 @@ def create_dsf_pfc_check(
     - `json_params`: pass-through Params.json_params dict.
     - `thresholds`: typed thrift `DsfPfcHealthCheckIn(thresholds=...)` via input_json.
     Mutually exclusive.
+
+    `mode` selects the counter-sampling strategy on FBOSS devices:
+    - unset / "windowed_60" (default): read `.sum.60` (legacy). Races with
+      hw_agent aggregation → can return 0 mid-cycle.
+    - "snapshot": read monotonic `.sum`, store as pretest baseline, always PASS.
+    - "check": read monotonic `.sum`, compare (current - snapshot) against
+      thresholds. Requires a matching mode="snapshot" precheck to have run first.
     """
     if json_params is not None and thresholds is not None:
         raise ValueError("json_params and thresholds are mutually exclusive")
+    check_params = (
+        Params(static_params={"mode": ParamValue(string_value=mode)}) if mode else None
+    )
     if thresholds is not None:
         return PointInTimeHealthCheck(
             name=hc_types.CheckName.DSF_PFC_CHECK,
@@ -1175,10 +1186,22 @@ def create_dsf_pfc_check(
                 hc_types.DsfPfcHealthCheckIn(thresholds=thresholds)
             ),
             check_scope=check_scope,
+            check_params=check_params,
         )
     if json_params is None:
         return PointInTimeHealthCheck(
-            name=hc_types.CheckName.DSF_PFC_CHECK, check_scope=check_scope
+            name=hc_types.CheckName.DSF_PFC_CHECK,
+            check_scope=check_scope,
+            check_params=check_params,
+        )
+    if mode:
+        return PointInTimeHealthCheck(
+            name=hc_types.CheckName.DSF_PFC_CHECK,
+            check_params=Params(
+                json_params=json.dumps(json_params),
+                static_params={"mode": ParamValue(string_value=mode)},
+            ),
+            check_scope=check_scope,
         )
     return PointInTimeHealthCheck(
         name=hc_types.CheckName.DSF_PFC_CHECK,
@@ -1250,6 +1273,7 @@ def create_ixia_port_stats_check(
 def create_ixia_traffic_rate_check(
     json_params: t.Optional[t.Dict[str, t.Any]] = None,
     thresholds: t.Optional[t.List["hc_types.TrafficRateThreshold"]] = None,
+    base_bandwidth_gbps: t.Optional[int] = None,
 ) -> PointInTimeHealthCheck:
     """IXIA_TRAFFIC_RATE_CHECK — verifies IXIA traffic-rate thresholds.
 
@@ -1257,18 +1281,44 @@ def create_ixia_traffic_rate_check(
     - `json_params`: pass-through Params.json_params dict.
     - `thresholds`: typed thrift `IxiaTrafficRateHealthCheckIn(thresholds=...)`
       via input_json. Mutually exclusive with json_params.
+
+    ``base_bandwidth_gbps`` overrides the reference bandwidth used by
+    ``IxiaTrafficRateHealthCheck`` when a threshold specifies
+    ``ThresholdType.PERCENT``. Defaults to the check's built-in 400 Gbps
+    when omitted. Set this to the physical port speed (200, 400, 800)
+    when the traffic items are running against non-400G ports.
     """
     if json_params is not None and thresholds is not None:
         raise ValueError("json_params and thresholds are mutually exclusive")
+    check_params: t.Optional[Params] = None
+    if base_bandwidth_gbps is not None:
+        check_params = Params(
+            static_params={
+                "base_bandwidth_gbps": _PV(int_value=int(base_bandwidth_gbps))
+            }
+        )
     if thresholds is not None:
         return PointInTimeHealthCheck(
             name=hc_types.CheckName.IXIA_TRAFFIC_RATE_CHECK,
             input_json=thrift_to_json(
                 hc_types.IxiaTrafficRateHealthCheckIn(thresholds=thresholds)
             ),
+            check_params=check_params,
         )
     if json_params is None:
-        return PointInTimeHealthCheck(name=hc_types.CheckName.IXIA_TRAFFIC_RATE_CHECK)
+        return PointInTimeHealthCheck(
+            name=hc_types.CheckName.IXIA_TRAFFIC_RATE_CHECK,
+            check_params=check_params,
+        )
+    # json_params variant: merge base_bandwidth_gbps into check_params if provided
+    if check_params is not None:
+        return PointInTimeHealthCheck(
+            name=hc_types.CheckName.IXIA_TRAFFIC_RATE_CHECK,
+            check_params=Params(
+                static_params=check_params.static_params,
+                json_params=json.dumps(json_params),
+            ),
+        )
     return PointInTimeHealthCheck(
         name=hc_types.CheckName.IXIA_TRAFFIC_RATE_CHECK,
         check_params=Params(json_params=json.dumps(json_params)),

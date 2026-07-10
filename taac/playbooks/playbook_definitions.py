@@ -18476,6 +18476,7 @@ def create_pfc_functionality_congestion_non_pfc_traffic(
     dst_endpoints: t.List[TrafficEndpoint],
     traffic_duration: int,
     priority: hc_types.Priority = hc_types.Priority.PRIORITY_2,
+    base_bandwidth_gbps: t.Optional[int] = None,
 ) -> Playbook:
     """Build a PFC-functionality Playbook for congestion in a non-PFC queue.
 
@@ -18499,6 +18500,10 @@ def create_pfc_functionality_congestion_non_pfc_traffic(
         traffic_duration: Test duration in seconds.
         priority: PFC priority enum; the DSF PFC check asserts no
             outbound pause for this priority. Default `PRIORITY_2`.
+        base_bandwidth_gbps: Reference bandwidth for the PERCENT-mode
+            rate check. Defaults to the check's built-in 400 Gbps when
+            unset; pass the actual port speed (200, 400, 800) so the
+            29%-threshold resolves against the real line rate.
 
     Returns:
         A `Playbook` with one longevity stage, the above postchecks, and
@@ -18542,7 +18547,8 @@ def create_pfc_functionality_congestion_non_pfc_traffic(
                         threshold_type=hc_types.ThresholdType.PERCENT,
                         metric=hc_types.TrafficRateMetric.TX_RATE,
                     ),
-                ]
+                ],
+                base_bandwidth_gbps=base_bandwidth_gbps,
             ),
             _create_dsf_pfc_check_central(
                 thresholds=[
@@ -18799,6 +18805,76 @@ def create_pfc_functionality_incast_playbook(
     )
 
 
+def create_pfc_functionality_incast_4port_playbook(
+    rdma_90pct_traffic_items_names: list[str],
+    src_endpoints: t.List[TrafficEndpoint],
+    dst_endpoints: t.List[TrafficEndpoint],
+    traffic_duration: int,
+    base_bandwidth_gbps: t.Optional[int] = None,
+) -> Playbook:
+    """Playbook factory for `test_pfc_functionality_incast_voq_credit_fairness`
+    (4-port variant).
+
+    Sibling of `create_pfc_functionality_incast_playbook` for the 4-port
+    generic factory. Drives 3 RDMA sources at 90% line rate into 1 dst as
+    explicit many-to-one in-cast; verifies TC2 stays lossless with ~33%
+    fair convergence per source.
+
+    Differs from the legacy `create_pfc_functionality_incast_playbook`:
+    - Traffic-item names are threaded in from the factory (no hardcoded
+      `TEST_RDMA_90_TRAFFIC_*`), so it composes cleanly with
+      `gen_pfc_functionality_test_generic_4port_configs`.
+    - Accepts `base_bandwidth_gbps` so the PERCENT-mode rate check resolves
+      against the actual port speed (matches sibling voq/non_congestion
+      factories).
+    """
+    return Playbook(
+        name="test_pfc_functionality_incast_voq_credit_fairness",
+        description="Many-to-one in-cast at 90% per source; TC2 lossless with ~33% fair convergence.",
+        prechecks=[
+            create_clear_counters_check(),
+        ],
+        stages=[
+            create_steps_stage(
+                steps=[
+                    create_longevity_step(duration=traffic_duration),
+                ]
+            )
+        ],
+        postchecks=[
+            create_ixia_traffic_rate_check(
+                thresholds=[
+                    hc_types.TrafficRateThreshold(
+                        names=rdma_90pct_traffic_items_names,
+                        value=33,
+                        threshold_type=hc_types.ThresholdType.PERCENT,
+                        metric=hc_types.TrafficRateMetric.TX_RATE,
+                    ),
+                ],
+                base_bandwidth_gbps=base_bandwidth_gbps,
+            ),
+            create_ixia_packet_loss_check(
+                thresholds=[
+                    # Pavan-canonical: loss duration in ms (0 = steady-state lossless).
+                    hc_types.PacketLossThreshold(
+                        names=rdma_90pct_traffic_items_names,
+                        str_value="0",
+                        metric=hc_types.PacketLossMetric.DURATION,
+                    ),
+                    # Loose PERCENTAGE floor kept as a backstop.
+                    hc_types.PacketLossThreshold(
+                        names=rdma_90pct_traffic_items_names,
+                        str_value="5",
+                        metric=hc_types.PacketLossMetric.PERCENTAGE,
+                    ),
+                ],
+            ),
+        ],
+        traffic_items_to_start=rdma_90pct_traffic_items_names,
+        enabled=True,
+    )
+
+
 def create_pfc_functionality_port_flap_playbook(
     traffic_items_names: list[str],
     interface_to_flap: str,
@@ -18857,6 +18933,7 @@ def create_pfc_functionality_congestion_voq_credit_fairness_playbook(
     src_endpoints: t.List[TrafficEndpoint],
     dst_endpoints: t.List[TrafficEndpoint],
     traffic_duration: int,
+    base_bandwidth_gbps: t.Optional[int] = None,
 ) -> Playbook:
     """Playbook factory for
     `test_pfc_functionality_congestion_and_voq_credit_fairness`.
@@ -18864,7 +18941,26 @@ def create_pfc_functionality_congestion_voq_credit_fairness_playbook(
     Originally inline inside
     `gen_pfc_functionality_test_generic_4port_configs`. The factory itself
     slices `src_endpoints[:3]` for the DSF PFC check.
+
+    ``base_bandwidth_gbps`` is forwarded to `create_ixia_traffic_rate_check`
+    so the PERCENT-mode threshold resolves against the real port speed.
     """
+    # Snapshot thresholds mirror the postcheck thresholds' interfaces + priorities
+    # (values are ignored in mode="snapshot"). Uses monotonic `.sum` counters
+    # to avoid the hw_agent `.sum.60` aggregation race — see [[feedback_dsf_pfc_hc_windowed_counter_race]].
+    _pfc_snapshot_thresholds = [
+        hc_types.DsfPfcThreshold(
+            interfaces=[endpoint.name for endpoint in src_endpoints[:3]],
+            out_pfc=0,
+            comparison=hc_types.ComparisonType.EQUAL_TO,
+        ),
+        hc_types.DsfPfcThreshold(
+            interfaces=[endpoint.name for endpoint in src_endpoints[:3]],
+            out_pfc=0,
+            comparison=hc_types.ComparisonType.EQUAL_TO,
+            priority=hc_types.Priority.PRIORITY_6,
+        ),
+    ]
     return Playbook(
         name="test_pfc_functionality_congestion_and_voq_credit_fairness",
         description="""Equal slowdown and no packet loss in congestion
@@ -18872,6 +18968,10 @@ def create_pfc_functionality_congestion_voq_credit_fairness_playbook(
         prechecks=[
             # clear counters before starting the test on Arista EOS devices
             create_clear_counters_check(),
+            _create_dsf_pfc_check_central(
+                thresholds=_pfc_snapshot_thresholds,
+                mode="snapshot",
+            ),
         ],
         stages=[
             create_steps_stage(
@@ -18883,7 +18983,18 @@ def create_pfc_functionality_congestion_voq_credit_fairness_playbook(
         postchecks=[
             create_ixia_packet_loss_check(
                 thresholds=[
-                    hc_types.PacketLossThreshold(str_value="0.1"),
+                    # Pavan-canonical: loss duration in ms (0 = steady-state lossless).
+                    # Frames/% are misleading for lossless class assertion — DURATION
+                    # is the standard TAAC metric for PFC-protected traffic.
+                    hc_types.PacketLossThreshold(
+                        str_value="0",
+                        metric=hc_types.PacketLossMetric.DURATION,
+                    ),
+                    # Loose PERCENTAGE floor kept as a "your test blew up" backstop.
+                    hc_types.PacketLossThreshold(
+                        str_value="5",
+                        metric=hc_types.PacketLossMetric.PERCENTAGE,
+                    ),
                 ],
                 clear_traffic_stats=True,
             ),
@@ -18895,7 +19006,8 @@ def create_pfc_functionality_congestion_voq_credit_fairness_playbook(
                         threshold_type=hc_types.ThresholdType.PERCENT,
                         metric=hc_types.TrafficRateMetric.TX_RATE,
                     ),
-                ]
+                ],
+                base_bandwidth_gbps=base_bandwidth_gbps,
             ),
             _create_dsf_pfc_check_central(
                 thresholds=[
@@ -18913,7 +19025,8 @@ def create_pfc_functionality_congestion_voq_credit_fairness_playbook(
                         comparison=hc_types.ComparisonType.EQUAL_TO,
                         priority=hc_types.Priority.PRIORITY_6,
                     ),
-                ]
+                ],
+                mode="check",
             ),
             create_port_counters_check(
                 thresholds=[
@@ -18995,6 +19108,7 @@ def create_pfc_functionality_non_congestion_4port_playbook(
     src_endpoints: t.List[TrafficEndpoint],
     dst_endpoints: t.List[TrafficEndpoint],
     traffic_duration: int,
+    base_bandwidth_gbps: t.Optional[int] = None,
 ) -> Playbook:
     """Playbook factory for `test_pfc_functionality_non_congestion` (4port
     variant).
@@ -19002,6 +19116,10 @@ def create_pfc_functionality_non_congestion_4port_playbook(
     Originally inline inside
     `gen_pfc_functionality_test_generic_4port_configs`. The factory slices the
     inputs (`rdma_90pct_traffic_items_names[:1]`, `src_endpoints[:1]`).
+
+    ``base_bandwidth_gbps`` is forwarded to `create_ixia_traffic_rate_check`
+    so the PERCENT-mode threshold resolves against the real port speed
+    (defaults to the check's built-in 400 Gbps when unset).
     """
     return Playbook(
         name="test_pfc_functionality_non_congestion",
@@ -19034,7 +19152,8 @@ def create_pfc_functionality_non_congestion_4port_playbook(
                         threshold_type=hc_types.ThresholdType.PERCENT,
                         metric=hc_types.TrafficRateMetric.TX_RATE,
                     ),
-                ]
+                ],
+                base_bandwidth_gbps=base_bandwidth_gbps,
             ),
             _create_dsf_pfc_check_central(
                 thresholds=[
@@ -19064,12 +19183,17 @@ def create_pfc_functionality_port_flap_4port_playbook(
     src_endpoints: t.List[TrafficEndpoint],
     interface_to_flap: str,
     device_name_of_interface_flap: str,
+    base_bandwidth_gbps: t.Optional[int] = None,
 ) -> Playbook:
     """Playbook factory for `test_pfc_functionality_port_flap` (4port variant).
 
     Originally inline inside
     `gen_pfc_functionality_test_generic_4port_configs`. The factory slices the
     inputs (`rdma_90pct_traffic_items_names[:1|:2]`, `src_endpoints[:2]`).
+
+    ``base_bandwidth_gbps`` is forwarded to `create_ixia_traffic_rate_check`
+    so the PERCENT-mode 49%-threshold resolves against the real port speed
+    (defaults to the check's built-in 400 Gbps when unset).
     """
     return Playbook(
         name="test_pfc_functionality_port_flap",
@@ -19128,7 +19252,8 @@ def create_pfc_functionality_port_flap_4port_playbook(
                         threshold_type=hc_types.ThresholdType.PERCENT,
                         metric=hc_types.TrafficRateMetric.TX_RATE,
                     ),
-                ]
+                ],
+                base_bandwidth_gbps=base_bandwidth_gbps,
             ),
             _create_dsf_pfc_check_central(
                 thresholds=[

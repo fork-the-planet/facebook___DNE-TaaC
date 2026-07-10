@@ -34,6 +34,7 @@ from taac.playbooks.playbook_definitions import (  # noqa: F401
     create_pfc_functionality_congestion_non_tc2_traffic_playbook,
     create_pfc_functionality_congestion_playbook,
     create_pfc_functionality_congestion_voq_credit_fairness_playbook,
+    create_pfc_functionality_incast_4port_playbook,
     create_pfc_functionality_incast_playbook,
     create_pfc_functionality_non_congestion_4port_playbook,
     create_pfc_functionality_non_congestion_playbook,
@@ -644,9 +645,17 @@ def gen_pfc_functionality_test_generic_4port_configs(
         default_basic_port_config = None
 
     # It takes PORT_SPEED_BPS / (512*65535) PFC frames per second to keep PFC
-    # continuously asserted. This comes down to ~12000 frames per sec for 400G
-    # and ~24000 frames per sec for 800G.
-    if port_speed == 400:
+    # continuously asserted. This comes down to ~6000 frames per sec for 200G,
+    # ~12000 frames per sec for 400G, and ~24000 frames per sec for 800G.
+    if port_speed == 200:
+        PFC_PAUSE_FRAME_RATES = [7500, 5000]
+        tc2_wd_traffic_item_high = "TRAFFIC_TC2_PFC_PAUSE_7500FPS"
+        tc2_wd_traffic_item_low = "TRAFFIC_TC2_PFC_PAUSE_5000FPS"
+        tc6_wd_traffic_item_high = "TRAFFIC_TC6_PFC_PAUSE_7500FPS"
+        tc6_wd_traffic_item_low = "TRAFFIC_TC6_PFC_PAUSE_5000FPS"
+        wd_pfc_threshold_high = 400000  # with 7500 frames per sec, 60s duration, ~450k pfc frames should be received; setting to 400k to avoid flakiness
+        wd_pfc_threshold_low = 250000  # with 5000 frames per sec, 60s duration, ~300k pfc frames should be received; setting to 250k to avoid flakiness
+    elif port_speed == 400:
         PFC_PAUSE_FRAME_RATES = [15000, 10000]
         tc2_wd_traffic_item_high = "TRAFFIC_TC2_PFC_PAUSE_15000FPS"
         tc2_wd_traffic_item_low = "TRAFFIC_TC2_PFC_PAUSE_10000FPS"
@@ -792,6 +801,7 @@ def gen_pfc_functionality_test_generic_4port_configs(
             dst_endpoints=dst_endpoints,
             traffic_duration=traffic_duration,
             priority=hc_types.Priority.PRIORITY_2,
+            base_bandwidth_gbps=port_speed,
         ),
     ]
 
@@ -805,6 +815,7 @@ def gen_pfc_functionality_test_generic_4port_configs(
             dst_endpoints=dst_endpoints,
             traffic_duration=traffic_duration,
             priority=hc_types.Priority.PRIORITY_6,
+            base_bandwidth_gbps=port_speed,
         ),
     ]
 
@@ -814,12 +825,24 @@ def gen_pfc_functionality_test_generic_4port_configs(
             src_endpoints=src_endpoints,
             dst_endpoints=dst_endpoints,
             traffic_duration=traffic_duration,
+            base_bandwidth_gbps=port_speed,
         ),
         create_pfc_functionality_non_congestion_4port_playbook(
             rdma_90pct_traffic_items_names=rdma_90pct_traffic_items_names,
             src_endpoints=src_endpoints,
             dst_endpoints=dst_endpoints,
             traffic_duration=traffic_duration,
+            base_bandwidth_gbps=port_speed,
+        ),
+    ]
+
+    PLAYBOOK_PFC_INCAST_4PORT = [
+        create_pfc_functionality_incast_4port_playbook(
+            rdma_90pct_traffic_items_names=rdma_90pct_traffic_items_names,
+            src_endpoints=src_endpoints,
+            dst_endpoints=dst_endpoints,
+            traffic_duration=traffic_duration,
+            base_bandwidth_gbps=port_speed,
         ),
     ]
 
@@ -832,6 +855,7 @@ def gen_pfc_functionality_test_generic_4port_configs(
             src_endpoints=src_endpoints,
             interface_to_flap=interface_to_flap,
             device_name_of_interface_flap=device_name_of_interface_flap,
+            base_bandwidth_gbps=port_speed,
         ),
     ]
 
@@ -918,6 +942,7 @@ def gen_pfc_functionality_test_generic_4port_configs(
         + PLAYBOOKS_TC2_PFC_WD_NON_IMPACT_TC1
         + PLAYBOOK_PFC_CONGESTION_NON_TC2_TRAFFIC
         + PLAYBOOK_PFC_CONGESTION
+        + PLAYBOOK_PFC_INCAST_4PORT
         + PLAYBOOK_PFC_PORT_FLAP
         + create_qos_playbooks(
             traffic_items=qos_traffic_items,

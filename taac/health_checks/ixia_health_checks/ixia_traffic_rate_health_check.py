@@ -33,9 +33,16 @@ class IxiaTrafficRateHealthCheck(
         less_than_thresholds = []
         all_thresholds = list(input.thresholds)
 
+        # Callers may override the PERCENT-mode reference bandwidth via
+        # ``check_params["base_bandwidth_gbps"]`` (e.g. pass 200 for a 200G
+        # port). Omitting the param preserves the historical 400G default.
+        base_bandwidth_gbps = float(check_params.get("base_bandwidth_gbps", 400.0))
+
         for threshold in all_thresholds:
             less_than_thresholds.extend(
-                self.verify_traffic_rate_threshold(latest_stats, threshold)
+                self.verify_traffic_rate_threshold(
+                    latest_stats, threshold, base_bandwidth_gbps
+                )
             )
 
         if less_than_thresholds:
@@ -64,6 +71,7 @@ class IxiaTrafficRateHealthCheck(
         self,
         latest_stats: t.List[t.Dict[str, t.Any]],
         threshold: hc_types.TrafficRateThreshold,
+        base_bandwidth_gbps: float = 400.0,
     ) -> t.List[t.Dict[str, t.Any]]:
         """
         Verify if the port stats exceed the given threshold.
@@ -71,6 +79,11 @@ class IxiaTrafficRateHealthCheck(
         Args:
             latest_stats: A list of port statistics.
             threshold: The threshold value to compare against (default is 0.0).
+            base_bandwidth_gbps: Reference bandwidth (Gbps) used when
+                ``threshold.threshold_type == PERCENT``. Defaults to 400.0 for
+                back-compat with configs written against 400G ports; pass the
+                real port speed (e.g. 200 for 200G, 800 for 800G) via
+                ``check_params["base_bandwidth_gbps"]``.
 
         Returns:
             A list of dictionaries containing the ports that exceeded the threshold.
@@ -100,7 +113,6 @@ class IxiaTrafficRateHealthCheck(
             self.logger.info(
                 f"For {identifier} observed traffic rate - Tx Rate: {tx_rate_gbps} Gbps, Rx Rate: {rx_rate_gbps} Gbps"
             )
-            base_bandwidth_gbps = 400.0  # Assuming 400 Gbps base bandwidth
 
             if value_type == hc_types.ThresholdType.PERCENT:
                 tx_rate_threshold_gbps = base_bandwidth_gbps * (threshold_value / 100.0)
