@@ -1,7 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # pyre-unsafe
 import asyncio
-import sys
 import time
 import typing as t
 
@@ -46,7 +45,7 @@ class IxiaPacketLossHealthCheck(
             obj.clear_traffic_stats()
 
         # make sure the traffic is running for at least the specified sleep time
-        while time.time() - obj.traffic_items_start_time < input.sleep_time:
+        while time.time() - obj.get_traffic_start_time() < input.sleep_time:
             time.sleep(0.1)
         since_time = time.time()
         # this is necessary to allow in-flight traffic to arrive at the destination
@@ -165,11 +164,14 @@ class IxiaPacketLossHealthCheck(
         )
 
     def _is_traffic_tracking_enabled(self, ixia: Ixia) -> bool:
-        enabled_traffic_items = [
-            traffic_item
-            for traffic_item in ixia.get_traffic_items()
-            if traffic_item.Enabled
-        ]
+        traffic_items = ixia.get_traffic_items()
+        if not traffic_items:
+            return False
+        # OTG returns flow name strings — always tracked
+        if isinstance(traffic_items[0], str):
+            return True
+        # restpy returns TrafficItem objects with .Enabled and .Tracking
+        enabled_traffic_items = [ti for ti in traffic_items if ti.Enabled]
         for traffic_item in enabled_traffic_items:
             if (
                 ixia_types.TRAFFIC_STATS_TRACKING_TYPE_MAP[

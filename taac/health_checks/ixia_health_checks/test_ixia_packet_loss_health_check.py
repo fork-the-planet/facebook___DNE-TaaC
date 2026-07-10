@@ -185,7 +185,7 @@ class TestIxiaPacketLossRun(unittest.IsolatedAsyncioTestCase):
     async def test_all_pass_returns_pass(self, mock_everpaste):
         """_run should return PASS when all traffic items are within threshold."""
         self.mock_ixia.has_traffic_items.return_value = True
-        self.mock_ixia.traffic_items_start_time = 0
+        self.mock_ixia.get_traffic_start_time.return_value = 0
         self.mock_ixia.get_latest_stats.return_value = [
             _make_stat("TRAFFIC_A", duration=0),
         ]
