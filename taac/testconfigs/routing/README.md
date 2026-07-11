@@ -563,28 +563,40 @@ That's it. No copy-file, no hand-edit of port maps, no touching factory internal
 
 ## 5. TestConfig constant naming
 
-**Format**: `{TESTBED}_{FACTORY}_{SCALE_OR_VARIANT_IF_APPLIED}_TEST_CONFIG`
+**Format**: `{TESTBED}_{FACTORY}_TEST_CONFIG[_VARIANT]`
+
+Variant suffix goes **after** `_TEST_CONFIG`, not before it. The invariant is that every catalog constant ends in `_TEST_CONFIG` unless it has a variant tag, in which case it ends in `_TEST_CONFIG_<VARIANT>`.
 
 | Segment | Source | Required? |
 |---|---|---|
-| **TESTBED** | Matches the Testbed instance name (e.g., `BAG013_ASH6`, `EB02_LAB_ASH6`) | Yes |
-| **FACTORY** | Matches the factory function's workflow part, stripped of `create_` and `_test_config` (e.g., `CONVEYOR`, `INSTABILITY`, `BGP_UG_BACKPRESSURE`, `BGP_PERF_SCALING_EGRESS_PEER_SWEEP`) | Yes |
-| **SCALE / VARIANT** | Optional — applied when the testconfig is a scaled or mode variant of the same factory-on-testbed pair. Examples: `_200_IBGP_PEERS`, `_1000_IBGP_PEERS`, `_UPDATE_GROUP`, `_WITH_BGP_MON`, `_WITHOUT_OPEN_R`, `_TOPOLOGY_SMOKE` | Only when applied |
-| **Suffix** | Always `_TEST_CONFIG` | Yes |
+| **TESTBED** | Bare testbed identifier, DC suffix dropped (`BAG010` not `BAG010_ASH6`, `EB02_LAB` not `EB02_LAB_ASH6`). The DC lives on the Testbed instance in `testbed.py`, not in the catalog constant. | Yes |
+| **FACTORY** | Factory function's workflow part, stripped of `create_` prefix and `_test_config` suffix. Also strip generic infra prefixes (`bgp_`, `ebb_`, `bgp_ebb_`) so the constant reads as the workflow, not the factory-file taxonomy. Examples: `create_ebb_drain_test_config` → `DRAIN`; `create_bgp_ug_backpressure_test_config` → `BGP_UG_BACKPRESSURE`; `create_ebb_stage1_consolidated_test_config` → `STAGE1_CONSOLIDATED`. | Yes |
+| **Fixed suffix** | Always `_TEST_CONFIG` | Yes |
+| **VARIANT** | Optional short tag identifying a variant of the same factory-on-testbed pair. Prefer short forms: `_UG` (update group), `_SMOKE` (topology smoke), `_WITHOUT_OPEN_R`, `_200_IBGP_PEERS`. Multiple variants concatenate: `_UG_SMOKE`. | Only when applied |
 
 ### Examples
 
 ```
-BAG013_ASH6_CONVEYOR_TEST_CONFIG
-BAG013_ASH6_CONVEYOR_UPDATE_GROUP_TEST_CONFIG
-BAG010_ASH6_INSTABILITY_TEST_CONFIG
-BAG010_ASH6_INSTABILITY_UPDATE_GROUP_TEST_CONFIG
-BAG013_ASH6_BGP_UG_BACKPRESSURE_TEST_CONFIG
-BAG013_ASH6_BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_TEST_CONFIG
-BAG012_ASH6_BGP_UG_NEW_PEER_JOIN_TEST_CONFIG
-EB02_LAB_ASH6_BGP_PERF_SCALING_EGRESS_PEER_SWEEP_200_IBGP_PEERS_TEST_CONFIG
-EB02_LAB_ASH6_BGP_PERF_SCALING_EGRESS_PEER_SWEEP_1000_IBGP_PEERS_TEST_CONFIG
+BAG010_STAGE1_CONSOLIDATED_TEST_CONFIG
+BAG010_DRAIN_TEST_CONFIG_UG
+BAG010_LONGEVITY_TEST_CONFIG
+BAG011_STAGE1_CONSOLIDATED_TEST_CONFIG
+BAG012_UPDATE_PACKING_TEST_CONFIG_UG
+BAG012_CONSTANT_ATTRIBUTE_STORAGE_TEST_CONFIG
+BAG012_QUEUE_MEMORY_MONITOR_TEST_CONFIG
+BAG012_BOUNDED_ECMP_SETS_TEST_CONFIG_UG
+BAG013_BGP_UG_BACKPRESSURE_TEST_CONFIG
+BAG013_BGP_UG_BACKPRESSURE_TEST_CONFIG_SMOKE
+EB02_LAB_BGP_PERF_SCALING_EGRESS_PEER_SWEEP_TEST_CONFIG_200_IBGP_PEERS
 ```
+
+### Relationship to Testbed instance names
+
+Testbed instances in `testbed.py` **keep** their DC suffix (`BAG010_ASH6`, `EB02_LAB_ASH6`) — that identifies the physical DUT. The catalog CONSTANT drops it because the constant identifies a workflow-on-testbed *binding*, and one workflow per testbed is the norm; the DC is implicit in which Testbed instance the factory is called with. If a workflow ever exists on two DCs simultaneously (e.g., `BAG010_ASH6` and `BAG010_SNC1` both wired to the same factory), disambiguate at that point by adding the DC as a `_VARIANT` tag (`_ASH6`, `_SNC1`).
+
+### Relationship to `TestConfig.name`
+
+The `.name` field inside the emitted Thrift struct is a separate identifier consumed by the conveyor cconf's `--test-config` flag. Ideally `.name` matches the Python CONSTANT string exactly. In practice, `.name` renames require a synchronized configerator (cconf) update, so `.name` may lag the CONSTANT rename until the cconf catches up. Grandfathered `.name` values stay verbatim; the factory literal remains the source of truth.
 
 ### Grandfathering
 
@@ -592,7 +604,7 @@ TestConfig constant names that predate this convention (e.g., `BGP_UG_BACKPRESSU
 
 Renaming grandfathered names can happen in a follow-up diff after migration stabilizes.
 
-**New testconfigs added going forward MUST follow the full `{TESTBED}_{FACTORY}_{SCALE|VARIANT}_TEST_CONFIG` convention.**
+**New testconfigs added going forward MUST follow the full `{TESTBED}_{FACTORY}_TEST_CONFIG[_VARIANT]` convention.**
 
 ---
 

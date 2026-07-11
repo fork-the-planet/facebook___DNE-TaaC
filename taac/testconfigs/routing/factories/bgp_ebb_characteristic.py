@@ -79,6 +79,7 @@ from taac.testconfigs.routing.factories.bgp_ebb_scaling import (
 )
 from taac.testconfigs.routing.testbed import Testbed
 from taac.testconfigs.routing.util.bgp_ebb_constants import (
+    _derive_test_config_name,
     EBGP_PEER_COUNT_V6,
     EBGP_REMOTE_AS,
     IBGP_PEER_SCALE_PER_PLANE,
@@ -1215,11 +1216,16 @@ def _bag012_direct_ixia_connections(testbed: Testbed) -> list[DirectIxiaConnecti
     ]
 
 
-def create_bgp_ebb_conveyor_test_config(
+def create_bgp_ebb_update_packing_test_config(
     testbed: Testbed,
     enable_update_group: bool = False,
+    name_override: str | None = None,
 ) -> taac_types.TestConfig:
     """BGP Update Packing conveyor test config for bag012.ash6.
+
+    Renamed from ``create_bgp_ebb_conveyor_test_config`` — the "conveyor"
+    label was ambiguous (all configs in this file are conveyor-scheduled);
+    the actual test is BGP update-packing validation.
 
     Extracted verbatim from the legacy
     ``bag012_ash6_test_config.create_bag012_ash6_conveyor_test_config``
@@ -1229,10 +1235,6 @@ def create_bgp_ebb_conveyor_test_config(
     Test direction matches EB02_ARISTA_BGP_UPDATE_PACKING_VALIDATION:
     - EBGP → IBGP: 10 EBGP peers inject routes, 1 IBGP peer captures UPDATEs.
     - ``ebgp_route_acceptance_communities=["65529:39744"]``.
-
-    The internal ``TestConfig.name`` field is preserved verbatim as
-    ``BAG012_ASH6_BGP_CONVEYOR_TEST`` (+ ``_UPDATE_GROUP``) so the golden
-    manifest hash is byte-wise identical.
     """
     assert testbed.ixia_ports, "factory requires IXIA port map on testbed"
     assert testbed.bgpcpp_configerator_path, (
@@ -1245,9 +1247,9 @@ def create_bgp_ebb_conveyor_test_config(
     ixia_interface_mimic_ebgp = testbed.ixia_ports[0][0]
     ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
 
-    name = "BAG012_ASH6_BGP_CONVEYOR_TEST"
-    if enable_update_group:
-        name += "_UPDATE_GROUP"
+    name = name_override or _derive_test_config_name(
+        testbed, "UPDATE_PACKING", enable_update_group
+    )
 
     setup_tasks = get_update_packing_setup_tasks(
         device_name=device_name,
@@ -1303,6 +1305,7 @@ def create_bgp_ebb_conveyor_test_config(
 def create_bgp_ebb_constant_attribute_storage_test_config(
     testbed: Testbed,
     enable_update_group: bool = False,
+    name_override: str | None = None,
 ) -> taac_types.TestConfig:
     """Constant Attribute Storage varying-combinations test config for bag012.ash6.
 
@@ -1311,10 +1314,6 @@ def create_bgp_ebb_constant_attribute_storage_test_config(
     factory. Validates that the amount of memory for storing pool of
     attributes remains constant regardless of the number of unique
     attribute-set combinations.
-
-    The internal ``TestConfig.name`` field is preserved verbatim as
-    ``BAG012_ASH6_BGP_CONSTANT_ATTRIBUTE_STORAGE_CONVEYOR_TEST`` (+
-    ``_UPDATE_GROUP``) so the golden manifest hash is byte-wise identical.
     """
     assert testbed.ixia_ports, "factory requires IXIA port map on testbed"
     assert testbed.bgpcpp_configerator_path, (
@@ -1327,9 +1326,9 @@ def create_bgp_ebb_constant_attribute_storage_test_config(
     ixia_interface_mimic_ebgp = testbed.ixia_ports[0][0]
     ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
 
-    name = "BAG012_ASH6_BGP_CONSTANT_ATTRIBUTE_STORAGE_CONVEYOR_TEST"
-    if enable_update_group:
-        name += "_UPDATE_GROUP"
+    name = name_override or _derive_test_config_name(
+        testbed, "CONSTANT_ATTRIBUTE_STORAGE", enable_update_group
+    )
 
     setup_tasks = get_update_packing_setup_tasks(
         device_name=device_name,
@@ -1397,6 +1396,7 @@ def create_bgp_ebb_constant_attribute_storage_test_config(
 def create_bgp_ebb_queue_memory_monitor_test_config(
     testbed: Testbed,
     enable_update_group: bool = False,
+    name_override: str | None = None,
 ) -> taac_types.TestConfig:
     """Queue-memory-monitor conveyor test config for bag012.ash6.
 
@@ -1404,10 +1404,6 @@ def create_bgp_ebb_queue_memory_monitor_test_config(
     ``bag012_ash6_test_config.create_bag012_ash6_queue_memory_monitor_test_config``
     factory. Monitors BGP++ fiber queue statistics and memory usage under
     route churn (140 EBGP peers flapping 15s up / 15s down; 63 IBGP peers).
-
-    The internal ``TestConfig.name`` field is preserved verbatim as
-    ``BAG012_ASH6_BGP_QUEUE_MEMORY_MONITOR_CONVEYOR_TEST`` (+
-    ``_UPDATE_GROUP``) so the golden manifest hash is byte-wise identical.
     """
     assert testbed.ixia_ports, "factory requires IXIA port map on testbed"
     assert testbed.bgpcpp_configerator_path, (
@@ -1420,9 +1416,9 @@ def create_bgp_ebb_queue_memory_monitor_test_config(
     ixia_interface_mimic_ebgp = testbed.ixia_ports[0][0]
     ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
 
-    name = "BAG012_ASH6_BGP_QUEUE_MEMORY_MONITOR_CONVEYOR_TEST"
-    if enable_update_group:
-        name += "_UPDATE_GROUP"
+    name = name_override or _derive_test_config_name(
+        testbed, "QUEUE_MEMORY_MONITOR", enable_update_group
+    )
 
     setup_tasks = get_update_packing_setup_tasks(
         device_name=device_name,
@@ -1572,6 +1568,7 @@ def create_bgp_ebb_characteristic_performance_scaling_test_config(
 
 def create_bgp_ebb_characteristic_bounded_ecmp_sets_test_config(
     testbed: Testbed,
+    name_override: str | None = None,
 ) -> taac_types.TestConfig:
     """Bounded-ECMP-sets conveyor test config for bag012.ash6.
 
@@ -1585,10 +1582,6 @@ def create_bgp_ebb_characteristic_bounded_ecmp_sets_test_config(
     place. Bounded ECMP brings up IPv4 sessions too, so
     ``v4_peer_start_offset=IXIA_IPV4_START_OFFSET`` aligns the generated v4
     peers with the device's v4 secondary IPs.
-
-    The internal ``TestConfig.name`` field is preserved verbatim as
-    ``BAG012_ASH6_BGP_BOUNDED_ECMP_SETS_CONVEYOR_TEST_UPDATE_GROUP`` so the
-    golden manifest hash is byte-wise identical.
     """
     assert testbed.ixia_ports, "factory requires IXIA port map on testbed"
     assert testbed.bgpcpp_configerator_path, (
@@ -1626,7 +1619,10 @@ def create_bgp_ebb_characteristic_bounded_ecmp_sets_test_config(
 
     return create_bgp_ebb_scaling_bounded_ecmp_sets_test_config(
         testbed,
-        name="BAG012_ASH6_BGP_BOUNDED_ECMP_SETS_CONVEYOR_TEST_UPDATE_GROUP",
+        name=name_override
+        or _derive_test_config_name(
+            testbed, "BOUNDED_ECMP_SETS", enable_update_group=True
+        ),
         ebgp_peer_count_v6=_BAG012_BOUNDED_ECMP_PEER_COUNT,
         ibgp_peer_count_v6=_BAG012_BOUNDED_ECMP_PEER_COUNT,
         ebgp_peer_count_v4=_BAG012_BOUNDED_ECMP_PEER_COUNT,

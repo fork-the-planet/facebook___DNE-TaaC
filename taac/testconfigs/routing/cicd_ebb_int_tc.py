@@ -4,192 +4,105 @@
 
 Successor to ``conveyor_node_test_configs.py`` under
 ``routing/ebb/ebb_bgp_plus_plus_test_config/ebb_bgp_plus_plus_conveyor/``.
-Holds bag conveyor testconfigs and the aggregated
-``EBB_BGP_PLUS_PLUS_CONVEYOR_NODE_TEST_CONFIGS`` list.
+Holds bag conveyor testconfigs and is aggregated into
+``EBB_BGP_PLUS_PLUS_CONVEYOR_NODE_TEST_CONFIGS``.
 
 External consumers import via ``testconfigs.routing`` root; see README.md §7.
+
+Source of truth
+---------------
+This file is the source of truth for the ``dne_routing`` conveyor's per-node
+TestConfigs. Every constant declared here is scheduled by a node in
+``configerator/source/nettools/ebb/release_engineering/conveyor_config/
+dne_routing.conveyor_config.cconf``. Each definition carries an inline
+``# CONVEYOR: dne_routing / <node_name>`` marker so the linkage is visible at
+the definition site and grep-able across the repo.
+
+Constant naming follows README.md §5:
+``{TESTBED}_{FACTORY}_TEST_CONFIG[_UG|_TOPOLOGY_SMOKE|...]``. The TESTBED
+segment drops any DC suffix (e.g. ``BAG010`` not ``BAG010_ASH6``) — the DC
+lives on the Testbed instance in ``testbed.py``, not in the catalog constant.
+
+To bring back a previously-removed config, add a one-line factory call
+following the same shape (factories in ``factories/bgp_ebb_{full_scale,
+characteristic}.py`` are unchanged) plus the inline ``CONVEYOR:`` marker
+identifying which conveyor node consumes it.
 """
 
 from taac.testconfigs.routing.factories.bgp_ebb_characteristic import (
     create_bgp_ebb_characteristic_bounded_ecmp_sets_test_config,
-    create_bgp_ebb_characteristic_performance_scaling_test_config,
     create_bgp_ebb_constant_attribute_storage_test_config,
-    create_bgp_ebb_conveyor_test_config,
     create_bgp_ebb_queue_memory_monitor_test_config,
+    create_bgp_ebb_update_packing_test_config,
 )
 from taac.testconfigs.routing.factories.bgp_ebb_full_scale import (
-    create_bgp_ebb_oscillations_test_config,
-    create_bgp_ebb_restart_test_config,
-    create_bgp_ebb_stability_test_config,
     create_bgp_ebb_stage1_test_config,
-    create_ebb_cold_start_and_daemon_restart_test_config,
     create_ebb_drain_test_config,
-    create_ebb_instability_test_config,
     create_ebb_longevity_test_config,
-    create_ebb_runtime_update_test_config,
     create_ebb_stage1_consolidated_test_config,
 )
 from taac.testconfigs.routing.testbed import (
-    BAG002_SNC1,
     BAG010_ASH6,
     BAG011_ASH6,
     BAG012_ASH6,
 )
 
 
-# ─── Diff 5 — BAG002_SNC1 conveyor (cold_start + daemon_restart) ────────────
-# TestConfig constant name grandfathered from bag002_snc1_test_config.py
-# (Wave 4 renames to fit the {TESTBED}_{FACTORY}_{VARIANT}_TEST_CONFIG shape).
-# The internal ``TestConfig.name`` field is preserved verbatim as
-# ``BAG002_SNC1_BGP_CONVEYOR_TEST`` so the golden manifest is byte-wise
-# identical to pre-migration.
-BAG002_SNC1_CONVEYOR_TEST_CONFIG = create_ebb_cold_start_and_daemon_restart_test_config(
-    BAG002_SNC1
-)
-
-
-# ─── Diff 6 — BAG010_ASH6 conveyor family (5 factories × baseline+UG) ───────
-# TestConfig constant names + internal ``TestConfig.name`` field values are
-# grandfathered from ``bag010_ash6_test_config.py`` (Wave 4 renames). Golden
-# manifest hashes for the 6 tracked configs (DRAIN / RUNTIME_UPDATE /
-# LONGEVITY, each with ``_UPDATE_GROUP`` sibling) are preserved byte-wise.
-# INSTABILITY + STAGE1 variants are on the golden's nondeterministic-serialization
-# allowlist so their hashes are not tracked, but the internal ``TestConfig.name``
-# is preserved so the allowlist entries still match.
-BAG010_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG = (
-    create_ebb_stage1_consolidated_test_config(BAG010_ASH6)
-)
-BAG010_ASH6_BGP_STAGE1_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_ebb_stage1_consolidated_test_config(BAG010_ASH6, enable_update_group=True)
-)
-BAG010_ASH6_INSTABILITY_CONVEYOR_TEST_CONFIG = create_ebb_instability_test_config(
+# ─── BAG010 conveyor configs ─────────────────────────────────────────────────
+# CONVEYOR: dne_routing / bag010_instability_node (regex bgp_instability_)
+# CONVEYOR: dne_routing / bag010_runtime_node     (regex pnh_metric_oscillation|multipath_group_oscillation|route_registry_prefix_list_runtime_update)
+BAG010_STAGE1_CONSOLIDATED_TEST_CONFIG = create_ebb_stage1_consolidated_test_config(
     BAG010_ASH6
 )
-BAG010_ASH6_INSTABILITY_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_ebb_instability_test_config(BAG010_ASH6, enable_update_group=True)
-)
-BAG010_ASH6_RUNTIME_UPDATE_CONVEYOR_TEST_CONFIG = create_ebb_runtime_update_test_config(
-    BAG010_ASH6
-)
-BAG010_ASH6_RUNTIME_UPDATE_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_ebb_runtime_update_test_config(BAG010_ASH6, enable_update_group=True)
-)
-BAG010_ASH6_DRAIN_CONVEYOR_TEST_CONFIG = create_ebb_drain_test_config(BAG010_ASH6)
-BAG010_ASH6_DRAIN_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = create_ebb_drain_test_config(
+# CONVEYOR: dne_routing / bag010_drain_node       (regex bgp_fauu_drain_undrain_playbook)
+BAG010_DRAIN_TEST_CONFIG_UG = create_ebb_drain_test_config(
     BAG010_ASH6, enable_update_group=True
 )
-BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_CONFIG = create_ebb_longevity_test_config(
-    BAG010_ASH6
-)
-BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_UPDATE_GROUP_CONFIG = (
-    create_ebb_longevity_test_config(BAG010_ASH6, enable_update_group=True)
-)
+# CONVEYOR: dne_routing / bag010_longevity_node
+BAG010_LONGEVITY_TEST_CONFIG = create_ebb_longevity_test_config(BAG010_ASH6)
 
 
-# ─── Diff 8 — BAG011_ASH6 conveyor family (4 factories × baseline+UG) ───────
-# Python constant names + internal ``TestConfig.name`` field values are
-# grandfathered from ``bag011_ash6_test_config.py`` (Wave 4 renames). Golden
-# manifest hashes for all 8 tracked configs (RESTART / OSCILLATIONS /
-# STABILITY / STAGE1, each with ``_UPDATE_GROUP`` sibling) are preserved
-# byte-wise. The ``pnh_metric_oscillation`` playbook is intentionally NOT in
-# STAGE1 — it lives on bag010's STAGE1 for cross-device wall-clock balance
-# (both bag010 and bag011 share the same full-scale topology).
-BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST_CONFIG = create_bgp_ebb_restart_test_config(
-    BAG011_ASH6
-)
-BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_bgp_ebb_restart_test_config(BAG011_ASH6, enable_update_group=True)
-)
-BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST_CONFIG = (
-    create_bgp_ebb_oscillations_test_config(BAG011_ASH6)
-)
-BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_bgp_ebb_oscillations_test_config(BAG011_ASH6, enable_update_group=True)
-)
-BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_CONFIG = create_bgp_ebb_stability_test_config(
-    BAG011_ASH6
-)
-BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_bgp_ebb_stability_test_config(BAG011_ASH6, enable_update_group=True)
-)
-BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG = create_bgp_ebb_stage1_test_config(
-    BAG011_ASH6
-)
-BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_bgp_ebb_stage1_test_config(BAG011_ASH6, enable_update_group=True)
-)
+# ─── BAG011 conveyor configs ─────────────────────────────────────────────────
+# NB: bag011 uses ``create_bgp_ebb_stage1_test_config`` — a DIFFERENT factory
+# from bag010's ``create_ebb_stage1_consolidated_test_config``. Both compose
+# "Stage 1 consolidated" playbook sets, but bag011's playbooks are Restart +
+# Oscillations + Stability (matches the bag011 conveyor node regexes) while
+# bag010's are attribute_churn + route_storm + runtime_update + oscillations.
+# Don't collapse to a single factory without redesigning both playbook sets.
+# CONVEYOR: dne_routing / bag011_restart_ebgp_node    (regex daemon_restart|cold_start|bgp_ebgp_)
+# CONVEYOR: dne_routing / bag011_ibgp_stability_node  (regex bgp_ibgp_|unresolvable_pnhs|nexthop_group_count)
+BAG011_STAGE1_CONSOLIDATED_TEST_CONFIG = create_bgp_ebb_stage1_test_config(BAG011_ASH6)
 
 
-# ─── Diff 9 — BAG012_ASH6 conveyor family (5 factories × baseline+UG) ───────
-# Python constant names + internal ``TestConfig.name`` field values are
-# grandfathered from ``bag012_ash6_test_config.py`` (Wave 4 renames to fit the
-# ``{TESTBED}_{FACTORY}_{VARIANT}_TEST_CONFIG`` shape). Golden manifest hashes
-# for all 9 tracked configs (CONVEYOR / CONSTANT_ATTRIBUTE_STORAGE /
-# QUEUE_MEMORY_MONITOR / PERFORMANCE_SCALING, each with ``_UPDATE_GROUP``
-# sibling, plus the update-group-only BOUNDED_ECMP_SETS) are preserved
-# byte-wise. bag012 wires only 2 IXIA ports (no BGP-MON) so its factories
-# live in ``factories/bgp_ebb_characteristic.py`` rather than the full-scale
-# EBB factories which require a BGP-MON port.
-BAG012_ASH6_CONVEYOR_TEST_CONFIG = create_bgp_ebb_conveyor_test_config(BAG012_ASH6)
-BAG012_ASH6_CONVEYOR_TEST_UPDATE_GROUP_CONFIG = create_bgp_ebb_conveyor_test_config(
+# ─── BAG012 conveyor configs ─────────────────────────────────────────────────
+# bag012 wires only 2 IXIA ports (no BGP-MON) so its factories live in
+# ``factories/bgp_ebb_characteristic.py`` rather than the full-scale EBB
+# factories which require a BGP-MON port.
+# CONVEYOR: dne_routing / bag012_update_packing_node
+BAG012_UPDATE_PACKING_TEST_CONFIG_UG = create_bgp_ebb_update_packing_test_config(
     BAG012_ASH6, enable_update_group=True
 )
-BAG012_ASH6_CONSTANT_ATTRIBUTE_STORAGE_TEST_CONFIG = (
+# CONVEYOR: dne_routing / bag012_cas_node
+BAG012_CONSTANT_ATTRIBUTE_STORAGE_TEST_CONFIG = (
     create_bgp_ebb_constant_attribute_storage_test_config(BAG012_ASH6)
 )
-BAG012_ASH6_CONSTANT_ATTRIBUTE_STORAGE_TEST_UPDATE_GROUP_CONFIG = (
-    create_bgp_ebb_constant_attribute_storage_test_config(
-        BAG012_ASH6, enable_update_group=True
-    )
-)
-BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_CONFIG = (
+# CONVEYOR: dne_routing / bag012_qmm_node
+BAG012_QUEUE_MEMORY_MONITOR_TEST_CONFIG = (
     create_bgp_ebb_queue_memory_monitor_test_config(BAG012_ASH6)
 )
-BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_UPDATE_GROUP_CONFIG = (
-    create_bgp_ebb_queue_memory_monitor_test_config(
-        BAG012_ASH6, enable_update_group=True
-    )
-)
-BAG012_ASH6_PERFORMANCE_SCALING_TEST_CONFIG = (
-    create_bgp_ebb_characteristic_performance_scaling_test_config(BAG012_ASH6)
-)
-BAG012_ASH6_PERFORMANCE_SCALING_TEST_UPDATE_GROUP_CONFIG = (
-    create_bgp_ebb_characteristic_performance_scaling_test_config(
-        BAG012_ASH6, enable_update_group=True
-    )
-)
-BAG012_ASH6_BOUNDED_ECMP_SETS_TEST_UPDATE_GROUP_CONFIG = (
+# CONVEYOR: dne_routing / bag012_bounded_ecmp_node
+BAG012_BOUNDED_ECMP_SETS_TEST_CONFIG_UG = (
     create_bgp_ebb_characteristic_bounded_ecmp_sets_test_config(BAG012_ASH6)
 )
 
 
 __all__ = [
-    "BAG002_SNC1_CONVEYOR_TEST_CONFIG",
-    "BAG010_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG",
-    "BAG010_ASH6_BGP_STAGE1_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
-    "BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_CONFIG",
-    "BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_UPDATE_GROUP_CONFIG",
-    "BAG010_ASH6_DRAIN_CONVEYOR_TEST_CONFIG",
-    "BAG010_ASH6_DRAIN_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
-    "BAG010_ASH6_INSTABILITY_CONVEYOR_TEST_CONFIG",
-    "BAG010_ASH6_INSTABILITY_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
-    "BAG010_ASH6_RUNTIME_UPDATE_CONVEYOR_TEST_CONFIG",
-    "BAG010_ASH6_RUNTIME_UPDATE_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
-    "BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST_CONFIG",
-    "BAG011_ASH6_BGP_OSCILLATIONS_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
-    "BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST_CONFIG",
-    "BAG011_ASH6_BGP_RESTART_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
-    "BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_CONFIG",
-    "BAG011_ASH6_BGP_STABILITY_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
-    "BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_CONFIG",
-    "BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
-    "BAG012_ASH6_BOUNDED_ECMP_SETS_TEST_UPDATE_GROUP_CONFIG",
-    "BAG012_ASH6_CONSTANT_ATTRIBUTE_STORAGE_TEST_CONFIG",
-    "BAG012_ASH6_CONSTANT_ATTRIBUTE_STORAGE_TEST_UPDATE_GROUP_CONFIG",
-    "BAG012_ASH6_CONVEYOR_TEST_CONFIG",
-    "BAG012_ASH6_CONVEYOR_TEST_UPDATE_GROUP_CONFIG",
-    "BAG012_ASH6_PERFORMANCE_SCALING_TEST_CONFIG",
-    "BAG012_ASH6_PERFORMANCE_SCALING_TEST_UPDATE_GROUP_CONFIG",
-    "BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_CONFIG",
-    "BAG012_ASH6_QUEUE_MEMORY_MONITOR_TEST_UPDATE_GROUP_CONFIG",
+    "BAG010_DRAIN_TEST_CONFIG_UG",
+    "BAG010_LONGEVITY_TEST_CONFIG",
+    "BAG010_STAGE1_CONSOLIDATED_TEST_CONFIG",
+    "BAG011_STAGE1_CONSOLIDATED_TEST_CONFIG",
+    "BAG012_BOUNDED_ECMP_SETS_TEST_CONFIG_UG",
+    "BAG012_CONSTANT_ATTRIBUTE_STORAGE_TEST_CONFIG",
+    "BAG012_QUEUE_MEMORY_MONITOR_TEST_CONFIG",
+    "BAG012_UPDATE_PACKING_TEST_CONFIG_UG",
 ]

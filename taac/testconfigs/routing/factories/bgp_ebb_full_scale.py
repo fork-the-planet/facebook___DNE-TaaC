@@ -44,6 +44,7 @@ from taac.task_definitions import (
 )
 from taac.testconfigs.routing.testbed import Testbed
 from taac.testconfigs.routing.util.bgp_ebb_constants import (
+    _derive_test_config_name,
     BGP_MON_PEER_COUNT,
     BGP_MON_REMOTE_AS,
     DEFAULT_PROFILE,
@@ -640,6 +641,7 @@ def create_ebb_drain_test_config(
     testbed: Testbed,
     profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
     enable_update_group: bool = False,
+    name_override: str | None = None,
 ) -> TestConfig:
     """BGP++ drain conveyor test (FAUU + Plane drain/undrain).
 
@@ -650,9 +652,9 @@ def create_ebb_drain_test_config(
     (``drain=True``) is unused by these playbooks, so ``drain=False`` keeps
     all peers established and pre/post-test session counts verify.
     """
-    name = "BAG010_ASH6_BGP_DRAIN_CONVEYOR_TEST"
-    if enable_update_group:
-        name += "_UPDATE_GROUP"
+    name = name_override or _derive_test_config_name(
+        testbed, "DRAIN", enable_update_group
+    )
 
     device_name = testbed.device_name
     ixia_interface_mimic_ebgp = testbed.ixia_ports[0][0]
@@ -694,6 +696,7 @@ def create_ebb_stage1_consolidated_test_config(
     testbed: Testbed,
     profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
     enable_update_group: bool = False,
+    name_override: str | None = None,
 ) -> TestConfig:
     """Stage-1 consolidated conveyor test — all non-longevity bag010 playbooks.
 
@@ -704,9 +707,9 @@ def create_ebb_stage1_consolidated_test_config(
     oscillation, and pnh_metric_oscillation (moved from bag011 for
     cross-device balance).
     """
-    name = "BAG010_ASH6_BGP_STAGE1_CONVEYOR_TEST"
-    if enable_update_group:
-        name += "_UPDATE_GROUP"
+    name = name_override or _derive_test_config_name(
+        testbed, "STAGE1_CONSOLIDATED", enable_update_group
+    )
 
     device_name = testbed.device_name
     ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
@@ -965,6 +968,7 @@ def create_bgp_ebb_stage1_test_config(
     testbed: Testbed,
     profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
     enable_update_group: bool = False,
+    name_override: str | None = None,
 ) -> TestConfig:
     """Stage-1 consolidated conveyor test — all bag011 playbooks minus pnh_metric_oscillation.
 
@@ -975,14 +979,10 @@ def create_bgp_ebb_stage1_test_config(
     ``bgp_igp_instability_pnh_metric_oscillation`` playbook is moved to
     bag010 for cross-device wall-clock balance (both bag010 and bag011 share
     the same full-scale topology).
-
-    The internal ``TestConfig.name`` field is preserved verbatim as
-    ``BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST`` (+ ``_UPDATE_GROUP``) so the
-    golden manifest hash is byte-wise identical.
     """
-    name = "BAG011_ASH6_BGP_STAGE1_CONVEYOR_TEST"
-    if enable_update_group:
-        name += "_UPDATE_GROUP"
+    name = name_override or _derive_test_config_name(
+        testbed, "STAGE1_CONSOLIDATED", enable_update_group
+    )
 
     device_name = testbed.device_name
     ixia_interface_mimic_bgp_mon = testbed.ixia_ports[2][0]
@@ -1068,6 +1068,7 @@ def create_ebb_longevity_test_config(
     testbed: Testbed,
     profile: BgpPlusPlusProfile = DEFAULT_PROFILE,
     enable_update_group: bool = False,
+    name_override: str | None = None,
 ) -> TestConfig:
     """BGP++ longevity soak conveyor test (4h, community churn every 60s).
 
@@ -1077,9 +1078,9 @@ def create_ebb_longevity_test_config(
     (see ``_BAG010_LONGEVITY_DURATION_SECONDS``); restore to 28800 to
     return to the full 8h soak.
     """
-    name = "BAG010_ASH6_CONVEYOR_LONGEVITY_TEST_CONFIG"
-    if enable_update_group:
-        name += "_UPDATE_GROUP"
+    name = name_override or _derive_test_config_name(
+        testbed, "LONGEVITY", enable_update_group
+    )
 
     return _build_ebb_full_scale_test_config(
         testbed=testbed,
