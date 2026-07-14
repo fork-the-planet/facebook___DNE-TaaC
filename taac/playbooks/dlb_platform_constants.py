@@ -65,3 +65,87 @@ DLB_RESOURCE_PROFILES: dict = {
         overcommit_silver_counts={"total": 1380, "max_next_hops": 25},
     ),
 }
+
+
+# =============================================================================
+# ECMP-ONLY (non-DLB) platform sizing.
+#
+# For ASICs that have NO DLB (e.g. Kodiak-3 / G200), the resource playbooks
+# stress the plain ECMP group/member tables instead. The sizing law (validated
+# on Wedge400/TH3, assuming sum-of-widths member accounting) is:
+#     total members consumed = network_group_multiplier
+#     groups programmed      = network_group_multiplier / ecmp_width
+# So both profiles advertise all `max_ecmp_members` members; width selects
+# whether you fill the GROUP table (narrow) or the MEMBER table (wide).
+# =============================================================================
+class EcmpAsic(Enum):
+    """ASIC families supported by the ECMP-only (non-DLB) resource playbooks."""
+
+    G200 = "g200"  # Kodiak-3 (KO3) — ECMP only, no DLB
+
+
+@dataclass(frozen=True)
+class EcmpResourceProfile:
+    """Per-ASIC ECMP table limits + expected resource-stickiness values.
+
+    The ``*_counts`` dicts are passed verbatim as the ``expected_counts`` entry
+    to ``create_dlb_resource_stickiness_check`` for the Main prefix bucket. For
+    ECMP-only platforms we assert ``total`` (group count) + ``max_next_hops``
+    (width) — never the ``dlb``/``other_modes`` split.
+    """
+
+    # Hardware ECMP table limits (sizing reference / documentation).
+    max_ecmp_groups: int
+    max_ecmp_members: int
+    max_group_width: int
+    # Device-wide UNIQUE next-hop budget. The CSV generator draws every group's
+    # next-hop subset from `range(max_unique_next_hops)`, so the union of unique
+    # NHs across all groups stays within this cap regardless of width/group count
+    # (the sliding-window CustomNetworkGroupConfig approach could not respect it).
+    max_unique_next_hops: int
+    # Main (in-budget) class. Both profiles advertise all `max_ecmp_members`
+    # member entries; `*_width` selects whether they fill the GROUP table
+    # (narrow -> more groups) or the MEMBER table (wide -> fewer groups):
+    #   - GROUP-util:  max_ecmp_members @ group_util_width  (e.g. 13,629 @ ~17-18
+    #                  -> 768 groups; fills the GROUP table)
+    #   - MEMBER-util: max_ecmp_members @ member_util_width (e.g. 13,629 @ 128
+    #                  -> 106 full groups + a 107th partial group; fills the
+    #                  MEMBER table)
+    # The MEMBER-util playbooks switch width at runtime via
+    # `modify_network_group_ecmp_width(...)`.
+    group_util_width: int
+    group_util_counts: dict
+    member_util_width: int
+    member_util_counts: dict
+    # Rouge (overflow) class — sized so Main + Rouge exceed the ECMP limits in
+    # the overcommit playbooks (routes rejected -> 100% loss on Rouge traffic).
+    rouge_network_group_multiplier: int
+    rouge_ecmp_width: int
+    # NDP-supporting next-hop pool size (IXIA-side NDP responders). Must cover
+    # every unique NH the CSV advertises, i.e. >= max_unique_next_hops (the
+    # anchor-pair CSV draws NHs only from range(max_unique_next_hops)).
+    ndp_pool_multiplier: int
+
+
+# Keyed by ASIC. Add new ECMP-only ASICs here rather than hardcoding numbers in
+# the testconfig/playbooks. Counts are SIZING TARGETS — re-tune after the first
+# hardware run for the platform.
+ECMP_RESOURCE_PROFILES: dict = {
+    # Kodiak-3 / G200: 768 groups, 13,629 members, 128 max width, 500 unique NHs.
+    #   GROUP-util:  13,629 members @ width ~17-18 -> 768 groups (fills the GROUP table).
+    #   MEMBER-util: 13,629 members @ width 128    -> 106 full groups @128 + 1
+    #                partial @61 = 107 groups (fills the MEMBER table).
+    EcmpAsic.G200: EcmpResourceProfile(
+        max_ecmp_groups=768,
+        max_ecmp_members=13629,
+        max_group_width=128,
+        max_unique_next_hops=500,
+        group_util_width=17,
+        group_util_counts={"total": 768, "max_next_hops": 18},
+        member_util_width=128,
+        member_util_counts={"total": 107, "max_next_hops": 128},
+        rouge_network_group_multiplier=8160,
+        rouge_ecmp_width=17,
+        ndp_pool_multiplier=500,
+    ),
+}

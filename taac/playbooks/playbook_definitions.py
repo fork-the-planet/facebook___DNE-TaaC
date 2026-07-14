@@ -36,6 +36,8 @@ from taac.health_checks.constants import (
 from taac.playbooks.dlb_platform_constants import (
     DLB_RESOURCE_PROFILES,
     DlbAsic,
+    ECMP_RESOURCE_PROFILES,
+    EcmpAsic,
 )
 from taac.testconfigs.routing.util.bgp_ebb_check_profiles import (
     CheckProfile,
@@ -10462,6 +10464,515 @@ def create_spillover_testing_playbooks(
     )
 
     return [spillover_testing_playbook]
+
+
+# =============================================================================
+# KO3 ECMP-ONLY RESOURCE TESTING PLAYBOOK FACTORIES
+#
+# KO3 has NO DLB. These mirror the Wedge400 ECMP groups/members factories but:
+#   - assert ONLY `total` (group count) + `max_next_hops` (width) in the
+#     resource-stickiness check (never the dlb/other-modes split; on KO3 the
+#     groups land under the check's "Default (DLB)" = default-switching-mode
+#     column).
+#   - use the Main (in-budget) + Rouge (overflow) traffic items, no DLB Gold.
+#   - playbook NAMES carry "ECMP_ONLY".
+# Expected group/width counts below are the SIZING TARGETS — re-tune them after
+# the first KO3 hardware run (W400/IcePack derived theirs empirically).
+# =============================================================================
+def create_ecmp_only_groups_playbooks(
+    source_interface: str,
+    asic: EcmpAsic = EcmpAsic.G200,
+    main_csv_path: str | None = None,
+    main_pool_name: str = "MAIN_ECMP_PREFIXES",
+) -> list[Playbook]:
+    """KO3 ECMP-ONLY Group-utilization playbooks (fill the GROUP table).
+
+    8 playbooks: Full_Utilization (Rouge disabled) and Overcommit (Rouge
+    enabled), each in base / Warmboot / bgp_restart / Coldboot flavors.
+
+    ``main_csv_path`` is the GROUP-table CSV (768 groups @ ~17-18 width). When
+    set, each playbook injects it into the ``main_pool_name`` NetworkGroup via an
+    ``apply_pool_mutations`` setup step BEFORE traffic starts (the baseline
+    CustomNetworkGroupConfig is a minimal shell that this overwrites).
+
+    Expected group/width counts are platform-aware via ``ECMP_RESOURCE_PROFILES``
+    (see dlb_platform_constants.py).
+    """
+    profile = ECMP_RESOURCE_PROFILES[asic]
+    main_traffic = f"{source_interface.upper().replace('/', '_')}_TO_MAIN_ECMP_TRAFFIC"
+    rouge_traffic = f"{source_interface.upper().replace('/', '_')}_TO_ROUGE_TRAFFIC"
+
+    def _packet_loss(main_loss: str, rouge_loss: str):
+        return create_ixia_packet_loss_check(
+            clear_traffic_stats=True,
+            thresholds=[
+                hc_types.PacketLossThreshold(
+                    names=[main_traffic],
+                    str_value=main_loss,
+                    metric=hc_types.PacketLossMetric.PERCENTAGE,
+                ),
+                hc_types.PacketLossThreshold(
+                    names=[rouge_traffic],
+                    str_value=rouge_loss,
+                    metric=hc_types.PacketLossMetric.PERCENTAGE,
+                ),
+            ],
+        )
+
+    def _group_count_check():
+        # GROUP-util: assert ECMP group + member tables stay within the G200
+        # budget (post-75% caps: 768 groups / 13629 members), read directly from
+        # `fboss2 show hw-object NEXT_HOP_GROUP` (no DLB buckets). Member check
+        # fails on `>= max`, so pass max + 1.
+        return create_ecmp_group_and_member_count_check(
+            ecmp_group_count=profile.max_ecmp_groups,
+            ecmp_member_count=profile.max_ecmp_members + 1,
+        )
+
+    def _common_postchecks():
+        return [
+            create_systemctl_active_state_check(
+                services=[
+                    hc_types.Service.WEDGE_AGENT,
+                    hc_types.Service.BGPD,
+                    hc_types.Service.QSFP_SERVICE,
+                    hc_types.Service.FSDB,
+                    hc_types.Service.FBOSS_SW_AGENT,
+                ]
+            ),
+            _group_count_check(),
+            create_cpu_utilization_check(
+                threshold=400.0, start_time_jq_var="test_case_start_time"
+            ),
+            create_service_restart_check(
+                services=SERVICES_TO_MONITOR_DURING_AGENT_RESTART
+            ),
+            create_memory_utilization_check(
+                threshold=5 * (1024**3),
+                threshold_by_service={
+                    "bgpd": 4.5 * (1024**3),
+                    "fsdb": 5 * (1024**3),
+                    "qsfp_service": 2 * (1024**3),
+                    "fboss_sw_agent": 9 * (1024**3),
+                },
+                start_time_jq_var="test_case_start_time",
+            ),
+            create_unclean_exit_check(),
+            # Main programs (0% loss); Rouge is disabled here so its traffic is
+            # fully dropped (100% expected).
+            _packet_loss(main_loss="0", rouge_loss="100"),
+        ]
+
+    def _disable_rouge_step():
+        return create_ixia_api_step(
+            api_name="toggle_device_groups",
+            args_dict={
+                "device_group_name_regex": ".*ROUGE_OVERFLOW_RESOURCE",
+                "enable": False,
+            },
+            description="Disable Rouge overflow group for Group-util testing",
+        )
+
+    def _resource_accountant_check_step():
+        return create_run_ssh_command_step(
+            cmd=(
+                "cat /var/facebook/logs/fboss/wedge_agent.log "
+                "| grep -i 'ResourceAccountant' | tail -50 "
+                "|| (echo 'FAILED: ResourceAccountant not found in agent log' "
+                "&& exit 1)"
+            )
+        )
+
+    def _flap_step(enable: bool):
+        # Simple whole-fabric prefix churn during the disruption. churn_mode must
+        # contain "prefix" (apply_flap_timing only acts on "prefix"/"session"; a
+        # bare "churn"/"random" silently no-ops). is_all_prefix_groups flaps every
+        # BGP prefix network group (Main + Rouge) on the uptime/downtime timers.
+        return create_toggle_ixia_prefix_session_flap_churn_step(
+            churn_mode="random",
+            enable_prefix_flap=enable,
+            is_all_prefix_groups=True,
+            churn_duration_s=0,
+        )
+
+    def _disruptive_stages(service, cold_boot: bool):
+        return [
+            create_steps_stage(
+                stage_id="enable_prefix_flapping", steps=[_flap_step(True)]
+            ),
+            create_steps_stage(
+                iteration=5,
+                steps=[
+                    create_service_interruption_step(
+                        service=service,
+                        trigger=taac_types.ServiceInterruptionTrigger.SYSTEMCTL_RESTART,
+                        create_cold_boot_file=cold_boot,
+                    ),
+                    create_service_convergence_step(
+                        services=[Service.AGENT, Service.BGP],
+                        timeout=300,
+                    ),
+                    create_longevity_step(duration=300),
+                ],
+            ),
+            create_steps_stage(
+                stage_id="disable_prefix_flapping", steps=[_flap_step(False)]
+            ),
+            create_steps_stage(
+                stage_id="post_restart_stabilization",
+                steps=[create_longevity_step(duration=300)],
+            ),
+        ]
+
+    def _mutate_main_step():
+        # Overwrite the minimal baseline MAIN NetworkGroup with the CSV-defined
+        # groups/members BEFORE traffic starts. apply_pool_mutations regenerates
+        # the traffic item against the mutated prefixes, so traffic targets the
+        # CSV routes rather than the baseline shell.
+        return create_ixia_api_step(
+            api_name="apply_pool_mutations",
+            args_dict={"pool_csvs": [[main_csv_path, main_pool_name]]},
+            description=f"Inject Group CSV into {main_pool_name}",
+        )
+
+    def _configure_steps(overcommit: bool):
+        # Establish the group-table shape before prechecks: disable Rouge for the
+        # in-budget (Full_Utilization) case, and CSV-inject Main when provided.
+        # Device groups default to enable=True, so overcommit needs no toggle.
+        steps = [] if overcommit else [_disable_rouge_step()]
+        if main_csv_path:
+            steps.append(_mutate_main_step())
+        return steps
+
+    def _make_base(name, overcommit):
+        steps = [
+            create_longevity_step(
+                duration=60, description="Wait for BGP convergence"
+            ),
+            create_ixia_api_step(
+                api_name="start_traffic",
+                args_dict={},
+                description="Start traffic after BGP convergence",
+            ),
+            create_longevity_step(
+                duration=120, description="Steady-state measurement"
+            ),
+        ]
+        if overcommit:
+            steps.append(_resource_accountant_check_step())
+        return Playbook(
+            name=name,
+            description="ECMP-ONLY Group utilization (fill ECMP group table)",
+            backup_and_restore_ixia_config=True,
+            setup_steps=_configure_steps(overcommit),
+            stages=[
+                create_steps_stage(
+                    stage_id="run_traffic_steady_state",
+                    steps=steps,
+                ),
+            ],
+            postchecks=_common_postchecks(),
+        )
+
+    def _make_disruptive(name, overcommit, service, cold_boot):
+        # Overcommit still validates ResourceAccountant engaged — as a stage,
+        # after setup_steps establish the over-budget config.
+        ra_stages = (
+            [
+                create_steps_stage(
+                    stage_id="validate_resource_accountant",
+                    steps=[_resource_accountant_check_step()],
+                )
+            ]
+            if overcommit
+            else []
+        )
+        return Playbook(
+            name=name,
+            backup_and_restore_ixia_config=True,
+            setup_steps=_configure_steps(overcommit),
+            stages=ra_stages + _disruptive_stages(service, cold_boot),
+            skip_test_config_snapshot_checks=True,
+            postchecks=_common_postchecks(),
+        )
+
+    return [
+        _make_base("Full_Utilization_ECMP_ONLY_Groups", overcommit=False),
+        _make_disruptive(
+            "Full_Utilization_ECMP_ONLY_Group_Warmboot", False, Service.AGENT, False
+        ),
+        _make_disruptive(
+            "Full_Utilization_ECMP_ONLY_Group_bgp_restart", False, Service.BGP, False
+        ),
+        _make_disruptive(
+            "Full_Utilization_ECMP_ONLY_Group_Coldboot", False, Service.AGENT, True
+        ),
+        _make_base("Overcommit_ECMP_ONLY_Groups", overcommit=True),
+        _make_disruptive(
+            "Overcommit_ECMP_ONLY_Group_Warmboot", True, Service.AGENT, False
+        ),
+        _make_disruptive(
+            "Overcommit_ECMP_ONLY_Group_bgp_restart", True, Service.BGP, False
+        ),
+        _make_disruptive(
+            "Overcommit_ECMP_ONLY_Group_Coldboot", True, Service.AGENT, True
+        ),
+    ]
+
+
+def create_ecmp_only_members_playbooks(
+    source_interface: str,
+    asic: EcmpAsic = EcmpAsic.G200,
+    main_csv_path: str | None = None,
+    main_pool_name: str = "MAIN_ECMP_PREFIXES",
+) -> list[Playbook]:
+    """KO3 ECMP-ONLY Member-utilization playbooks (fill the MEMBER table).
+
+    ``main_csv_path`` is the WIDTH/MEMBER-table CSV (width 128 -> 107 groups:
+    106 full @128 + 1 partial @61 = 13,629 members). When set, each playbook
+    injects it into ``main_pool_name`` via an ``apply_pool_mutations`` setup step
+    before traffic (replacing the formulaic ``modify_network_group_ecmp_width``
+    widen).
+
+    Expected group/width counts are platform-aware via ``ECMP_RESOURCE_PROFILES``
+    (see dlb_platform_constants.py).
+    """
+    profile = ECMP_RESOURCE_PROFILES[asic]
+    main_traffic = f"{source_interface.upper().replace('/', '_')}_TO_MAIN_ECMP_TRAFFIC"
+    rouge_traffic = f"{source_interface.upper().replace('/', '_')}_TO_ROUGE_TRAFFIC"
+
+    def _packet_loss(main_loss: str, rouge_loss: str):
+        return create_ixia_packet_loss_check(
+            clear_traffic_stats=True,
+            thresholds=[
+                hc_types.PacketLossThreshold(
+                    names=[main_traffic],
+                    str_value=main_loss,
+                    metric=hc_types.PacketLossMetric.PERCENTAGE,
+                ),
+                hc_types.PacketLossThreshold(
+                    names=[rouge_traffic],
+                    str_value=rouge_loss,
+                    metric=hc_types.PacketLossMetric.PERCENTAGE,
+                ),
+            ],
+        )
+
+    def _member_count_check():
+        # MEMBER-util: assert the ECMP group + member tables stay within the G200
+        # budget (post-75% ResourceAccountant caps: 768 groups / 13629 members).
+        # Counts come directly from `fboss2 show hw-object NEXT_HOP_GROUP` — no
+        # DLB/mode buckets (non-DLB platform). The member check fails on
+        # `>= max`, so pass max + 1 to allow exactly a full member table.
+        return create_ecmp_group_and_member_count_check(
+            ecmp_group_count=profile.max_ecmp_groups,
+            ecmp_member_count=profile.max_ecmp_members + 1,
+        )
+
+    def _common_postchecks():
+        return [
+            create_systemctl_active_state_check(
+                services=[
+                    hc_types.Service.WEDGE_AGENT,
+                    hc_types.Service.BGPD,
+                    hc_types.Service.QSFP_SERVICE,
+                    hc_types.Service.FSDB,
+                    hc_types.Service.FBOSS_SW_AGENT,
+                ]
+            ),
+            _member_count_check(),
+            create_cpu_utilization_check(
+                threshold=400.0, start_time_jq_var="test_case_start_time"
+            ),
+            create_service_restart_check(
+                services=SERVICES_TO_MONITOR_DURING_AGENT_RESTART
+            ),
+            create_memory_utilization_check(
+                threshold=5 * (1024**3),
+                threshold_by_service={
+                    "bgpd": 4.5 * (1024**3),
+                    "fsdb": 5 * (1024**3),
+                    "qsfp_service": 2 * (1024**3),
+                    "fboss_sw_agent": 9 * (1024**3),
+                },
+                start_time_jq_var="test_case_start_time",
+            ),
+            create_unclean_exit_check(),
+            _packet_loss(main_loss="0", rouge_loss="100"),
+        ]
+
+    def _widen_main_step():
+        return create_ixia_api_step(
+            api_name="modify_network_group_ecmp_width",
+            args_dict={
+                "network_group_name_regex": ".*MAIN_ECMP_PREFIXES.*",
+                "ecmp_width": profile.member_util_width,
+                "network_group_multiplier": profile.max_ecmp_members,
+            },
+            description=(
+                f"Set Main ECMP group to width {profile.member_util_width} / "
+                f"multiplier {profile.max_ecmp_members} "
+                "for Member-util testing (fills member table)"
+            ),
+        )
+
+    def _mutate_main_step():
+        # CSV-driven alternative to _widen_main_step: the member CSV already
+        # encodes width 128 / 107 groups, so injecting it establishes the full
+        # member-table shape (and regenerates traffic against those prefixes)
+        # before traffic starts.
+        return create_ixia_api_step(
+            api_name="apply_pool_mutations",
+            args_dict={"pool_csvs": [[main_csv_path, main_pool_name]]},
+            description=f"Inject Member CSV into {main_pool_name}",
+        )
+
+    def _disable_rouge_step():
+        return create_ixia_api_step(
+            api_name="toggle_device_groups",
+            args_dict={
+                "device_group_name_regex": ".*ROUGE_OVERFLOW_RESOURCE",
+                "enable": False,
+            },
+            description="Disable Rouge overflow group for Member-util testing",
+        )
+
+    def _resource_accountant_check_step():
+        return create_run_ssh_command_step(
+            cmd=(
+                "cat /var/facebook/logs/fboss/wedge_agent.log "
+                "| grep -i 'ResourceAccountant' | tail -50 "
+                "|| (echo 'FAILED: ResourceAccountant not found in agent log' "
+                "&& exit 1)"
+            )
+        )
+
+    def _flap_step(enable: bool):
+        # Simple whole-fabric prefix churn during the disruption. churn_mode must
+        # contain "prefix" (apply_flap_timing only acts on "prefix"/"session"; a
+        # bare "churn"/"random" silently no-ops). is_all_prefix_groups flaps every
+        # BGP prefix network group (Main + Rouge) on the uptime/downtime timers.
+        return create_toggle_ixia_prefix_session_flap_churn_step(
+            churn_mode="random",
+            enable_prefix_flap=enable,
+            is_all_prefix_groups=True,
+            churn_duration_s=0,
+        )
+
+    def _disruptive_stages(service, cold_boot: bool):
+        return [
+            create_steps_stage(
+                stage_id="enable_prefix_flapping", steps=[_flap_step(True)]
+            ),
+            create_steps_stage(
+                iteration=5,
+                steps=[
+                    create_service_interruption_step(
+                        service=service,
+                        trigger=taac_types.ServiceInterruptionTrigger.SYSTEMCTL_RESTART,
+                        create_cold_boot_file=cold_boot,
+                    ),
+                    create_service_convergence_step(
+                        services=[Service.AGENT, Service.BGP],
+                        timeout=300,
+                    ),
+                    create_longevity_step(duration=300),
+                ],
+            ),
+            create_steps_stage(
+                stage_id="disable_prefix_flapping", steps=[_flap_step(False)]
+            ),
+            create_steps_stage(
+                stage_id="post_restart_stabilization",
+                steps=[create_longevity_step(duration=300)],
+            ),
+        ]
+
+    def _configure_steps(overcommit: bool):
+        # Device groups default to enable=True, so overcommit needs no enable —
+        # Rouge is already on and will overflow. Only Full_Utilization disables
+        # Rouge. Main gets its full member-table shape from the CSV (or the
+        # formulaic widen when no CSV is provided).
+        steps = [] if overcommit else [_disable_rouge_step()]
+        steps.append(_mutate_main_step() if main_csv_path else _widen_main_step())
+        return steps
+
+    def _make_base(name, overcommit):
+        steps = [
+            create_longevity_step(
+                duration=60, description="Wait for BGP convergence"
+            ),
+            create_ixia_api_step(
+                api_name="start_traffic",
+                args_dict={},
+                description="Start traffic after BGP convergence",
+            ),
+            create_longevity_step(
+                duration=120, description="Steady-state measurement"
+            ),
+        ]
+        if overcommit:
+            steps.append(_resource_accountant_check_step())
+        return Playbook(
+            name=name,
+            description="ECMP-ONLY Member utilization (fill ECMP member table)",
+            backup_and_restore_ixia_config=True,
+            # Establish the member-table shape (CSV-inject / widen Main, disable
+            # Rouge when in-budget) up front, before prechecks, via setup_steps.
+            setup_steps=_configure_steps(overcommit),
+            stages=[
+                create_steps_stage(
+                    stage_id="run_traffic",
+                    steps=steps,
+                ),
+            ],
+            postchecks=_common_postchecks(),
+        )
+
+    def _make_disruptive(name, overcommit, service, cold_boot):
+        # Overcommit still validates ResourceAccountant engaged — as a stage,
+        # after setup_steps establish the over-budget config.
+        ra_stages = (
+            [
+                create_steps_stage(
+                    stage_id="validate_resource_accountant",
+                    steps=[_resource_accountant_check_step()],
+                )
+            ]
+            if overcommit
+            else []
+        )
+        return Playbook(
+            name=name,
+            backup_and_restore_ixia_config=True,
+            setup_steps=_configure_steps(overcommit),
+            stages=ra_stages + _disruptive_stages(service, cold_boot),
+            skip_test_config_snapshot_checks=True,
+            postchecks=_common_postchecks(),
+        )
+
+    return [
+        _make_base("Full_Utilization_ECMP_ONLY_Members", overcommit=False),
+        _make_disruptive(
+            "Full_Utilization_ECMP_ONLY_Members_Warmboot", False, Service.AGENT, False
+        ),
+        _make_disruptive(
+            "Full_Utilization_ECMP_ONLY_Members_bgp_restart", False, Service.BGP, False
+        ),
+        _make_disruptive(
+            "Full_Utilization_ECMP_ONLY_Members_Coldboot", False, Service.AGENT, True
+        ),
+        _make_base("Overcommit_ECMP_ONLY_Members", overcommit=True),
+        _make_disruptive(
+            "Overcommit_ECMP_ONLY_Members_Warmboot", True, Service.AGENT, False
+        ),
+        _make_disruptive(
+            "Overcommit_ECMP_ONLY_Members_bgp_restart", True, Service.BGP, False
+        ),
+        _make_disruptive(
+            "Overcommit_ECMP_ONLY_Members_Coldboot", True, Service.AGENT, True
+        ),
+    ]
 
 
 # =============================================================================

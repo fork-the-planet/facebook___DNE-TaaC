@@ -3903,6 +3903,111 @@ class Ixia:
             f"device group: {device_group_name}"
         )
 
+    def modify_network_group_ecmp_width(
+        self,
+        network_group_name_regex: str,
+        ecmp_width: int,
+        network_group_multiplier: t.Optional[int] = None,
+    ) -> None:
+        """Modify the ECMP width (and optionally the multiplier) of every network
+        group whose Name matches ``network_group_name_regex`` across all
+        topologies.
+
+        Mirrors ``modify_network_group_multipliers``: for each affected device
+        group it disables the device group, edits its matching network groups in
+        place, then re-enables it so the routes re-advertise with the new
+        width/multiplier.
+
+        ``ecmp_width`` is the per-prefix next-hop count — the ``count`` of the
+        top-level Custom increment on both the prefix-pool ``NetworkAddress`` and
+        the BGP ``Ipv6NextHop`` multivalues. restpy exposes no in-place count
+        edit, so this re-applies the ``Custom`` pattern preserving the existing
+        ``start``/``step``/``value`` and only changing the count (see
+        ``_set_custom_increment_count``). When ``network_group_multiplier`` is
+        given, the network group Multiplier is also reset (groups =
+        multiplier / width) — e.g. to grow the member-table footprint for
+        member-utilization testing.
+        """
+        pattern = re.compile(network_group_name_regex)
+
+        # Collect matching network groups per device group so each device group
+        # is disabled/re-enabled exactly once.
+        dg_to_network_groups: t.Dict["DeviceGroup", t.List["NetworkGroup"]] = {}
+        for topology in self.ixnetwork.Topology.find():
+            for device_group in topology.DeviceGroup.find():
+                matched_ngs = [
+                    ng
+                    for ng in device_group.NetworkGroup.find()
+                    if pattern.search(ng.Name)
+                ]
+                if matched_ngs:
+                    dg_to_network_groups[device_group] = matched_ngs
+
+        if not dg_to_network_groups:
+            self.logger.warning(
+                "modify_network_group_ecmp_width: no network group matched "
+                f"regex '{network_group_name_regex}'"
+            )
+            return
+
+        for device_group, network_groups in dg_to_network_groups.items():
+            # Step 1: Disable the device group.
+            self.logger.info(f"Disabling device group: {device_group.Name}")
+            device_group.Enabled.Single(False)
+            self.apply_changes()
+            time.sleep(5)
+
+            # Step 2: Update width (+ optional multiplier) for each network group.
+            for network_group in network_groups:
+                if network_group_multiplier is not None:
+                    self.logger.info(
+                        f"Updating {network_group.Name} multiplier from "
+                        f"{network_group.Multiplier} to {network_group_multiplier}"
+                    )
+                    network_group.Multiplier = network_group_multiplier
+
+                for prefix_pool in network_group.Ipv6PrefixPools.find():
+                    # Width = `count` of the Custom increment on the prefix-pool
+                    # NetworkAddress and on each BGP route NextHop.
+                    self._set_custom_increment_count(
+                        prefix_pool.NetworkAddress, ecmp_width
+                    )
+                    for route_prop in prefix_pool.BgpV6IPRouteProperty.find():
+                        self._set_custom_increment_count(
+                            route_prop.Ipv6NextHop, ecmp_width
+                        )
+                self.logger.info(f"Set {network_group.Name} ecmp_width to {ecmp_width}")
+
+            # Step 3: Re-enable the device group.
+            self.logger.info(f"Re-enabling device group: {device_group.Name}")
+            device_group.Enabled.Single(True)
+            self.apply_changes()
+
+    def _set_custom_increment_count(self, multivalue, count: int) -> None:
+        """Change only the ``count`` of a Custom-pattern multivalue's top-level
+        increment, preserving its ``start``/``step``/``value``.
+
+        restpy's ``Custom`` is a setter (``Custom(start_value, step_value,
+        increments=[(value, count, [])])``) with no in-place count edit, and the
+        current pattern is stored under ``_properties["custom"]`` as
+        ``{"start", "step", "increment": [{"value", "count", "increment"}]}``
+        (see ixnetwork_restpy/multivalue.py). So read the existing start/step/
+        value (forcing a fetch via the ``Pattern`` getter first) and re-apply
+        the Custom pattern with the new count. Assumes a single top-level
+        increment with no nested children (matches the ECMP-resource configs).
+        """
+        # ``Pattern`` getter populates ``_properties`` from the server.
+        multivalue.Pattern
+        custom = multivalue._properties["custom"]
+        start_value = custom["start"]
+        step_value = custom["step"]
+        increment_value = custom["increment"][0]["value"]
+        multivalue.Custom(
+            start_value=start_value,
+            step_value=step_value,
+            increments=[(increment_value, count, [])],
+        )
+
     def configure_custom_network_groups(
         self,
         custom_network_groups: t.List["ixia_types.CustomNetworkGroupConfig"],
