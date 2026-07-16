@@ -36,6 +36,8 @@ Usage:
     --debug --continue-on-precheck-failure --skip-fboss-rsyslog
 """
 
+import os
+
 from taac.libs.fpf.fpf_prod_prefix_map import get_prefix
 from taac.playbooks.playbook_definitions import (
     create_fpf_disrupt_window_playbook,
@@ -103,11 +105,14 @@ INJECTION_GROUPS = fpf_vf_injection_groups()
 RF_VF_GROUPS = fpf_rf_vf_groups()
 PREFIX_COUNT = VF_GROUP_PREFIX_COUNT
 INJECTED_LANES = ALL_LANES
-# Bumped back to 300s: under the umbrella, the very first few playbooks (tc41
-# baseline, tc05-08, tc23-25) saw BGP_SESSION_ESTABLISH + lane-0 convergence
-# failures because the fabric was still under-settled after the heavy preceding
-# churn at only 120s; 300s gives the shared injection enough settle margin.
-INJECT_SETTLE_SEC = 300
+# Settle after the ONE shared STSW injection, before the first playbook's
+# prechecks. Observed convergence is <10s end-to-end (BGP RIB + FSDB ribMap reach
+# 1000 in ~7-8s on every GTSW; HRT sessions 32/32), so 60s is ~6x margin and is
+# enough. Overridable via FPF_INJECT_SETTLE_SEC for tuning / re-validation.
+# (History: was 120s, briefly 300s to paper over first-few-playbook
+# BGP_SESSION_ESTABLISH flakiness under heavy back-to-back churn; 60s validated
+# on single-case --regex runs.)
+INJECT_SETTLE_SEC = int(os.environ.get("FPF_INJECT_SETTLE_SEC", "60"))
 
 PROD_PREFIX_HOST = GPU_HOSTS[0]
 PROD_PREFIX_DEVICE_ID = 0
