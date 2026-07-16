@@ -121,12 +121,13 @@ ALL_STSW_TRIGGERS = ALL_STSWS
 
 # ---------------------------------------------------------------------------
 # Circuit list (the GTSW<->GPU link the link-event playbooks drive) — identical
-# to tc15/tc16/tc17/tc19. gtsw001 -> lane 0, rtptest1544 GPU0 beth0.
+# to tc15/tc16/tc17/tc19. gtsw001 -> lane 0, rtptest1555 GPU0 beth0.
+# (rtptest1555 hangs off eth1/45/x on each GTSW; the retired rtptest1544 used eth1/41/x.)
 # ---------------------------------------------------------------------------
 CIRCUITS = [
     Circuit(
         a_end_device=OBSERVER_GTSWS[0],
-        a_end_interface="eth1/41/5",
+        a_end_interface="eth1/45/5",
         z_end_device=GPU_HOSTS[0],
         z_end_gpu_id=0,
     ),
