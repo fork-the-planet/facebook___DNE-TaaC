@@ -2181,10 +2181,11 @@ def _ps_case1_build_per_iteration_peer_setup_steps(n: int) -> list[Step]:
 
 
 # Retry budget for the per-iteration session-establish gate. After the device is
-# reloaded to this iteration's peer set, sessions need time to reach Established
-# before prefixes are advertised; ~5 min ceiling covers the largest sweep points
-# (up to ~1000 sessions).
-_PS_CASE1_SESSION_RETRY_COUNT: int = 30
+# reloaded to this iteration's peer set, sessions reach Established within a
+# minute or so; a ~90s ceiling (9 attempts) covers that headroom while failing
+# fast on a hard failure (a device that can't reach the expected count will
+# never get there, so there is no point waiting a long budget).
+_PS_CASE1_SESSION_RETRY_COUNT: int = 8
 _PS_CASE1_SESSION_RETRY_DELAY_SECONDS: float = 10.0
 
 

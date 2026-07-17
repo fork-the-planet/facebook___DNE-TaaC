@@ -81,8 +81,12 @@ def _generate_bgpcpp_peers_modification_tasks(
     router_id_line = ""
     if router_id is not None:
         router_id_line = f"c['router_id']='{router_id}'; "
+    # sudo: /mnt/flash/bgpcpp_config is root-owned on some EOS boxes (e.g.
+    # bag010); the base config is deployed with privilege, so this merge must
+    # write as root too — otherwise open('w') raises PermissionError and the
+    # device silently keeps the full-scale config.
     merge_script = (
-        f'python3 -c "'
+        f'sudo python3 -c "'
         f"import json; "
         f"f=open('{config_path}'); c=json.load(f); f.close(); "
         f"p=open('/tmp/experiment_peers.json'); "

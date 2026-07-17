@@ -68,6 +68,7 @@ from taac.task_definitions import (
     create_coop_apply_patchers_task,
     create_coop_register_patcher_task,
     create_coop_unregister_patchers_task,
+    create_interface_ip_configuration_task,
     create_replace_bgp_peers_task,
     create_run_commands_on_shell_task,
     create_scp_file_template_task,
@@ -89,6 +90,7 @@ from taac.testconfigs.routing.util.bgp_ebb_constants import (
     IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE1,
     IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
     IXIA_IPV4_START_OFFSET,
+    IXIA_IPV6_START_OFFSET,
     PEERGROUP_EBGP_V4,
     PEERGROUP_EBGP_V6,
     PEERGROUP_IBGP_V4,
@@ -1538,6 +1540,35 @@ def create_bgp_ebb_characteristic_performance_scaling_test_config(
         bgpcpp_configerator_path=testbed.bgpcpp_configerator_path,
         profile=BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
         enable_update_group=enable_update_group,
+        # Align v4 peer local addresses to the device's v4 secondary-interface-IP
+        # offset (IXIA_IPV4_START_OFFSET=10). Without this the v4 peers default to
+        # offset 16 while the interface IPs sit at 10, so the eBGP v4 peer and the
+        # tail iBGP v4 peers have no local source IP and stay IDLE. (v6 already
+        # aligns: both interface IPs and peers use offset 16.)
+        v4_peer_start_offset=IXIA_IPV4_START_OFFSET,
+    )
+    # The per-iteration rescale rewrites only the bgpcpp peer list, never the
+    # interface secondary IPs. get_update_packing_setup_tasks lays the iBGP
+    # interface's source IPs for just the first sweep stage
+    # (_PERFORMANCE_SCALING_EGRESS_PEER_COUNTS[0]), so every peer beyond that
+    # stage has no local source address and stays IDLE (bag010 came up
+    # established=202 at every stage, IDLE=total-202; P2415335739). Re-lay the
+    # iBGP interface once at the full sweep max (clear_existing supersedes the
+    # helper's smaller set); each stage then sources from the first n of these.
+    # eBGP is constant at 1 peer/AFI, so its interface is already covered.
+    setup_tasks.append(
+        create_interface_ip_configuration_task(
+            interface=ixia_interface_mimic_ibgp,
+            peer_count=max(_PERFORMANCE_SCALING_EGRESS_PEER_COUNTS),
+            ipv4_base_network=IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE1,
+            ipv6_base_network=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
+            address_families=["ipv6", "ipv4"],
+            clear_existing=True,
+            ipv4_start_offset=IXIA_IPV4_START_OFFSET,
+            ipv6_start_offset=IXIA_IPV6_START_OFFSET,
+            hostname=device_name,
+            ixia_needed=True,
+        )
     )
     factory = build_per_iteration_factory_v4_capable(
         device_name=device_name,
@@ -1553,6 +1584,9 @@ def create_bgp_ebb_characteristic_performance_scaling_test_config(
         peergroup_ibgp_v6=PEERGROUP_IBGP_V6,
         peergroup_ibgp_v4=PEERGROUP_IBGP_V4,
         ebgp_peer_count=1,
+        # Same v4 offset alignment for the per-stage peer rewrites — the
+        # load-bearing path at convergence time.
+        v4_peer_start_offset=IXIA_IPV4_START_OFFSET,
     )
     return create_bgp_ebb_scaling_performance_test_config(
         testbed,

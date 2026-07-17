@@ -938,25 +938,40 @@ def build_sweep_peer_list(
     peergroup_ibgp_v4: str,
     ebgp_peer_count: int,
     ibgp_peer_count: int,
+    v4_peer_start_offset: int = 16,
 ) -> t.List[t.Dict[str, t.Any]]:
     """Build the full peer-list for one sweep iteration: v6+v4 EBGP + v6+v4 IBGP.
 
     Just concatenates outputs of the two single-AF generators. Pass the
     result to ``build_bgpcpp_peers_patch_shell_cmds`` to splice it into
     the deployed bgpcpp_config.
+
+    ``v4_peer_start_offset`` is the host offset of the first IPv4 peer's local
+    address; it MUST match the device's v4 secondary-interface-IP offset
+    (``IXIA_IPV4_START_OFFSET``) or those v4 sessions have no local source
+    address and stay IDLE. The v6 offset is fixed at 16 (matches the v6
+    interface IPs).
     """
     return (
         _generate_ixia_v6_peer_entries_for_bgpcpp(
             ebgp_remote_as, ebgp_v6_base, ebgp_peer_count, peergroup_ebgp_v6
         )
         + _generate_ixia_v4_peer_entries_for_bgpcpp(
-            ebgp_remote_as, ebgp_v4_base, ebgp_peer_count, peergroup_ebgp_v4
+            ebgp_remote_as,
+            ebgp_v4_base,
+            ebgp_peer_count,
+            peergroup_ebgp_v4,
+            start_offset=v4_peer_start_offset,
         )
         + _generate_ixia_v6_peer_entries_for_bgpcpp(
             ibgp_remote_as, ibgp_v6_base, ibgp_peer_count, peergroup_ibgp_v6
         )
         + _generate_ixia_v4_peer_entries_for_bgpcpp(
-            ibgp_remote_as, ibgp_v4_base, ibgp_peer_count, peergroup_ibgp_v4
+            ibgp_remote_as,
+            ibgp_v4_base,
+            ibgp_peer_count,
+            peergroup_ibgp_v4,
+            start_offset=v4_peer_start_offset,
         )
     )
 
@@ -1001,8 +1016,12 @@ def build_bgpcpp_peers_patch_shell_cmds(
     # the deployed config's router_id untouched. A real router_id reproduces the
     # original command string verbatim, keeping existing configs' golden stable.
     router_id_line = f"c['router_id']='{router_id}'; " if router_id is not None else ""
+    # sudo: /mnt/flash/bgpcpp_config is root-owned on some EOS boxes (e.g.
+    # bag010); the base config is deployed with privilege, so the peer merge
+    # must write as root too — otherwise open('w') raises PermissionError and
+    # the device silently keeps the full-scale config.
     merge = (
-        'bash python3 -c "import json; '
+        'bash sudo python3 -c "import json; '
         f"f=open('{config_path}'); c=json.load(f); f.close(); "
         "p=open('/tmp/peers.json'); c['peers']=json.load(p); p.close(); "
         f"{router_id_line}"
@@ -1128,6 +1147,7 @@ def build_per_iteration_factory_v4_capable(
     peergroup_ibgp_v6: str,
     peergroup_ibgp_v4: str,
     ebgp_peer_count: int = 1,
+    v4_peer_start_offset: int = 16,
     config_path: str = BGPCPP_CONFIG_PATH,
 ):
     """Return a closure ``(n_v6, n_v4) -> List[Step]`` for v6+v4 sweeps.
@@ -1136,6 +1156,11 @@ def build_per_iteration_factory_v4_capable(
       1. Build the combined v6+v4 EBGP+IBGP peers list for this iteration.
       2. Rescale ``/mnt/flash/bgpcpp_config`` (Bgp disable → patch → enable).
       3. Activate the matching IXIA IBGP session subset.
+
+    ``v4_peer_start_offset`` must match the device's v4 secondary-interface-IP
+    offset (``IXIA_IPV4_START_OFFSET``); otherwise the per-iteration v4 peers
+    are generated with local addresses the interface does not have and stay
+    IDLE.
 
     Plug into ``test_config_for_bgp_plus_plus_on_ebb_arista_performance_scaling``'s
     ``per_iteration_setup_steps_factory`` parameter.
@@ -1155,6 +1180,7 @@ def build_per_iteration_factory_v4_capable(
             peergroup_ibgp_v4=peergroup_ibgp_v4,
             ebgp_peer_count=ebgp_peer_count,
             ibgp_peer_count=max(n_v6, n_v4),
+            v4_peer_start_offset=v4_peer_start_offset,
         )
         return build_rescale_bgpcpp_config_steps(
             device_name=device_name,
