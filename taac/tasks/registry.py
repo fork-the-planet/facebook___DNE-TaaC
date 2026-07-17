@@ -10,6 +10,9 @@ TAAC_OSS = os.environ.get("TAAC_OSS", "").lower() in ("1", "true", "yes")
 # statically resolve the runtime TAAC_OSS env check) so the conditional
 # TASK_REGISTRY.extend() below doesn't trip "may be uninitialized".
 if t.TYPE_CHECKING or not TAAC_OSS:
+    from taac.internal.tasks.bgp_clear_route_filter_task import (
+        BgpClearRouteFilterTask,
+    )
     from taac.internal.tasks.bgp_peer_group_config_task import (
         GetEnforceFirstAsRejectsTask,
         SetPeerGroupEnforceFirstAsTask,
@@ -197,6 +200,7 @@ if not TAAC_OSS:
             OpenRRouteActionTask,
             DeviceProvisioningTask,
             BgpSetRouteFilterTask,
+            BgpClearRouteFilterTask,
             BgpSetPeerGroupsPolicyTask,
             BgpSetPeersPolicyTask,
             BgpVerifyReceivedRoutesTask,

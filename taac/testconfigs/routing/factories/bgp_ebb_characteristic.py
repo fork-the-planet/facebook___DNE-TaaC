@@ -64,6 +64,7 @@ from taac.steps.step_definitions import (
     create_sc_8_steps,
 )
 from taac.task_definitions import (
+    create_bgp_clear_route_filter_task,
     create_configure_bgpcpp_startup_task,
     create_coop_apply_patchers_task,
     create_coop_register_patcher_task,
@@ -1591,6 +1592,19 @@ def create_bgp_ebb_characteristic_performance_scaling_test_config(
             hostname=device_name,
             flags={_NEXTHOP_IFACE_STATE_FLAG: "true"},
             use_managed_shell=True,
+            set_outer_hostname=True,
+            ixia_needed=True,
+        )
+    )
+    # This test injects arbitrary scale prefixes that are not in the device's
+    # baked-in route registry, so the Centralized Route Filter (CRF) denies all
+    # but the ~registered handful ("Denied by Route Filter Policy"). Clear the
+    # route filter so no inbound prefix is blocked; the clear deletes the
+    # persisted rp_state_file, so the daemon stays CRF-free across the per-stage
+    # Bgp restarts.
+    setup_tasks.append(
+        create_bgp_clear_route_filter_task(
+            hostname=device_name,
             set_outer_hostname=True,
             ixia_needed=True,
         )

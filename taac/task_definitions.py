@@ -629,6 +629,41 @@ def create_run_commands_on_shell_task(
     )
 
 
+def create_bgp_clear_route_filter_task(
+    hostname: str,
+    set_outer_hostname: bool = False,
+    ixia_needed: bool = False,
+) -> Task:
+    """
+    Create a task to clear the BGP route filter policy (CRF) on a device.
+
+    Removes the ingress route-filter ("route registry") so no inbound eBGP
+    prefixes are blocked; the clear also deletes the persisted rp_state_file, so
+    the daemon stays CRF-free across restarts. Used by scale tests that inject
+    arbitrary prefixes not in the device's baked-in registry.
+
+    Args:
+        hostname: Name of the device to clear the route filter on
+        set_outer_hostname: If True, also set Task.hostname (the outer Thrift
+            field) for runner-side scoping, matching sibling managed setup tasks.
+        ixia_needed: If True, the task runs after IXIA setup with the device
+            driver ready, for phasing parity with sibling managed setup tasks.
+
+    Returns:
+        Task object for clearing the BGP route filter
+    """
+    task_kwargs: t.Dict[str, t.Any] = {
+        "task_name": "bgp_clear_route_filter",
+        "params": Params(json_params=json.dumps({"hostname": hostname})),
+    }
+    if set_outer_hostname:
+        task_kwargs["hostname"] = hostname
+    if ixia_needed:
+        task_kwargs["ixia_needed"] = ixia_needed
+
+    return Task(**task_kwargs)
+
+
 def create_full_reboot_task(
     hostname: str,
     reboot_cmd: t.Optional[str] = None,
