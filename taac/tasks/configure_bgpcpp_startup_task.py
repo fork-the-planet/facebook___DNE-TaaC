@@ -38,10 +38,31 @@ if not TAAC_OSS:
         AristaSSHHelper,
     )
 from taac.tasks.base_task import BaseTask
+from taac.utils.driver_factory import async_get_device_driver
 
 
 # Path to bgpcpp startup script on EOS devices
 RUN_BGPCPP_SCRIPT_PATH = "/usr/sbin/run_bgpcpp.sh"
+
+
+def _build_flag_sed_commands(flag_name: str, flag_value: str) -> t.List[str]:
+    """
+    Build the idempotent seds that add/update one bgpcpp gflag in
+    run_bgpcpp.sh, in order:
+      1. drop any stale line mentioning the flag (idempotent cleanup),
+      2. ensure the --max_rss_size line ends with a line continuation,
+      3. insert --{flag}={value} right after the --max_rss_size line.
+
+    Shared by the raw-SSH and managed-shell execution paths so the sed
+    logic has a single source of truth.
+    """
+    return [
+        f"bash sudo sed -i '/{flag_name}/d' {RUN_BGPCPP_SCRIPT_PATH}",
+        f"bash sudo sed -i '/--max_rss_size/s/[^\\\\]$/& \\\\/' "
+        f"{RUN_BGPCPP_SCRIPT_PATH}",
+        f"bash sudo sed -i '/--max_rss_size/a\\      "
+        f"--{flag_name}={flag_value}' {RUN_BGPCPP_SCRIPT_PATH}",
+    ]
 
 
 class ConfigureBgpcppStartupTask(BaseTask):
@@ -67,18 +88,62 @@ class ConfigureBgpcppStartupTask(BaseTask):
 
     async def run(self, params: t.Dict[str, t.Any]) -> None:
         """Run the task to configure bgpcpp startup flags."""
-        if TAAC_OSS:
-            raise NotImplementedError(
-                "ConfigureBgpcppStartupTask requires the Meta-internal "
-                "AristaSSHHelper and cannot run under TAAC_OSS=1."
-            )
         hostname = params["hostname"]
         flags = params["flags"]
-        ssh_user = params.get("ssh_user", "admin")
-        ssh_password = params.get("ssh_password", "")
         restart_bgp = params.get("restart_bgp", False)
+        use_managed_shell = params.get("use_managed_shell", False)
 
         self.logger.info(f"Configuring bgpcpp startup flags on {hostname}: {flags}")
+
+        if use_managed_shell:
+            await self._apply_flags_managed(hostname, flags, restart_bgp)
+        else:
+            self._apply_flags_ssh(hostname, flags, params, restart_bgp)
+
+    async def _apply_flags_managed(
+        self,
+        hostname: str,
+        flags: t.Dict[str, str],
+        restart_bgp: bool,
+    ) -> None:
+        """
+        Apply the run_bgpcpp.sh gflag edits over the managed device driver
+        (async shell), for pipelines that run under a netcastle reservation
+        rather than raw SSH (e.g. the perf-scaling sweep).
+        """
+        driver = await async_get_device_driver(hostname)
+        for flag_name, flag_value in flags.items():
+            self.logger.info(f"  Setting --{flag_name}={flag_value}")
+            for cmd in _build_flag_sed_commands(flag_name, flag_value):
+                await driver.async_run_cmd_on_shell(cmd)
+
+        # A BGP restart is needed for the new flags to take effect; over the
+        # managed shell the caller sequences that separately (the perf-scaling
+        # sweep restarts BGP per stage), so we only warn if asked to do it here.
+        if restart_bgp:
+            self.logger.warning(
+                "restart_bgp is not supported in managed-shell mode; the caller "
+                "must restart the BGP daemon separately."
+            )
+
+        self.logger.info("Successfully configured bgpcpp startup flags")
+
+    def _apply_flags_ssh(
+        self,
+        hostname: str,
+        flags: t.Dict[str, str],
+        params: t.Dict[str, t.Any],
+        restart_bgp: bool,
+    ) -> None:
+        """Apply the run_bgpcpp.sh gflag edits over raw SSH (AristaSSHHelper)."""
+        if TAAC_OSS:
+            raise NotImplementedError(
+                "ConfigureBgpcppStartupTask raw-SSH mode requires the "
+                "Meta-internal AristaSSHHelper and cannot run under TAAC_OSS=1. "
+                "Use use_managed_shell=True instead."
+            )
+        ssh_user = params.get("ssh_user", "admin")
+        ssh_password = params.get("ssh_password", "")
 
         ssh_helper = AristaSSHHelper(
             hostname=hostname,
@@ -88,28 +153,22 @@ class ConfigureBgpcppStartupTask(BaseTask):
 
         for flag_name, flag_value in flags.items():
             self.logger.info(f"  Setting --{flag_name}={flag_value}")
+            remove_cmd, add_continuation_cmd, insert_cmd = _build_flag_sed_commands(
+                flag_name, flag_value
+            )
 
             # Step 1: Remove any existing line with this flag (idempotent cleanup)
-            remove_cmd = f"bash sudo sed -i '/{flag_name}/d' {RUN_BGPCPP_SCRIPT_PATH}"
             success, output = ssh_helper.run_command(remove_cmd)
             if not success:
                 self.logger.warning(f"Failed to remove existing {flag_name}: {output}")
 
             # Step 2: Add line continuation to the max_rss_size line
             # (only if it doesn't already have one)
-            add_continuation_cmd = (
-                f"bash sudo sed -i '/--max_rss_size/s/[^\\\\]$/& \\\\/' "
-                f"{RUN_BGPCPP_SCRIPT_PATH}"
-            )
             success, output = ssh_helper.run_command(add_continuation_cmd)
             if not success:
                 self.logger.warning(f"Failed to add line continuation: {output}")
 
             # Step 3: Insert the new flag after max_rss_size line
-            insert_cmd = (
-                f"bash sudo sed -i '/--max_rss_size/a\\      "
-                f"--{flag_name}={flag_value}' {RUN_BGPCPP_SCRIPT_PATH}"
-            )
             success, output = ssh_helper.run_command(insert_cmd)
             if not success:
                 raise Exception(f"Failed to add --{flag_name}={flag_value}: {output}")

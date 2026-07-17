@@ -938,6 +938,20 @@ class ScpFile(BaseTask):
         self.logger.info(f"Successfully copied file to {hostname}:{remote_path}")
 
 
+# In-shell commands (e.g. the base64 peer-list write) can be tens of KB; log
+# only a bounded preview so the run log stays readable. The full command is
+# always sent to the device regardless.
+_MAX_LOGGED_CMD_CHARS = 200
+
+
+def _truncate_cmd_for_log(cmd: str, max_chars: int = _MAX_LOGGED_CMD_CHARS) -> str:
+    """Return a bounded preview of a shell command for logging only."""
+    if len(cmd) <= max_chars:
+        return cmd
+
+    return f"{cmd[:max_chars]}... [truncated {len(cmd)} chars]"
+
+
 class RunCommandsOnShell(BaseTask):
     NAME = "run_commands_on_shell"
 
@@ -946,7 +960,9 @@ class RunCommandsOnShell(BaseTask):
         cmds = params.get("cmds", [])
         driver = await async_get_device_driver(hostname)
         for cmd in cmds:
-            self.logger.info(f"{hostname} -- Running command: {cmd}")
+            self.logger.info(
+                f"{hostname} -- Running command: {_truncate_cmd_for_log(cmd)}"
+            )
             await driver.async_run_cmd_on_shell(cmd)
 
 

@@ -1191,6 +1191,17 @@ def create_bgp_ebb_characteristic_queue_memory_monitor_test_config(
 _PERFORMANCE_SCALING_EGRESS_PEER_COUNTS: list = [100, 200, 300, 400, 500]
 _PERFORMANCE_SCALING_PREFIX_COUNT: int = 50000
 
+# Interface-state nexthop-resolution gflag. This test runs WITHOUT_OPEN_R, so
+# recursive/loopback nexthops never resolve via the (dead) Open/R FIB stream;
+# the eBGP nexthop is directly connected and must resolve through NetlinkWrapper
+# instead. NetlinkWrapper only populates the nexthopCache from interface
+# link-state + prefix match when bgp_resolve_nexthops_from_interface_state is
+# set; with the default (legacy, ARP/ND-based) path the connected nexthop stayed
+# unresolved, so no path was ever selected and convergence completed vacuously.
+# Enabling the gflag in run_bgpcpp.sh makes egress routes actually resolve and
+# get selected.
+_NEXTHOP_IFACE_STATE_FLAG: str = "bgp_resolve_nexthops_from_interface_state"
+
 # bag012.ash6 nexthop group threshold parameters for bounded ECMP.
 _BAG012_BOUNDED_ECMP_PEER_COUNT: int = 128
 _BAG012_BOUNDED_ECMP_PREFIX_COUNT: int = 5000
@@ -1566,6 +1577,21 @@ def create_bgp_ebb_characteristic_performance_scaling_test_config(
             ipv4_start_offset=IXIA_IPV4_START_OFFSET,
             ipv6_start_offset=IXIA_IPV6_START_OFFSET,
             hostname=device_name,
+            ixia_needed=True,
+        )
+    )
+    # Enable the interface-state nexthop-resolution gflag in run_bgpcpp.sh so
+    # directly-connected egress nexthops resolve via NetlinkWrapper under
+    # WITHOUT_OPEN_R (see _NEXTHOP_IFACE_STATE_FLAG above). use_managed_shell
+    # routes the standardized startup task over the managed device driver the
+    # perf-scaling sweep runs under (it passes no SSH credentials); the
+    # per-stage Bgp restart then picks up the new flag.
+    setup_tasks.append(
+        create_configure_bgpcpp_startup_task(
+            hostname=device_name,
+            flags={_NEXTHOP_IFACE_STATE_FLAG: "true"},
+            use_managed_shell=True,
+            set_outer_hostname=True,
             ixia_needed=True,
         )
     )

@@ -1862,6 +1862,9 @@ def create_configure_bgpcpp_startup_task(
     ssh_user: t.Optional[str] = None,
     ssh_password: t.Optional[str] = None,
     restart_bgp: bool = False,
+    use_managed_shell: bool = False,
+    set_outer_hostname: bool = False,
+    ixia_needed: bool = False,
 ) -> Task:
     """
     Create a task to configure bgpcpp startup flags on a device.
@@ -1876,6 +1879,14 @@ def create_configure_bgpcpp_startup_task(
         ssh_user: SSH username for the device
         ssh_password: SSH password for the device
         restart_bgp: Whether to restart BGP daemon after applying (default: False)
+        use_managed_shell: If True, apply the flag edits over the managed device
+            driver (async shell) instead of raw SSH. Use for pipelines that run
+            under a netcastle reservation and pass no SSH credentials (e.g. the
+            perf-scaling sweep). The caller must restart BGP separately.
+        set_outer_hostname: If True, also set Task.hostname (the outer Thrift
+            field) for runner-side scoping, matching sibling managed setup tasks.
+        ixia_needed: If True, the task runs after IXIA setup with the device
+            driver ready, for phasing parity with sibling managed setup tasks.
 
     Returns:
         Task object for configuring bgpcpp startup
@@ -1890,11 +1901,21 @@ def create_configure_bgpcpp_startup_task(
         params["ssh_password"] = ssh_password
     if restart_bgp:
         params["restart_bgp"] = restart_bgp
+    if use_managed_shell:
+        params["use_managed_shell"] = use_managed_shell
 
-    return Task(
-        task_name="configure_bgpcpp_startup",
-        params=Params(json_params=json.dumps(params)),
-    )
+    # Only set the outer Task fields when requested so existing raw-SSH callers
+    # produce byte-identical Tasks (no golden manifest churn).
+    task_kwargs: t.Dict[str, t.Any] = {
+        "task_name": "configure_bgpcpp_startup",
+        "params": Params(json_params=json.dumps(params)),
+    }
+    if set_outer_hostname:
+        task_kwargs["hostname"] = hostname
+    if ixia_needed:
+        task_kwargs["ixia_needed"] = ixia_needed
+
+    return Task(**task_kwargs)
 
 
 def create_inject_bgp_policy_statements_task(
