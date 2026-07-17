@@ -2132,7 +2132,9 @@ def _ps_case1_common_periodic_tasks(device_name: str):
         device_name=device_name,
         memory_threshold=Gigabyte.GIG_5.value,
         cpu_util_terminate_on_error=False,
-        memory_terminate_on_error=False,
+        # Fail the run the moment bgpd RSS exceeds the 5 GB ceiling mid-run
+        # (fail_on_breach); a bgpd over 5 GB is a real problem on any device.
+        memory_terminate_on_error=True,
     )
 
 

@@ -1017,6 +1017,7 @@ def create_counter_utilization_task(
     threshold: float,
     enable_plotting: bool = True,
     cpu_count: t.Optional[int] = None,
+    fail_on_breach: bool = False,
 ) -> Task:
     """
     Create a task to check counter utilization.
@@ -1027,6 +1028,11 @@ def create_counter_utilization_task(
         threshold: Utilization threshold
         enable_plotting: Whether to enable plotting
         cpu_count: Optional CPU count for normalization
+        fail_on_breach: When True, the task raises the moment a sampled value
+            exceeds ``threshold`` mid-run. Combined with the PeriodicTask's
+            ``terminate_on_error=True`` this fails the test immediately instead
+            of only recording a non-gating final-check result. Left out of the
+            serialized params when False to preserve golden byte-equivalence.
 
     Returns:
         Task object to check counter utilization
@@ -1039,6 +1045,8 @@ def create_counter_utilization_task(
     }
     if cpu_count is not None:
         params["cpu_count"] = cpu_count
+    if fail_on_breach:
+        params["fail_on_breach"] = fail_on_breach
 
     return Task(
         task_name="counter_utilization",
@@ -1668,6 +1676,7 @@ def create_standard_periodic_tasks(
                 key="bgpd.process.memory.rss.bytes",
                 threshold=memory_threshold,
                 enable_plotting=True,
+                fail_on_breach=memory_terminate_on_error,
             ),
             retryable=False,
             terminate_on_error=memory_terminate_on_error,

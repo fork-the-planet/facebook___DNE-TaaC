@@ -271,6 +271,15 @@ async def _generate_plot(
         return None
 
 
+class CounterThresholdBreach(Exception):
+    """Raised by CounterThresholdTask when a sampled counter exceeds its
+    threshold mid-run and the task is configured with ``fail_on_breach=True``.
+
+    It propagates to PeriodicTaskWorker, which — when the PeriodicTask has
+    ``terminate_on_error=True`` — terminates the test as a failure.
+    """
+
+
 class CounterThresholdTask(PeriodicTask):
     NAME = "counter_utilization"
 
@@ -289,15 +298,22 @@ class CounterThresholdTask(PeriodicTask):
                     counter reports per-core cumulative CPU
                     (e.g., bgpd.process.cpu.percent where 400 = 4 cores fully
                     used). Default: None (no normalization).
+                - fail_on_breach: When True, raise ``CounterThresholdBreach``
+                    the moment a sample exceeds ``threshold`` so the
+                    PeriodicTaskWorker (with ``terminate_on_error=True``) fails
+                    the test mid-run. When False (default), a breach only warns
+                    and is left to the non-gating final check. Default: False.
         """
         hostname = params["hostname"]
         key = params["key"]
         threshold = params["threshold"]
         cpu_count = params.get("cpu_count", None)
+        fail_on_breach = params.get("fail_on_breach", False)
 
-        driver = await async_get_device_driver(hostname)
+        counter = None
         try:
             self.logger.info(f"Attempting to get counter {key} from {hostname}")
+            driver = await async_get_device_driver(hostname)
             # pyre-fixme[16]: `AbstractSwitch` has no attribute `async_get_counter`.
             counter = await driver.async_get_counter(key)
             self.logger.info(f"Successfully got counter {key} raw value: {counter}")
@@ -309,19 +325,27 @@ class CounterThresholdTask(PeriodicTask):
                 )
 
             self.add_data(counter)
-
-            if counter > threshold:
-                self.logger.warning(
-                    f"{key} value {counter} exceeds threshold {threshold} (will check max at end)"
-                )
-            else:
-                self.logger.info(
-                    f"{key} value {counter} is within threshold {threshold}"
-                )
         except Exception as e:
             self.logger.error(
                 f"Error collecting counter data for {key}: {e}", exc_info=True
             )
+            return
+
+        # Threshold evaluation is intentionally OUTSIDE the collection
+        # try/except: a fail_on_breach raise must propagate to the worker (which
+        # terminates the test) rather than being swallowed as a collection error.
+        if counter > threshold:
+            if fail_on_breach:
+                raise CounterThresholdBreach(
+                    f"{key} value {counter} exceeded threshold {threshold} "
+                    f"mid-run on {hostname}; failing test (fail_on_breach=True)."
+                )
+
+            self.logger.warning(
+                f"{key} value {counter} exceeds threshold {threshold} (will check max at end)"
+            )
+        else:
+            self.logger.info(f"{key} value {counter} is within threshold {threshold}")
 
     async def run_final_check(self) -> t.Optional[PeriodicCheckResult]:
         """
