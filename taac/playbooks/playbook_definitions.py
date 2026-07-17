@@ -10663,7 +10663,7 @@ def create_ecmp_only_groups_playbooks(
         return Playbook(
             name=name,
             description="ECMP-ONLY Group utilization (fill ECMP group table)",
-            backup_and_restore_ixia_config=True,
+            # backup_and_restore_ixia_config=True,
             setup_steps=_configure_steps(overcommit),
             stages=[
                 create_steps_stage(
@@ -10689,7 +10689,7 @@ def create_ecmp_only_groups_playbooks(
         )
         return Playbook(
             name=name,
-            backup_and_restore_ixia_config=True,
+            # backup_and_restore_ixia_config=True,
             setup_steps=_configure_steps(overcommit),
             stages=ra_stages + _disruptive_stages(service, cold_boot),
             skip_test_config_snapshot_checks=True,
@@ -10916,7 +10916,7 @@ def create_ecmp_only_members_playbooks(
         return Playbook(
             name=name,
             description="ECMP-ONLY Member utilization (fill ECMP member table)",
-            backup_and_restore_ixia_config=True,
+            # backup_and_restore_ixia_config=True,
             # Establish the member-table shape (CSV-inject / widen Main, disable
             # Rouge when in-budget) up front, before prechecks, via setup_steps.
             setup_steps=_configure_steps(overcommit),
@@ -10944,7 +10944,7 @@ def create_ecmp_only_members_playbooks(
         )
         return Playbook(
             name=name,
-            backup_and_restore_ixia_config=True,
+            # backup_and_restore_ixia_config=True,
             setup_steps=_configure_steps(overcommit),
             stages=ra_stages + _disruptive_stages(service, cold_boot),
             skip_test_config_snapshot_checks=True,
