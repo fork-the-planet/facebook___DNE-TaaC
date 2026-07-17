@@ -1186,19 +1186,21 @@ def create_bgp_ebb_characteristic_queue_memory_monitor_test_config(
 # simplified rewrite of D104072489: per stage n peers per AF, total = 2n + 2
 # EBGP. Each Stage rewrites /mnt/flash/bgpcpp_config to the matching number of
 # peer entries so BGP++ EOR completes from 100% of configured peers.
-_BAG012_PERFORMANCE_SCALING_EGRESS_PEER_COUNTS: list = [100, 200, 300, 400, 500]
-_BAG012_PERFORMANCE_SCALING_PREFIX_COUNT: int = 50000
+_PERFORMANCE_SCALING_EGRESS_PEER_COUNTS: list = [100, 200, 300, 400, 500]
+_PERFORMANCE_SCALING_PREFIX_COUNT: int = 50000
 
 # bag012.ash6 nexthop group threshold parameters for bounded ECMP.
 _BAG012_BOUNDED_ECMP_PEER_COUNT: int = 128
 _BAG012_BOUNDED_ECMP_PREFIX_COUNT: int = 5000
 
 
-def _bag012_direct_ixia_connections(testbed: Testbed) -> list[DirectIxiaConnection]:
-    """Two DirectIxiaConnection entries (eBGP + iBGP), no BGP-MON.
+def _two_port_direct_ixia_connections(testbed: Testbed) -> list[DirectIxiaConnection]:
+    """Two DirectIxiaConnection entries from ``testbed.ixia_ports[0]`` (eBGP)
+    and ``[1]`` (iBGP).
 
-    bag012.ash6 wires only two IXIA ports (unlike bag010/bag011/bag013 which
-    also have a BGP-MON port).
+    For the 2-port EBB characteristic tests (no BGP-MON connection). Testbeds
+    that also wire a third BGP-MON port (bag010/bag011/bag013) leave it unused
+    here.
     """
     ebgp_iface, ebgp_port = testbed.ixia_ports[0]
     ibgp_iface, ibgp_port = testbed.ixia_ports[1]
@@ -1297,7 +1299,7 @@ def create_bgp_ebb_update_packing_test_config(
         # Conveyor-specific configuration
         setup_tasks=setup_tasks,
         host_os_type_map={device_name: taac_types.DeviceOsType.ARISTA_FBOSS},
-        direct_ixia_connections=_bag012_direct_ixia_connections(testbed),
+        direct_ixia_connections=_two_port_direct_ixia_connections(testbed),
         log_collection_timeout=600,
     )
 
@@ -1379,7 +1381,7 @@ def create_bgp_ebb_constant_attribute_storage_test_config(
         # Custom setup tasks (no openR)
         setup_tasks=setup_tasks,
         host_os_type_map={device_name: taac_types.DeviceOsType.ARISTA_FBOSS},
-        direct_ixia_connections=_bag012_direct_ixia_connections(testbed),
+        direct_ixia_connections=_two_port_direct_ixia_connections(testbed),
         # Constant acceptance community (required by device BGP policy)
         constant_acceptance_communities=["65529:39744"],
         max_communities_per_route_from_pool=5,
@@ -1470,7 +1472,7 @@ def create_bgp_ebb_queue_memory_monitor_test_config(
         setup_tasks=setup_tasks,
         monitor_cpu_stress=True,
         host_os_type_map={device_name: taac_types.DeviceOsType.ARISTA_FBOSS},
-        direct_ixia_connections=_bag012_direct_ixia_connections(testbed),
+        direct_ixia_connections=_two_port_direct_ixia_connections(testbed),
         log_collection_timeout=600,
     )
 
@@ -1479,7 +1481,7 @@ def create_bgp_ebb_characteristic_performance_scaling_test_config(
     testbed: Testbed,
     enable_update_group: bool = False,
 ) -> taac_types.TestConfig:
-    """Performance-scaling egress IBGP peer-sweep test config for bag012.ash6.
+    """Performance-scaling egress IBGP peer-sweep test config (testbed-driven).
 
     Extracted verbatim from the legacy
     ``bag012_ash6_test_config.create_bag012_ash6_performance_scaling_test_config``
@@ -1489,22 +1491,30 @@ def create_bgp_ebb_characteristic_performance_scaling_test_config(
     measured. A final aggregator Stage produces one consolidated everpaste
     plot.
 
-    The internal ``TestConfig.name`` field is preserved verbatim as
-    ``BAG012_ASH6_BGP_PERFORMANCE_SCALING_CONVEYOR_TEST`` (+
-    ``_UPDATE_GROUP``) so the golden manifest hash is byte-wise identical.
+    The internal ``TestConfig.name`` is derived from ``testbed.device_name`` as
+    ``{DEVICE}_BGP_PERFORMANCE_SCALING_CONVEYOR_TEST`` (+ ``_UPDATE_GROUP``); for
+    bag012 this reproduces the grandfathered name byte-for-byte, so its golden
+    manifest hash is unchanged.
     """
     assert testbed.ixia_ports, "factory requires IXIA port map on testbed"
     assert testbed.bgpcpp_configerator_path, (
         "factory requires bgpcpp_configerator_path on testbed"
     )
     assert testbed.dut_bgp_as is not None, "factory requires dut_bgp_as on testbed"
-    assert testbed.router_id, "factory requires router_id on testbed"
+    # router_id is optional: bag012 pins one explicitly; bag010/bag011/bag013
+    # rely on the device-default router-id, which the setup helpers preserve
+    # when router_id is None.
 
     device_name = testbed.device_name
     ixia_interface_mimic_ebgp = testbed.ixia_ports[0][0]
     ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
 
-    name = "BAG012_ASH6_BGP_PERFORMANCE_SCALING_CONVEYOR_TEST"
+    # Derived from the testbed; for bag012 this reproduces the grandfathered
+    # name verbatim so the golden manifest hash is unchanged.
+    name = (
+        f"{testbed.device_name.upper().replace('.', '_')}"
+        "_BGP_PERFORMANCE_SCALING_CONVEYOR_TEST"
+    )
     if enable_update_group:
         name += "_UPDATE_GROUP"
 
@@ -1514,7 +1524,7 @@ def create_bgp_ebb_characteristic_performance_scaling_test_config(
         ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
         ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
         ebgp_peer_count=1,
-        ibgp_peer_count=_BAG012_PERFORMANCE_SCALING_EGRESS_PEER_COUNTS[0],
+        ibgp_peer_count=_PERFORMANCE_SCALING_EGRESS_PEER_COUNTS[0],
         ebgp_remote_as=EBGP_REMOTE_AS,
         ibgp_remote_as=IBGP_REMOTE_AS,
         ixia_ebgp_ic_parent_network_v6=IXIA_EBGP_IC_PARENT_NETWORK_V6,
@@ -1550,9 +1560,9 @@ def create_bgp_ebb_characteristic_performance_scaling_test_config(
         host_driver_args=None,
         oss_mock_device_data=None,
         host_os_type_map={device_name: taac_types.DeviceOsType.ARISTA_FBOSS},
-        direct_ixia_connections=_bag012_direct_ixia_connections(testbed),
-        egress_peer_counts=_BAG012_PERFORMANCE_SCALING_EGRESS_PEER_COUNTS,
-        prefix_count=_BAG012_PERFORMANCE_SCALING_PREFIX_COUNT,
+        direct_ixia_connections=_two_port_direct_ixia_connections(testbed),
+        egress_peer_counts=_PERFORMANCE_SCALING_EGRESS_PEER_COUNTS,
+        prefix_count=_PERFORMANCE_SCALING_PREFIX_COUNT,
         ebgp_peer_count=1,
         ebgp_remote_as=EBGP_REMOTE_AS,
         ibgp_remote_as=IBGP_REMOTE_AS,
@@ -1634,7 +1644,7 @@ def create_bgp_ebb_characteristic_bounded_ecmp_sets_test_config(
         ixia_ibgp_ic_parent_network_v6=IXIA_IBGP_IC_PARENT_NETWORK_V6_DC_PLANE1,
         ixia_ibgp_ic_parent_network_v4=IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE1,
         prefix_count=_BAG012_BOUNDED_ECMP_PREFIX_COUNT,
-        direct_ixia_connections=_bag012_direct_ixia_connections(testbed),
+        direct_ixia_connections=_two_port_direct_ixia_connections(testbed),
         host_os_type_map={device_name: taac_types.DeviceOsType.ARISTA_FBOSS},
         # Standard device setup (configerator deploy + control plane + validator
         # + interface IPs + update_group), shared with the other bag012 conveyor

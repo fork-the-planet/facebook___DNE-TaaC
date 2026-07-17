@@ -970,11 +970,16 @@ _PEERS_B64_CHUNK_SIZE: int = 20000
 
 def build_bgpcpp_peers_patch_shell_cmds(
     peers: t.List[t.Dict[str, t.Any]],
-    router_id: str,
+    router_id: t.Optional[str] = None,
     config_path: str = BGPCPP_CONFIG_PATH,
 ) -> t.List[str]:
     """Build shell commands that splice ``peers`` + ``router_id`` into the
     deployed bgpcpp_config on the device.
+
+    ``router_id=None`` preserves the deployed config's router_id (only the
+    peers list is swapped), matching ``_generate_bgpcpp_peers_modification_tasks``
+    and the legacy in-shell peer-replace behavior. Passing a real router_id
+    yields a byte-identical command string, so existing configs are unchanged.
 
     Pure string-builder. Output is intended for ``create_run_commands_on_shell_step``.
     Mechanism: base64-encode the peers JSON, chunk-write to /tmp/peers.b64,
@@ -992,11 +997,15 @@ def build_bgpcpp_peers_patch_shell_cmds(
         cmds.append(f"bash echo '{chunk}' {op} /tmp/peers.b64")
     cmds.append("bash base64 -d /tmp/peers.b64 > /tmp/peers.json")
     cmds.append("bash rm -f /tmp/peers.b64")
+    # router_id is optional: when None we splice only the peers list and leave
+    # the deployed config's router_id untouched. A real router_id reproduces the
+    # original command string verbatim, keeping existing configs' golden stable.
+    router_id_line = f"c['router_id']='{router_id}'; " if router_id is not None else ""
     merge = (
         'bash python3 -c "import json; '
         f"f=open('{config_path}'); c=json.load(f); f.close(); "
         "p=open('/tmp/peers.json'); c['peers']=json.load(p); p.close(); "
-        f"c['router_id']='{router_id}'; "
+        f"{router_id_line}"
         f"f=open('{config_path}','w'); json.dump(c,f,indent=2); f.close(); "
         "print('Updated peers:',len(c['peers']),'router_id:',c['router_id'])\""
     )
@@ -1011,7 +1020,7 @@ def build_rescale_bgpcpp_config_steps(
     *,
     device_name: str,
     peers: t.List[t.Dict[str, t.Any]],
-    router_id: str,
+    router_id: t.Optional[str] = None,
     config_path: str = BGPCPP_CONFIG_PATH,
 ) -> list:
     """Disable Bgp daemon, splice the new peer list into bgpcpp_config, re-enable Bgp.
@@ -1107,7 +1116,7 @@ def build_ixia_ibgp_subset_activation_steps(n_v6: int, n_v4: int) -> list:
 def build_per_iteration_factory_v4_capable(
     *,
     device_name: str,
-    router_id: str,
+    router_id: t.Optional[str],
     ebgp_remote_as: int,
     ibgp_remote_as: int,
     ebgp_v6_base: str,
@@ -1394,7 +1403,7 @@ def get_update_packing_setup_tasks(
     ibgp_remote_as: int,
     ixia_ebgp_ic_parent_network_v6: str,
     ixia_ibgp_ic_parent_network_v6: str,
-    router_id: str,
+    router_id: t.Optional[str],
     bgpcpp_configerator_path: str,
     profile: BgpPlusPlusProfile,
     ebgp_peer_group_v6: str = "EB-FA-V6",
