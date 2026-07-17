@@ -18,14 +18,15 @@ from taac.testconfigs.routing.factories.bgp_ebb_characteristic import (
 from taac.testconfigs.routing.testbed import BAG010_ASH6
 
 
-# ─── bag010.ash6 — Egress peer-scale (perf-scaling case1) ────────────────
+# ─── bag010.ash6 — SC1 Egress peer-scale (scale & characteristics case 1) ─
 # Testbed-driven characteristic factory (2-port, no BGP-MON); bag010 relies on
 # the device-default router-id (no pinned router_id on the testbed). Ad-hoc:
-# resolvable via ``--test-config`` but not scheduled on a conveyor node.
-BAG010_ASH6_PERFORMANCE_SCALING_TEST_CONFIG = (
+# resolvable via ``--test-config`` but not scheduled on a conveyor node. The
+# TestConfig.name is ``BAG010_ASH6_SC1_EGRESS_PEER_SCALE_TEST`` (+ ``_UPDATE_GROUP``).
+BAG010_ASH6_SC1_EGRESS_PEER_SCALE_TEST_CONFIG = (
     create_bgp_ebb_characteristic_performance_scaling_test_config(BAG010_ASH6)
 )
-BAG010_ASH6_PERFORMANCE_SCALING_TEST_UPDATE_GROUP_CONFIG = (
+BAG010_ASH6_SC1_EGRESS_PEER_SCALE_TEST_UPDATE_GROUP_CONFIG = (
     create_bgp_ebb_characteristic_performance_scaling_test_config(
         BAG010_ASH6, enable_update_group=True
     )
@@ -33,6 +34,6 @@ BAG010_ASH6_PERFORMANCE_SCALING_TEST_UPDATE_GROUP_CONFIG = (
 
 
 __all__ = [
-    "BAG010_ASH6_PERFORMANCE_SCALING_TEST_CONFIG",
-    "BAG010_ASH6_PERFORMANCE_SCALING_TEST_UPDATE_GROUP_CONFIG",
+    "BAG010_ASH6_SC1_EGRESS_PEER_SCALE_TEST_CONFIG",
+    "BAG010_ASH6_SC1_EGRESS_PEER_SCALE_TEST_UPDATE_GROUP_CONFIG",
 ]

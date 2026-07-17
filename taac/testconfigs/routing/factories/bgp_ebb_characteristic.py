@@ -1511,12 +1511,11 @@ def create_bgp_ebb_characteristic_performance_scaling_test_config(
     ixia_interface_mimic_ebgp = testbed.ixia_ports[0][0]
     ixia_interface_mimic_ibgp = testbed.ixia_ports[1][0]
 
-    # Derived from the testbed; for bag012 this reproduces the grandfathered
-    # name verbatim so the golden manifest hash is unchanged.
-    name = (
-        f"{testbed.device_name.upper().replace('.', '_')}"
-        "_BGP_PERFORMANCE_SCALING_CONVEYOR_TEST"
-    )
+    # Derived from the testbed device name. SC1 = the first "scale &
+    # characteristics" test (egress peer-scale). The legacy
+    # `_BGP_PERFORMANCE_SCALING_CONVEYOR_TEST` suffix was dropped: CONVEYOR
+    # overclaimed (this is an ad-hoc test, not conveyor-scheduled).
+    name = f"{testbed.device_name.upper().replace('.', '_')}_SC1_EGRESS_PEER_SCALE_TEST"
     if enable_update_group:
         name += "_UPDATE_GROUP"
 

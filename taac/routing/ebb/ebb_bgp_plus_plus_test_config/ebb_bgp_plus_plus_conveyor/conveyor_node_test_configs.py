@@ -16,13 +16,13 @@ free; consumers that need the aggregated list import it from this
 module directly.
 """
 
-# bag010 egress peer-scale (perf-scaling case1) — ad-hoc characteristic sweep,
+# bag010 SC1 egress peer-scale — ad-hoc scale-&-characteristics sweep,
 # runnable via --test-config but not scheduled on a conveyor node. Re-homed to
 # testconfigs/routing/adhoc_bgp_ebb_characteristic.py after D111520998 pruned
 # cicd_ebb_int_tc.py to the conveyor-scheduled configs only.
 from taac.testconfigs.routing.adhoc_bgp_ebb_characteristic import (
-    BAG010_ASH6_PERFORMANCE_SCALING_TEST_CONFIG,
-    BAG010_ASH6_PERFORMANCE_SCALING_TEST_UPDATE_GROUP_CONFIG,
+    BAG010_ASH6_SC1_EGRESS_PEER_SCALE_TEST_CONFIG,
+    BAG010_ASH6_SC1_EGRESS_PEER_SCALE_TEST_UPDATE_GROUP_CONFIG,
 )
 
 # Post-cleanup: only the 8 configs actually referenced by
@@ -111,8 +111,8 @@ EBB_BGP_PLUS_PLUS_CONVEYOR_NODE_TEST_CONFIGS = [
     # with eb03.lab.ash6).
     BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG,
     BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG,
-    # bag010.ash6 egress peer-scale (perf-scaling case1) sweep. Ad-hoc:
-    # resolvable via --test-config, not wired into a conveyor node.
-    BAG010_ASH6_PERFORMANCE_SCALING_TEST_CONFIG,
-    BAG010_ASH6_PERFORMANCE_SCALING_TEST_UPDATE_GROUP_CONFIG,
+    # bag010.ash6 SC1 egress peer-scale sweep. Ad-hoc: resolvable via
+    # --test-config, not wired into a conveyor node.
+    BAG010_ASH6_SC1_EGRESS_PEER_SCALE_TEST_CONFIG,
+    BAG010_ASH6_SC1_EGRESS_PEER_SCALE_TEST_UPDATE_GROUP_CONFIG,
 ]
