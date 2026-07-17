@@ -2180,6 +2180,14 @@ def _ps_case1_build_per_iteration_peer_setup_steps(n: int) -> list[Step]:
     return steps
 
 
+# Retry budget for the per-iteration session-establish gate. After the device is
+# reloaded to this iteration's peer set, sessions need time to reach Established
+# before prefixes are advertised; ~5 min ceiling covers the largest sweep points
+# (up to ~1000 sessions).
+_PS_CASE1_SESSION_RETRY_COUNT: int = 30
+_PS_CASE1_SESSION_RETRY_DELAY_SECONDS: float = 10.0
+
+
 def create_performance_scaling_egress_peer_sweep_playbook(
     *,
     device_name: str,
@@ -2228,6 +2236,27 @@ def create_performance_scaling_egress_peer_sweep_playbook(
             per_iteration_setup_steps_factory(n, n)
             if per_iteration_setup_steps_factory is not None
             else _ps_case1_build_per_iteration_peer_setup_steps(n)
+        )
+        # Gate the iteration on all expected sessions reaching Established BEFORE
+        # advertising prefixes. Expected = total_peer_count (2*n IBGP v6+v4 +
+        # 2*ebgp_peer_count EBGP). A device that did not reload the reduced peer
+        # set surfaces here (established/total != total_peer_count) instead of
+        # silently measuring convergence against the deployed base config.
+        steps.append(
+            create_validation_step(
+                point_in_time_checks=[
+                    create_bgp_session_establish_check(
+                        expected_established_sessions=total_peer_count,
+                        retry_count=_PS_CASE1_SESSION_RETRY_COUNT,
+                        retry_delay_seconds=_PS_CASE1_SESSION_RETRY_DELAY_SECONDS,
+                    )
+                ],
+                description=(
+                    f"Verify all {total_peer_count} expected BGP sessions"
+                    f" ({2 * n} IBGP + {ebgp_total} EBGP) are Established"
+                    " before advertising prefixes"
+                ),
+            )
         )
         steps.append(
             create_performance_scaling_convergence_step(
