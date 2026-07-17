@@ -2,6 +2,8 @@
 
 # pyre-unsafe
 import asyncio
+import re
+import shlex
 import typing as t
 from dataclasses import dataclass
 from datetime import datetime
@@ -110,6 +112,9 @@ class RouteConvergenceTimeHealthCheck(
         wait_time_seconds = int(check_params.get("wait_time_seconds", 60))
         network_group_regex = check_params.get("network_group_regex")
         log_file = check_params.get("log_file", "/var/facebook/logs/wedge_agent.log")
+        archive_dir = check_params.get(
+            "archive_dir", "/var/facebook/logs/fboss/archive"
+        )
         start_time_file = check_params.get(
             "start_time_file", self.DEFAULT_START_TIME_FILE
         )
@@ -152,6 +157,7 @@ class RouteConvergenceTimeHealthCheck(
                     time_threshold=time_threshold,
                     wait_time_seconds=wait_time_seconds,
                     log_file=log_file,
+                    archive_dir=archive_dir,
                     start_time_file=start_time_file,
                     iteration=iteration,
                 )
@@ -217,6 +223,7 @@ class RouteConvergenceTimeHealthCheck(
         log_file: str,
         start_time_file: str,
         iteration: int,
+        archive_dir: str = "/var/facebook/logs/fboss/archive",
     ) -> t.Dict[str, t.Any]:
         """
         Run a single ADD or DELETE operation.
@@ -228,7 +235,7 @@ class RouteConvergenceTimeHealthCheck(
         self.logger.info(
             f"[Iter {iteration}] Capturing start time before {operation_type}"
         )
-        start_time_str = await self._capture_start_time(start_time_file)
+        start_time_str, start_stamp = await self._capture_start_time(start_time_file)
 
         if not start_time_str:
             return {
@@ -271,14 +278,16 @@ class RouteConvergenceTimeHealthCheck(
         )
         await asyncio.sleep(wait_time_seconds)
 
-        # Step 4: Analyze logs
+        # Step 4: Analyze logs (live log + any rotated archives covering the window)
         self.logger.info(
             f"[Iter {iteration}] Analyzing logs for {operation_type} operation"
         )
 
+        log_files = await self._find_log_files(start_stamp, log_file, archive_dir)
+
         try:
             metrics = await self._get_route_convergence_metrics(
-                log_file=log_file,
+                log_files=log_files,
                 operation_type=operation_type,
                 start_time_str=start_time_str,
                 time_threshold=time_threshold,
@@ -322,7 +331,9 @@ class RouteConvergenceTimeHealthCheck(
             "message": f"{operation_type} completed in {metrics.total_state_update_time_sec:.3f}s",
         }
 
-    async def _capture_start_time(self, start_time_file: str) -> t.Optional[str]:
+    async def _capture_start_time(
+        self, start_time_file: str
+    ) -> t.Tuple[t.Optional[str], t.Optional[str]]:
         """
         Capture current time and save to file on the device.
 
@@ -330,21 +341,30 @@ class RouteConvergenceTimeHealthCheck(
             start_time_file: Path to save the timestamp
 
         Returns:
-            HH:MM:SS formatted time string, or None if failed
+            Tuple of (HH:MM:SS string used to filter log lines, YYYYMMDDHHMM
+            string used to select rotated archive files). Both None on failure.
         """
         try:
-            # Run date command on device and save to file
-            cmd = f"date '+%H:%M:%S.%6N' | tee {start_time_file}"
+            # Capture, from a single `date` call, both a filename-comparable
+            # stamp (YYYYMMDDHHMM, minute precision — matches the archive
+            # filename resolution) and the HH:MM:SS the glog lines carry.
+            cmd = f"date '+%Y%m%d%H%M %H:%M:%S.%6N' | tee {start_time_file}"
             # pyrefly: ignore [missing-attribute]
             result = await self.driver.async_run_cmd_on_shell(cmd)
 
             if result and result.strip():
-                # Parse to HH:MM:SS format
-                return self._parse_start_time_to_hhmmss(result.strip())
+                # e.g. "202607170952 09:52:15.879279"
+                start_stamp, _, time_part = result.strip().partition(" ")
+                hhmmss = self._parse_start_time_to_hhmmss(time_part)
+                # Only surface the stamp when the time parsed too; a malformed
+                # result (no space) leaves time_part empty and start_stamp a
+                # garbage value, so treat that as a total failure.
+                if hhmmss:
+                    return hhmmss, (start_stamp or None)
         except Exception as e:
             self.logger.error(f"Failed to capture start time: {e}")
 
-        return None
+        return None, None
 
     def _parse_start_time_to_hhmmss(self, start_time: t.Any) -> t.Optional[str]:
         """
@@ -397,43 +417,61 @@ class RouteConvergenceTimeHealthCheck(
 
     async def _get_route_convergence_metrics(
         self,
-        log_file: str,
+        log_files: t.List[str],
         operation_type: str,
         start_time_str: t.Optional[str],
         time_threshold: int,
     ) -> t.Optional[RouteConvergenceMetrics]:
         """
-        Parse the log file and calculate route convergence metrics.
+        Parse the given log files and calculate route convergence metrics.
 
-        This method uses AWK to parse wedge_agent.log for:
-        - RouteUpdateWrapper.cpp lines to count routes added/deleted
-        - SwSwitch.cpp lines to sum up state update times
+        Each file (a rotated `.gz` archive or the plain live log) is scanned
+        with its own AWK invocation via `zcat -f`, parsed independently, and
+        merged into a single RouteConvergenceMetrics. Normally only one file
+        contains the operation (the rest return None); merging covers the rare
+        case where the op straddles a rotation boundary.
 
         Args:
-            log_file: Path to the wedge_agent.log file
+            log_files: Ordered files to scan (archives first, live log last),
+                as produced by `_find_log_files`.
             operation_type: "ADD" or "DELETE"
             start_time_str: Optional HH:MM:SS string to filter logs from
             time_threshold: Time threshold for display in output
 
         Returns:
-            RouteConvergenceMetrics object or None if no operations found
+            RouteConvergenceMetrics object, or None if no operations found in
+            any file.
         """
-        # Build the AWK command based on operation type
-        if operation_type == "ADD":
-            cmd = self._build_add_awk_command(log_file, start_time_str, time_threshold)
-        else:
-            cmd = self._build_delete_awk_command(
-                log_file, start_time_str, time_threshold
+        aggregated: t.Optional[RouteConvergenceMetrics] = None
+
+        for log_file in log_files:
+            # Build the AWK command based on operation type
+            if operation_type == "ADD":
+                cmd = self._build_add_awk_command(
+                    log_file, start_time_str, time_threshold
+                )
+            else:
+                cmd = self._build_delete_awk_command(
+                    log_file, start_time_str, time_threshold
+                )
+
+            # pyrefly: ignore [missing-attribute]
+            result = await self.driver.async_run_cmd_on_shell(cmd)
+
+            if not result or not result.strip():
+                continue
+
+            metrics = self._parse_awk_output(result, operation_type)
+            if metrics is None:
+                continue
+
+            aggregated = (
+                metrics
+                if aggregated is None
+                else self._merge_metrics(aggregated, metrics)
             )
 
-        # pyrefly: ignore [missing-attribute]
-        result = await self.driver.async_run_cmd_on_shell(cmd)
-
-        if not result or not result.strip():
-            return None
-
-        # Parse the AWK output
-        return self._parse_awk_output(result, operation_type)
+        return aggregated
 
     def _build_add_awk_command(
         self,
@@ -449,7 +487,7 @@ class RouteConvergenceTimeHealthCheck(
         """
         start_time = start_time_str or "00:00:00"
 
-        return f"""awk -v start="{start_time}" -v threshold="{time_threshold}" '
+        return f"""zcat -f {shlex.quote(log_file)} | awk -v start="{start_time}" -v threshold="{time_threshold}" '
 function time_to_sec(t) {{
     split(t, a, ":");
     split(a[3], b, ".");
@@ -487,7 +525,7 @@ END {{
     }} else {{
         print "NONE"
     }}
-}}' {log_file}"""
+}}'"""
 
     def _build_delete_awk_command(
         self,
@@ -503,7 +541,7 @@ END {{
         """
         start_time = start_time_str or "00:00:00"
 
-        return f"""awk -v start="{start_time}" -v threshold="{time_threshold}" '
+        return f"""zcat -f {shlex.quote(log_file)} | awk -v start="{start_time}" -v threshold="{time_threshold}" '
 function time_to_sec(t) {{
     split(t, a, ":");
     split(a[3], b, ".");
@@ -541,7 +579,7 @@ END {{
     }} else {{
         print "NONE"
     }}
-}}' {log_file}"""
+}}'"""
 
     def _parse_awk_output(
         self, output: str, _operation_type: str
@@ -581,3 +619,102 @@ END {{
             self.logger.warning(f"Failed to parse AWK output: {output}, error: {e}")
 
         return None
+
+    async def _find_log_files(
+        self,
+        start_stamp: t.Optional[str],
+        log_file: str,
+        archive_dir: str = "/var/facebook/logs/fboss/archive",
+    ) -> t.List[str]:
+        """
+        Return the log files to scan for one operation.
+
+        A fast DELETE emits only a handful of lines; if the live log rotates
+        right after it, those lines move to a compressed archive the live-log
+        scan can't see, and the op is reported missing. This returns any
+        rotated archives whose window covers `start_stamp`, in chronological
+        order, followed by the current (live) log.
+
+        Rotated archives are named `wedge_agent.log-YYYYMMDDHHMM.gz`, where the
+        stamp is the time of the LAST line in that archive. An archive is
+        relevant when that stamp is >= our start (its tail reaches into the
+        operation window). The live log is always included, so the common
+        no-rotation case still works and an op that straddles a rotation is
+        fully covered (rotation moves lines, so there is no double count).
+
+        Args:
+            start_stamp: YYYYMMDDHHMM start stamp, or None.
+            log_file: Path to the current (live) log file.
+            archive_dir: Directory holding rotated `.gz` archives.
+
+        Returns:
+            Ordered list of file paths (archives first, live log last).
+        """
+        archives: t.List[t.Tuple[str, str]] = []
+        if start_stamp:
+            try:
+                # pyrefly: ignore [missing-attribute]
+                out = await self.driver.async_run_cmd_on_shell(
+                    f"ls -1 {shlex.quote(archive_dir)}/wedge_agent.log-*.gz 2>/dev/null"
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to list archive logs: {e}")
+                out = ""
+
+            for line in (out or "").splitlines():
+                path = line.strip()
+                # Match only wedge_agent.log-<12 digits>.gz; this excludes
+                # wedge_agent_snapshots.log* by construction.
+                match = re.search(r"wedge_agent\.log-(\d{12})\.gz$", path)
+                if match and match.group(1) >= start_stamp:
+                    archives.append((match.group(1), path))
+
+        # Zero-padded YYYYMMDDHHMM sorts chronologically as a string.
+        archives.sort()
+        return [path for _, path in archives] + [log_file]
+
+    @staticmethod
+    def _hhmmss_to_sec(ts: str) -> float:
+        """Convert an 'HH:MM:SS[.ffffff]' timestamp to seconds."""
+        hour, minute, rest = ts.split(":")
+        return int(hour) * 3600 + int(minute) * 60 + float(rest)
+
+    def _merge_metrics(
+        self,
+        base: RouteConvergenceMetrics,
+        extra: RouteConvergenceMetrics,
+    ) -> RouteConvergenceMetrics:
+        """
+        Merge metrics parsed from a second log file into an accumulator.
+
+        Counts and batches are summed; the batch-time window is widened to the
+        earliest first / latest last across files, and the wall-clock is
+        recomputed from that widened window (NOT summed, which would drop the
+        inter-file gap). In practice one op lives in one file, so this only
+        matters for an op that straddles a rotation boundary.
+
+        `base` accumulates the chronologically earlier files and `extra` is the
+        next (later) file — `_get_route_convergence_metrics` feeds them in
+        `_find_log_files` order. So the window runs from `base`'s first batch to
+        `extra`'s last batch by file order, NOT by lexicographic min/max on the
+        `HH:MM:SS` strings: the latter picks the wrong endpoints when the window
+        straddles midnight (e.g. base ends 23:59:50, extra starts 00:00:05).
+        """
+        first = base.first_batch_time or extra.first_batch_time
+        last = extra.last_batch_time or base.last_batch_time
+        if first and last:
+            wall = self._hhmmss_to_sec(last) - self._hhmmss_to_sec(first)
+            if wall < 0:
+                # Window straddled midnight (last clock time < first); add a day
+                # so the duration stays a small positive value instead of ~ -86400s.
+                wall += 86400
+        else:
+            wall = base.total_state_update_time_sec + extra.total_state_update_time_sec
+        return RouteConvergenceMetrics(
+            total_routes_added=base.total_routes_added + extra.total_routes_added,
+            total_routes_deleted=base.total_routes_deleted + extra.total_routes_deleted,
+            num_batches=base.num_batches + extra.num_batches,
+            total_state_update_time_sec=wall,
+            first_batch_time=first,
+            last_batch_time=last,
+        )
