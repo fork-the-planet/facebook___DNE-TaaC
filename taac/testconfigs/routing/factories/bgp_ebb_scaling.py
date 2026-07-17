@@ -197,6 +197,10 @@ def create_bgp_ebb_scaling_performance_test_config(
             ixia_ebgp_ic_parent_network_v4=ixia_ebgp_ic_parent_network_v4,
             ixia_ibgp_ic_parent_network_v6=ixia_ibgp_ic_parent_network_v6,
             ixia_ibgp_ic_parent_network_v4=ixia_ibgp_ic_parent_network_v4,
+            # next-hop-self so the eBGP routes carry the connected IXIA peer
+            # address and the DUT resolves them without Open/R/IGP (perf-scaling
+            # only; other callers keep the default PRESERVE_FROM_FILE).
+            ebgp_next_hop_self=True,
         ),
         playbooks=[
             create_performance_scaling_egress_peer_sweep_playbook(

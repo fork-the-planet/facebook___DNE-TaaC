@@ -2187,6 +2187,10 @@ def _ps_case1_build_per_iteration_peer_setup_steps(n: int) -> list[Step]:
 # never get there, so there is no point waiting a long budget).
 _PS_CASE1_SESSION_RETRY_COUNT: int = 8
 _PS_CASE1_SESSION_RETRY_DELAY_SECONDS: float = 10.0
+# Generous ceiling for the end-of-run BGP convergence gate (AGENT_CONFIGURED ->
+# INITIALIZED). Placeholder pending a real at-scale convergence run; tighten once
+# the true max-scale (1002-peer + 50K-route) convergence time is known.
+_PS_CASE1_CONVERGENCE_THRESHOLD_SECONDS: int = 600
 
 
 def create_performance_scaling_egress_peer_sweep_playbook(
@@ -2304,6 +2308,13 @@ def create_performance_scaling_egress_peer_sweep_playbook(
         snapshot_checks=_ps_case1_common_snapshot_checks(),
         postchecks=[
             create_bgp_rib_fib_consistency_check(),
+            # Gate the run on BGP actually reaching INITIALIZED (real convergence)
+            # without tripping the premature EOR timer -- the signal that was
+            # silently absent when the RIB was empty (the vacuous ~0.06s result).
+            create_bgp_convergence_check(
+                convergence_threshold=_PS_CASE1_CONVERGENCE_THRESHOLD_SECONDS,
+                fail_on_eor_expired=True,
+            ),
         ],
         stages=stages,
     )

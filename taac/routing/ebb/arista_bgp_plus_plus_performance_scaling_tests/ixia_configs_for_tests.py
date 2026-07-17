@@ -40,6 +40,11 @@ def create_ebb_performance_scale_basic_port_configs(
     ixia_ibgp_ic_parent_network_v6: str,
     ixia_ibgp_ic_parent_network_v4: str,
     same_community: bool = False,
+    # When True, advertise the eBGP routes with next-hop-self (the IXIA peer's own
+    # connected address) so the DUT resolves them via the connected interface route
+    # -- no Open/R / IGP. Default False keeps PRESERVE_FROM_FILE (the CSV-baked
+    # next-hop), so existing callers (e.g. separable-policy) are unchanged.
+    ebgp_next_hop_self: bool = False,
 ) -> list[BasicPortConfig]:
     """
     Create basic port configurations for EBB scale testing with eBGP, iBGP
@@ -69,6 +74,11 @@ def create_ebb_performance_scale_basic_port_configs(
         List of BasicPortConfig objects for Ixia configuration
     """
     basic_configs: list[BasicPortConfig] = []
+    _ebgp_next_hop_mod = (
+        ixia_types.BgpNextHopModificationType.OVER_WRITE_TESTERS_ADDRESS
+        if ebgp_next_hop_self
+        else ixia_types.BgpNextHopModificationType.PRESERVE_FROM_FILE
+    )
     if ebgp_peer_count_v6 != 0 or ebgp_peer_count_v4 != 0:
         ebgp_dgs: list[DeviceGroupConfig] = []
         # Only create the IPv6 EBGP device group when v6 peer count > 0.
@@ -114,7 +124,7 @@ def create_ebb_performance_scale_basic_port_configs(
                                         distribution_type=ixia_types.DistribitionType.ROUND_ROBIN,
                                     )
                                 ],
-                                bgp_next_hop_modification_type=ixia_types.BgpNextHopModificationType.PRESERVE_FROM_FILE,
+                                bgp_next_hop_modification_type=_ebgp_next_hop_mod,
                                 start_index=0,
                                 end_index=ebgp_peer_count_v6,
                             )
@@ -163,7 +173,7 @@ def create_ebb_performance_scale_basic_port_configs(
                                         distribution_type=ixia_types.DistribitionType.ROUND_ROBIN,
                                     )
                                 ],
-                                bgp_next_hop_modification_type=ixia_types.BgpNextHopModificationType.PRESERVE_FROM_FILE,
+                                bgp_next_hop_modification_type=_ebgp_next_hop_mod,
                             )
                         ],
                     ),
