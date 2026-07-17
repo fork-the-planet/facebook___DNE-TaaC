@@ -73,11 +73,13 @@ from taac.stages.stage_definitions import (
     create_mp3n_coldboot_trigger_stage,
     create_mp3n_warmboot_trigger_stage,
     create_packet_loss_validation_stage,
+    create_regenerate_traffic_stage,
     create_start_traffic_stage,
     create_toggle_and_analyze_stage,
     create_wait_convergence_stage,
 )
 from taac.task_definitions import (
+    create_bgp_switch_limit_patcher_task,
     create_configure_parallel_bgp_peers_task,
     create_coop_apply_patchers_task,
     create_coop_register_patcher_task,
@@ -264,37 +266,37 @@ CONTIGUOUS_PREFIX_CONFIGS: dict[int, PrefixMaskConfig] = {
         fixed_prefix="6000:0:0:0:0:0:0:0",
         random_mask="0:0:0:0:0:0:0:0",
         seed=1,
-        prefix_count=1,
+        prefix_count=74000,
         prefix_length=48,
         prefix_step="0:0:1:0:0:0:0:0",
-        multiplier=69900,
+        multiplier=1,
     ),
     64: PrefixMaskConfig(
         fixed_prefix="6000:0:0:0:0:0:0:0",
         random_mask="0:0:0:0:0:0:0:0",
         seed=1,
-        prefix_count=1,
+        prefix_count=74000,
         prefix_length=64,
         prefix_step="0:0:0:1:0:0:0:0",
-        multiplier=69900,
+        multiplier=1,
     ),
     80: PrefixMaskConfig(
         fixed_prefix="6000:0:0:0:0:0:0:0",
         random_mask="0:0:0:0:0:0:0:0",
         seed=1,
-        prefix_count=1,
+        prefix_count=74000,
         prefix_length=80,
         prefix_step="0:0:0:0:1:0:0:0",
-        multiplier=69900,
+        multiplier=1,
     ),
     128: PrefixMaskConfig(
         fixed_prefix="6000:0:0:0:0:0:0:0",
         random_mask="0:0:0:0:0:0:0:0",
         seed=1,
-        prefix_count=1,
+        prefix_count=15000,
         prefix_length=128,
         prefix_step="0:0:0:0:0:0:0:1",
-        multiplier=69900,
+        multiplier=1,
     ),
 }
 
@@ -684,6 +686,10 @@ def create_mp3n_setup_tasks(
             },
             py_func_name="add_bgp_policy_match_prefix_to_propagate_routes",
         ),
+        create_bgp_switch_limit_patcher_task(
+            hostname=device_name,
+            prefix_limit=75000,
+        ),
     ]
 
     if interface_configs:
@@ -879,7 +885,7 @@ ENDPOINT: taac_types.Endpoint = taac_types.Endpoint(
 # -----------------------------------------------------------------------------
 # Total route counts + 100 buffer for PREFIX_LIMIT_CHECK
 DISTRIBUTION_PREFIX_LIMITS: Dict[str, int] = {
-    DIST_CONTIGUOUS: 70000,  # 69900 + 100 buffer
+    DIST_CONTIGUOUS: 74100,  # 74000 + 100 buffer
     DIST_HYBRID: 74100,  # 74000 + 100 buffer
     DIST_NON_CONTIGUOUS: 40100,  # 40000 + 100 buffer
 }
@@ -1017,8 +1023,8 @@ def create_warmboot_playbook(
                 prefix_length=prefix_length,
                 duration=300,
             ),
-            create_start_traffic_stage(
-                stage_id_prefix="start_traffic_warmboot",
+            create_regenerate_traffic_stage(
+                stage_id_prefix="regenerate_traffic_warmboot",
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
             ),
@@ -1166,8 +1172,8 @@ def create_bgp_restart_playbook(
                 prefix_length=prefix_length,
                 duration=300,
             ),
-            create_start_traffic_stage(
-                stage_id_prefix="start_traffic_bgp_restart",
+            create_regenerate_traffic_stage(
+                stage_id_prefix="regenerate_traffic_bgp_restart",
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
             ),
@@ -1316,8 +1322,8 @@ def create_coldboot_playbook(
                 prefix_length=prefix_length,
                 duration=300,
             ),
-            create_start_traffic_stage(
-                stage_id_prefix="start_traffic_coldboot",
+            create_regenerate_traffic_stage(
+                stage_id_prefix="regenerate_traffic_coldboot",
                 distribution_type=distribution_type,
                 prefix_length=prefix_length,
             ),

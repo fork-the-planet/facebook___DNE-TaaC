@@ -67,6 +67,7 @@ from taac.steps.step_definitions import (
     create_multipath_nexthop_count_health_check_step,
     create_openr_route_action_step,
     create_randomize_prefix_local_preference_step,
+    create_regenerate_traffic_step,
     create_register_port_channel_min_link_percentage_patcher_step,
     create_register_speed_flip_patcher_step_v2,
     create_revert_route_storm_attributes_step,
@@ -4089,8 +4090,13 @@ def create_enable_and_configure_stage(
     seed: int | None = None,
     random_mask_count: int | None = None,
 ) -> Stage:
-    """Stage 1: Disable other device groups, enable target, configure prefixes."""
-    steps = []
+    """Stage 1: Disable the other device groups, enable the target, and
+    reconfigure its advertised prefixes (count + prefix length / random mask).
+
+    Traffic is regenerated against the new routes separately by
+    create_regenerate_traffic_stage, run after route install.
+    """
+    steps: list[taac_types.Step] = []
 
     for other_type in ["contiguous", "hybrid", "non_contiguous"]:
         if other_type != distribution_type:
@@ -4148,6 +4154,27 @@ def create_start_traffic_stage(
     return create_steps_stage(
         stage_id=f"{stage_id_prefix}_{distribution_type}_{prefix_length}",
         steps=[create_start_traffic_step()],
+    )
+
+
+def create_regenerate_traffic_stage(
+    stage_id_prefix: str,
+    distribution_type: str,
+    prefix_length: int,
+) -> Stage:
+    """Stage 2: Regenerate traffic items so destinations re-resolve to the
+    current routes.
+
+    Runs after the routes/prefixes have been reconfigured and installed, so
+    the traffic item is rebuilt against the new destinations before the
+    measurement window. Uses a dedicated regenerate step rather than
+    start_traffic(regenerate_traffic_items=True) because the per-step pre-hook
+    starts traffic before every step body, which makes start_traffic
+    early-return and skip its regenerate flag.
+    """
+    return create_steps_stage(
+        stage_id=f"{stage_id_prefix}_{distribution_type}_{prefix_length}",
+        steps=[create_regenerate_traffic_step()],
     )
 
 

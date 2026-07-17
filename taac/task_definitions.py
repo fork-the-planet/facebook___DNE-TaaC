@@ -1502,7 +1502,8 @@ def create_bgp_switch_limit_patcher_task(
         config_name="bgpcpp",
         patcher_name=patcher_name,
         task_name="configure_bgp_switch_limit",
-        patcher_args={"prefix_limit": prefix_limit},
+        patcher_args={"prefix_limit": str(prefix_limit)},
+        py_func_name="configure_bgp_switch_limit",
     )
 
 

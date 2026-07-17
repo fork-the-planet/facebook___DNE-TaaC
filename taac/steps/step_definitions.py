@@ -5225,7 +5225,8 @@ def create_update_prefix_count_step(
     Args:
         device_name: Hostname of the IXIA-attached device.
         interface: Interface name on `device_name` to target.
-        prefix_count: Target prefix count to advertise.
+        prefix_count: Target prefix count to advertise (per network group,
+            i.e. the pool's NumberOfAddresses).
         distribution_type: Distribution-type label used for the step
             description (does not affect the API call).
 
@@ -5343,6 +5344,35 @@ def create_start_traffic_step() -> Step:
         `start_traffic`.
     """
     return create_ixia_api_step(api_name="start_traffic", args_dict={})
+
+
+def create_regenerate_traffic_step() -> Step:
+    """Regenerate IXIA traffic items so destinations match the current config.
+
+    Wraps the IXIA `regenerate_traffic_items` API, which stops traffic (if
+    running), calls `Generate()` on each traffic item, then restarts it —
+    re-expanding the traffic endpoints from the current state of the
+    topology they are bound to (device groups, network groups, route
+    ranges, etc.).
+
+    Run this after any runtime change that alters what a traffic item
+    should target, and before the measurement window, so traffic uses the
+    updated endpoints instead of the stale ones the traffic item was last
+    generated with.
+
+    A dedicated step is required because the base `Step._run` pre-hook
+    (`steps/step.py`) starts traffic before every step body. By the time
+    the `start_traffic` step runs, traffic is already running, so
+    `start_traffic` early-returns and silently skips its
+    `regenerate_traffic_items` flag. Calling `regenerate_traffic_items`
+    directly bypasses that early-return and forces the `Generate()`.
+    IXIA-required.
+
+    Returns:
+        A `Step` with `step_name=StepName.INVOKE_IXIA_API_STEP` calling
+        `regenerate_traffic_items`.
+    """
+    return create_ixia_api_step(api_name="regenerate_traffic_items", args_dict={})
 
 
 def create_stop_traffic_step() -> Step:
