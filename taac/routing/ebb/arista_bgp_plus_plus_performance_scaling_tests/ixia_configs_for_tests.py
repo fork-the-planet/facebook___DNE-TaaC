@@ -25,6 +25,35 @@ def get_bgp_route_file_path(base_filename: str) -> str:
     return f"performance_scaling_profiles/{base_filename}"
 
 
+def _ebgp_community_attribute_config(
+    same_community: bool,
+    ebgp_fixed_communities: list[str] | None,
+    is_v6: bool,
+) -> ixia_types.BgpAttributeConfig:
+    """Community attribute for the eBGP route import.
+
+    When ebgp_fixed_communities is set, attach exactly that inline community set
+    (no CSV) so every route carries only those communities -- used by the
+    peer-scale test to (a) pass the DUT's EB-FA-IN inbound community allowlist
+    and (b) avoid the confusing named-community collisions (e.g. DEFAULT_ROUTE)
+    that the diverse CSV distribution produces. When None, fall back to the
+    round-robin CSV distribution (unchanged for existing callers).
+    """
+    if ebgp_fixed_communities is not None:
+        return ixia_types.BgpAttributeConfig(
+            attribute=ixia_types.BgpAttribute.COMMUNITIES,
+            value_lists=[ebgp_fixed_communities],
+            distribution_type=ixia_types.DistribitionType.ROUND_ROBIN,
+        )
+    afi = "ipv6" if is_v6 else "ipv4"
+    suffix = "same_communities" if same_community else "communities"
+    return ixia_types.BgpAttributeConfig(
+        attribute=ixia_types.BgpAttribute.COMMUNITIES,
+        file_path=get_bgp_route_file_path(f"ebgp_{afi}_{suffix}_50k.csv"),
+        distribution_type=ixia_types.DistribitionType.ROUND_ROBIN,
+    )
+
+
 def create_ebb_performance_scale_basic_port_configs(
     device_name: str,
     ixia_interface_mimic_ebgp: str,
@@ -45,6 +74,12 @@ def create_ebb_performance_scale_basic_port_configs(
     # -- no Open/R / IGP. Default False keeps PRESERVE_FROM_FILE (the CSV-baked
     # next-hop), so existing callers (e.g. separable-policy) are unchanged.
     ebgp_next_hop_self: bool = False,
+    # When set, attach exactly this inline community set to every eBGP route
+    # instead of the round-robin CSV distribution. Used by the peer-scale test
+    # to pass the DUT's EB-FA-IN inbound allowlist with a single clean community
+    # (no diverse fillers, no confusing named-community collisions). Default None
+    # keeps the CSV distribution, so existing callers are unchanged.
+    ebgp_fixed_communities: list[str] | None = None,
 ) -> list[BasicPortConfig]:
     """
     Create basic port configurations for EBB scale testing with eBGP, iBGP
@@ -127,14 +162,10 @@ def create_ebb_performance_scale_basic_port_configs(
                                 import_file_type=ixia_types.BgpRouteImportFileType.CSV,
                                 network_group_index=0,
                                 bgp_attribute_configs=[
-                                    ixia_types.BgpAttributeConfig(
-                                        attribute=ixia_types.BgpAttribute.COMMUNITIES,
-                                        file_path=get_bgp_route_file_path(
-                                            "ebgp_ipv6_same_communities_50k.csv"
-                                            if same_community
-                                            else "ebgp_ipv6_communities_50k.csv"
-                                        ),
-                                        distribution_type=ixia_types.DistribitionType.ROUND_ROBIN,
+                                    _ebgp_community_attribute_config(
+                                        same_community,
+                                        ebgp_fixed_communities,
+                                        is_v6=True,
                                     )
                                 ],
                                 bgp_next_hop_modification_type=_ebgp_next_hop_mod,
@@ -177,14 +208,10 @@ def create_ebb_performance_scale_basic_port_configs(
                                 import_file_type=ixia_types.BgpRouteImportFileType.CSV,
                                 network_group_index=0,
                                 bgp_attribute_configs=[
-                                    ixia_types.BgpAttributeConfig(
-                                        attribute=ixia_types.BgpAttribute.COMMUNITIES,
-                                        file_path=get_bgp_route_file_path(
-                                            "ebgp_ipv4_same_communities_50k.csv"
-                                            if same_community
-                                            else "ebgp_ipv4_communities_50k.csv"
-                                        ),
-                                        distribution_type=ixia_types.DistribitionType.ROUND_ROBIN,
+                                    _ebgp_community_attribute_config(
+                                        same_community,
+                                        ebgp_fixed_communities,
+                                        is_v6=False,
                                     )
                                 ],
                                 bgp_next_hop_modification_type=_ebgp_next_hop_mod,

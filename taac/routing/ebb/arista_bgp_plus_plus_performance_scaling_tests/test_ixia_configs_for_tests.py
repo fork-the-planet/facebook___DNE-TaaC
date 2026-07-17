@@ -73,3 +73,39 @@ class EbgpNextHopSelfTest(unittest.TestCase):
                 p.bgp_next_hop_modification_type,
                 ixia_types.BgpNextHopModificationType.PRESERVE_FROM_FILE,
             )
+
+
+def _ebgp_community_configs(configs):
+    community_cfgs = []
+    for p in _ebgp_import_params(configs):
+        for attr in p.bgp_attribute_configs or []:
+            if attr.attribute == ixia_types.BgpAttribute.COMMUNITIES:
+                community_cfgs.append(attr)
+    return community_cfgs
+
+
+class EbgpFixedCommunitiesTest(unittest.TestCase):
+    """Perf-scaling tags every eBGP route with a single clean community so it
+    passes the DUT's EB-FA-IN inbound allowlist and avoids confusing
+    named-community noise; other callers keep the CSV distribution."""
+
+    def test_fixed_communities_use_inline_value_lists(self) -> None:
+        cfgs = _ebgp_community_configs(
+            create_ebb_performance_scale_basic_port_configs(
+                ebgp_fixed_communities=["65529:39744"], **_COMMON_KWARGS
+            )
+        )
+        self.assertEqual(len(cfgs), 2)  # v4 + v6 eBGP pools
+        for c in cfgs:
+            self.assertEqual(c.value_lists, [["65529:39744"]])
+            self.assertIsNone(c.file_path)
+
+    def test_default_uses_csv_distribution(self) -> None:
+        cfgs = _ebgp_community_configs(
+            create_ebb_performance_scale_basic_port_configs(**_COMMON_KWARGS)
+        )
+        self.assertEqual(len(cfgs), 2)
+        for c in cfgs:
+            self.assertIsNone(c.value_lists)
+            self.assertIsNotNone(c.file_path)
+            self.assertIn("communities", c.file_path)

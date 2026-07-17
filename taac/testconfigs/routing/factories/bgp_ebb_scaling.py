@@ -90,6 +90,12 @@ from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConf
 _RUN_BGPCPP_SCRIPT_PATH = "/usr/sbin/run_bgpcpp.sh"
 _BGPCPP_CONFIG_PATH = "/mnt/flash/bgpcpp_config"
 
+# The community on the DUT's inbound eBGP allowlist policy (EB-FA-IN): routes
+# carrying it are accepted, everything else is denied by the catch-all term. The
+# perf-scaling eBGP routes are tagged with only this one community so they (a)
+# pass EB-FA-IN and (b) render cleanly (no diverse-CSV named-community noise).
+_EB_FA_TRANSITED_COMMUNITY = "65529:39744"
+
 
 # ─── testbed → DUT-wiring helpers hoisted to util/bgp_ebb_lab_wiring.py ───
 # to break a circular import with bgp_ebb_characteristic.py (see that file's
@@ -201,6 +207,10 @@ def create_bgp_ebb_scaling_performance_test_config(
             # address and the DUT resolves them without Open/R/IGP (perf-scaling
             # only; other callers keep the default PRESERVE_FROM_FILE).
             ebgp_next_hop_self=True,
+            # Tag every eBGP route with only EB_FA_TRANSITED so they pass the
+            # DUT's EB-FA-IN inbound allowlist (otherwise the diverse-CSV routes
+            # are denied by RULE_EB_FA_IN_980) and render cleanly.
+            ebgp_fixed_communities=[_EB_FA_TRANSITED_COMMUNITY],
         ),
         playbooks=[
             create_performance_scaling_egress_peer_sweep_playbook(
