@@ -79,6 +79,19 @@ def create_ebb_performance_scale_basic_port_configs(
         if ebgp_next_hop_self
         else ixia_types.BgpNextHopModificationType.PRESERVE_FROM_FILE
     )
+    # The import-time modification type alone does NOT change what IXIA
+    # advertises: the route property's NextHopType defaults to MANUALLY, which
+    # pins the next-hop to the CSV/manual value (the routes stayed on the
+    # unresolvable CSV next-hop 195.0.0.1). SAME_AS_LOCAL_IP makes IXIA
+    # advertise each route with next-hop = the peer's own local stack IP (the
+    # connected .11), which the DUT resolves via the connected interface route.
+    # Both knobs are driven by the single ebgp_next_hop_self source of truth.
+    # Leave the field unset (None) when disabled so existing PRESERVE_FROM_FILE
+    # callers (e.g. separable-policy) stay byte-identical -- runtime already
+    # defaults an unset value to MANUALLY.
+    _ebgp_set_next_hop = (
+        ixia_types.SetNextHopType.SAME_AS_LOCAL_IP if ebgp_next_hop_self else None
+    )
     if ebgp_peer_count_v6 != 0 or ebgp_peer_count_v4 != 0:
         ebgp_dgs: list[DeviceGroupConfig] = []
         # Only create the IPv6 EBGP device group when v6 peer count > 0.
@@ -125,6 +138,7 @@ def create_ebb_performance_scale_basic_port_configs(
                                     )
                                 ],
                                 bgp_next_hop_modification_type=_ebgp_next_hop_mod,
+                                set_next_hop_type=_ebgp_set_next_hop,
                                 start_index=0,
                                 end_index=ebgp_peer_count_v6,
                             )
@@ -174,6 +188,7 @@ def create_ebb_performance_scale_basic_port_configs(
                                     )
                                 ],
                                 bgp_next_hop_modification_type=_ebgp_next_hop_mod,
+                                set_next_hop_type=_ebgp_set_next_hop,
                             )
                         ],
                     ),
