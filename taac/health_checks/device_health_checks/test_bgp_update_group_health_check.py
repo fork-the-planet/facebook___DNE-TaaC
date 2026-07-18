@@ -367,6 +367,61 @@ class TestBgpUpdateGroupHealthCheck(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, hc_types.HealthCheckStatus.FAIL)
         self.assertIn("99", result.message)
 
+    # --- empty peer groups (assertion 5) ---
+
+    async def test_expect_empty_pass_when_no_established_members(self):
+        """A peer-group whose members are all down (per getBgpSessions) is EMPTY -> PASS."""
+        groups = _default_groups()
+        # eBGP peers (::3, ::4) are NOT established; iBGP + MON stay up.
+        self._set_resp(
+            groups,
+            established_addrs=["2401:db00::1", "2401:db00::2", "2401:db00::5"],
+        )
+        result = await self.health_check._run(
+            self.device, self.input, {"expect_empty_peer_groups": [EBGP]}
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS)
+
+    async def test_expect_empty_pass_when_group_absent(self):
+        """A peer-group with no matching update group at all is EMPTY -> PASS."""
+        # The eBGP update group is gone entirely; only iBGP + MON remain.
+        groups = [
+            _make_group(1, [_make_peer("2401:db00::1", IBGP)], peer_group_name=IBGP),
+            _make_group(3, [_make_peer("2401:db00::5", MON)], peer_group_name=MON),
+        ]
+        self._set_resp(groups)
+        result = await self.health_check._run(
+            self.device, self.input, {"expect_empty_peer_groups": [EBGP]}
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS)
+
+    async def test_expect_empty_fail_when_member_still_established(self):
+        """A peer-group asserted empty that still has an Established member -> FAIL."""
+        self._set_resp(_default_groups())  # everything established
+        result = await self.health_check._run(
+            self.device, self.input, {"expect_empty_peer_groups": [EBGP]}
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.FAIL)
+        self.assertIn("expected EMPTY", result.message)
+        self.assertIn(EBGP, result.message)
+
+    async def test_expect_empty_and_presence_combined_pass(self):
+        """Stage-1 shape: eBGP group empty AND iBGP group still present -> PASS."""
+        groups = _default_groups()
+        self._set_resp(
+            groups,
+            established_addrs=["2401:db00::1", "2401:db00::2", "2401:db00::5"],
+        )
+        result = await self.health_check._run(
+            self.device,
+            self.input,
+            {
+                "peer_group_substrings": [IBGP],
+                "expect_empty_peer_groups": [EBGP],
+            },
+        )
+        self.assertEqual(result.status, hc_types.HealthCheckStatus.PASS)
+
     # --- combined 2.1.1-style check ---
 
     async def test_full_initial_dump_pass(self):
@@ -465,6 +520,17 @@ class TestCreateBgpUpdateGroupCheck(unittest.TestCase):
         check = create_bgp_update_group_check(peer_group_substrings=[IBGP])
         payload = json.loads(check.check_params.json_params)
         self.assertNotIn("expected_group_count", payload)
+
+    def test_factory_serializes_expect_empty_peer_groups(self):
+        check = create_bgp_update_group_check(expect_empty_peer_groups=[EBGP])
+        payload = json.loads(check.check_params.json_params)
+        self.assertEqual(payload["expect_empty_peer_groups"], [EBGP])
+
+    def test_factory_omits_expect_empty_when_unset(self):
+        """Default/omitted -> key absent, so the factory snapshot stays stable."""
+        check = create_bgp_update_group_check(peer_group_substrings=[IBGP])
+        payload = json.loads(check.check_params.json_params)
+        self.assertNotIn("expect_empty_peer_groups", payload)
 
 
 if __name__ == "__main__":

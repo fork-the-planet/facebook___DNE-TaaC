@@ -2,6 +2,7 @@
 
 # pyre-unsafe
 import asyncio
+import re
 import time
 import typing as t
 
@@ -16,10 +17,20 @@ from taac.internal.ods_utils import (
     async_generate_ods_url,
     async_query_ods,
 )
+from taac.utils.arista_utils import find_process_pid
 from taac.utils.common import async_get_fburl_retry
 from taac.utils.health_check_utils import format_timestamp
 from taac.health_check.health_check import types as hc_types
 from tabulate import tabulate
+
+
+# BGP++ process name as it appears in EOS ``show processes`` on ARISTA_FBOSS
+# DUTs. Same name the EOS BGP++ memory monitors use to resolve the pid
+# (``find_process_pid``); it is the process whose ``/proc/<pid>/status`` VmHWM
+# we read for the absolute peak-memory ceiling.
+_ARISTA_BGP_PROCESS_NAME = "bgpcpp"
+# Matches e.g. "VmHWM:\t 9123456 kB" in /proc/<pid>/status.
+_VMHWM_RE = re.compile(r"VmHWM:\s+(\d+)\s*kB")
 
 
 MEMORY_UTILIZATION_KEY_DESC_FBOSS = (
@@ -283,6 +294,73 @@ class MemoryUtilizationHealthCheck(
             message=f"Memory utilization exceeded defined threshold:\n{threshold_violations_text}\n\nODS Query URL: {ods_url}",
         )
 
+    async def _check_vmhwm_arista(
+        self,
+        obj: TestDevice,
+        vmhwm_threshold: t.Union[int, float],
+    ) -> hc_types.HealthCheckResult:
+        """Assert the BGP++ (``bgpcpp``) process VmHWM is below ``vmhwm_threshold``
+        bytes on an Arista/EOS DUT.
+
+        The kernel high-water-mark (peak resident memory) is exposed only in
+        ``/proc/<pid>/status`` -- the bgpcpp agent publishes an RSS counter but no
+        VmHWM counter, and the ODS memory path samples RSS growth, not the peak.
+        We resolve the bgpcpp pid the same way the EOS BGP++ memory monitors do
+        (``find_process_pid`` reads the Linux pid from ``show processes``) and
+        read VmHWM over the ``bash`` FCR escape (the VmHWM line of
+        ``/proc/<pid>/status`` is world-readable, so no sudo is required).
+
+        Any failure to locate the process, read, or parse the value is reported
+        as FAIL (never SKIP): a spec pass-criterion we cannot measure must not
+        pass silently.
+        """
+        pid = await find_process_pid(self.driver, _ARISTA_BGP_PROCESS_NAME)
+        if not pid:
+            return hc_types.HealthCheckResult(
+                status=hc_types.HealthCheckStatus.FAIL,
+                message=(
+                    f"VmHWM check FAILED on {obj.name}: BGP++ process "
+                    f"'{_ARISTA_BGP_PROCESS_NAME}' not found in 'show processes'."
+                ),
+            )
+        try:
+            # pyrefly: ignore [missing-attribute]
+            output = await self.driver.async_run_cmd_on_shell(
+                f"bash grep VmHWM /proc/{pid}/status"
+            )
+        except Exception as e:
+            return hc_types.HealthCheckResult(
+                status=hc_types.HealthCheckStatus.FAIL,
+                message=(
+                    f"VmHWM check FAILED on {obj.name}: could not read "
+                    f"/proc/{pid}/status for bgpcpp (pid={pid}): {e}"
+                ),
+            )
+        match = _VMHWM_RE.search(output or "")
+        if not match:
+            return hc_types.HealthCheckResult(
+                status=hc_types.HealthCheckStatus.FAIL,
+                message=(
+                    f"VmHWM check FAILED on {obj.name}: could not parse VmHWM "
+                    f"from /proc/{pid}/status output: {output!r}"
+                ),
+            )
+        vmhwm_bytes = int(match.group(1)) * 1024
+        passed = vmhwm_bytes < vmhwm_threshold
+        return hc_types.HealthCheckResult(
+            status=(
+                hc_types.HealthCheckStatus.PASS
+                if passed
+                else hc_types.HealthCheckStatus.FAIL
+            ),
+            message=(
+                f"BGP++ ({_ARISTA_BGP_PROCESS_NAME}) VmHWM on {obj.name} = "
+                f"{vmhwm_bytes} bytes (pid={pid}); threshold "
+                f"{int(vmhwm_threshold)} bytes -- "
+                f"{'within limit' if passed else 'EXCEEDED'}."
+            ),
+        )
+
     async def _run_arista(
         self,
         obj: TestDevice,
@@ -292,12 +370,25 @@ class MemoryUtilizationHealthCheck(
         """
         Args:
             check_params:
+                - vmhwm_threshold: Absolute VmHWM (peak RSS) ceiling in bytes for
+                    the BGP++ (``bgpcpp``) process. When set, reads
+                    ``/proc/<pid>/status`` VmHWM and asserts it is below the
+                    ceiling (the UG spec's "VmHWM below 10 GB" criterion). Takes
+                    precedence over the delta-sampling path below, since the two
+                    measure different things (absolute peak vs sampled growth).
                 - delta: Max allowed delta between memory utilization checks.
                     When not provided the check is skipped, since the Arista
                     path is sampling-based and has no meaningful default.
                 - sleep_timer: Time to sleep before gettig counter again (defaults to 60 seconds)
                 - total_time: Total time to measure counters (defaults to 2 min)
         """
+        # Absolute VmHWM ceiling: bgpcpp exports no VmHWM counter and the
+        # delta-sampling path below only measures RSS growth, so this is the only
+        # way to assert an absolute peak-memory ceiling on Arista.
+        vmhwm_threshold = check_params.get("vmhwm_threshold")
+        if vmhwm_threshold is not None:
+            return await self._check_vmhwm_arista(obj, vmhwm_threshold)
+
         # TODO(loo): Once we get ODS support use ODS instead
         delta = check_params.get("delta")
         if delta is None:

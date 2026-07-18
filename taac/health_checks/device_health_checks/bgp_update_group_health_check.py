@@ -87,6 +87,7 @@ class BgpUpdateGroupHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthChe
         expected_member_counts = check_params.get("expected_member_counts") or {}
         expected_policy_names = check_params.get("expected_policy_names") or {}
         expected_group_count = check_params.get("expected_group_count")
+        expect_empty_peer_groups = check_params.get("expect_empty_peer_groups") or []
 
         try:
             # pyrefly: ignore [missing-attribute]
@@ -141,6 +142,7 @@ class BgpUpdateGroupHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthChe
             set(peer_group_substrings)
             | set(expected_member_counts)
             | set(expected_policy_names)
+            | set(expect_empty_peer_groups)
         )
         # A peer-group substring matches an update group if it appears in the
         # group's ``peer_group_name`` (authoritative) or in any of its peers'
@@ -220,6 +222,23 @@ class BgpUpdateGroupHealthCheck(AbstractDeviceHealthCheck[hc_types.BaseHealthChe
                 f"Total update group count on {hostname} is {len(groups)}; "
                 f"expected {expected_group_count}."
             )
+
+        # (5) peer-groups asserted EMPTY: each must map to NO update group with
+        # Established members (the last peer left, so the group emptied / was
+        # cleaned up). Inverse of the presence check (1); cross-referenced with
+        # getBgpSessions, so a group lingering with only down peers counts as
+        # empty, while a group that still has an Established member FAILs. Used by
+        # the UG "empty group" edge case (spec 2.9.7).
+        for substring in sorted(set(expect_empty_peer_groups)):
+            gids = sub_to_groups.get(substring, set())
+            est_sum = sum(group_established.get(gid, 0) for gid in gids)
+            if est_sum != 0:
+                failures.append(
+                    f"Peer-group '{substring}' is expected EMPTY on {hostname} "
+                    f"but still has {est_sum} Established member(s) across update "
+                    f"groups {sorted(gids)} (cross-referenced with getBgpSessions). "
+                    f"The empty-group condition did not take effect."
+                )
 
         # If any assertion failed, report them all together.
         if failures:

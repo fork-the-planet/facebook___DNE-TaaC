@@ -424,6 +424,7 @@ def _build_threshold_check(
     start_time_jq_var: t.Optional[str] = None,
     delta: t.Optional[float] = None,
     check_scope: t.Optional["hc_types.Scope"] = None,
+    vmhwm_threshold: t.Optional[t.Union[int, float]] = None,
 ) -> PointInTimeHealthCheck:
     """Internal helper: build a CPU/memory-style threshold-based PointInTimeHealthCheck.
 
@@ -437,6 +438,8 @@ def _build_threshold_check(
         json_payload["threshold_by_service"] = threshold_by_service
     if delta is not None:
         json_payload["delta"] = delta
+    if vmhwm_threshold is not None:
+        json_payload["vmhwm_threshold"] = vmhwm_threshold
     jq_params = {"start_time": f".{start_time_jq_var}"} if start_time_jq_var else None
     if not json_payload and not jq_params:
         return PointInTimeHealthCheck(name=check_name, check_scope=check_scope)
@@ -482,6 +485,7 @@ def create_memory_utilization_check(
     start_time_jq_var: t.Optional[str] = None,
     delta: t.Optional[t.Union[int, float]] = None,
     check_scope: t.Optional["hc_types.Scope"] = None,
+    vmhwm_threshold: t.Optional[t.Union[int, float]] = None,
 ) -> PointInTimeHealthCheck:
     """MEMORY_UTILIZATION_CHECK — verifies memory usage stays below thresholds.
 
@@ -494,6 +498,12 @@ def create_memory_utilization_check(
             devices. When omitted, the Arista path is skipped.
         check_scope: Optional scope override (e.g. ``Scope.DEFAULT`` to run on
             the DUT only).
+        vmhwm_threshold: Absolute VmHWM (peak resident memory) ceiling in bytes
+            for the BGP++ (``bgpcpp``) process on Arista/EOS DUTs. The standard
+            Arista path only samples RSS deltas and bgpcpp exports no VmHWM
+            counter, so this reads ``/proc/<pid>/status`` VmHWM directly and
+            asserts it stays below the ceiling. Use for the UG spec's
+            "VmHWM below 10 GB" pass criterion. Only honored on the Arista path.
     """
     return _build_threshold_check(
         hc_types.CheckName.MEMORY_UTILIZATION_CHECK,
@@ -501,6 +511,7 @@ def create_memory_utilization_check(
         threshold_by_service,
         start_time_jq_var,
         check_scope=check_scope,
+        vmhwm_threshold=vmhwm_threshold,
     )
 
 
@@ -754,6 +765,7 @@ def create_bgp_update_group_check(
     expected_policy_names: t.Optional[t.Dict[str, t.List[str]]] = None,
     expected_group_count: t.Optional[int] = None,
     expect_enabled: bool = True,
+    expect_empty_peer_groups: t.Optional[t.List[str]] = None,
     check_id: t.Optional[str] = None,
 ) -> PointInTimeHealthCheck:
     """Create a point-in-time BGP++ Update Group check.
@@ -786,6 +798,13 @@ def create_bgp_update_group_check(
             ``{"EB-EB-V6": ["IBGP-V6-EGRESS"]}`` or ``{"EB-FA-V6": ["A", "B"]}``.
         expected_group_count: When set, assert the total update-group count.
         expect_enabled: Assert ``enable_update_group`` is True (default True).
+        expect_empty_peer_groups: Optional list of peer-group substrings asserted
+            to be EMPTY -- each must map to NO update group with Established
+            members (the group emptied / was cleaned up, cross-referenced with
+            getBgpSessions). The inverse of ``peer_group_substrings``; use it to
+            verify an "empty group" edge case (e.g. UG spec 2.9.7) where the last
+            peer left the group. FAILs if any matching update group still has an
+            Established member.
         check_id: Optional unique identifier for the check.
 
     Returns:
@@ -799,6 +818,9 @@ def create_bgp_update_group_check(
     }
     if expected_group_count is not None:
         params["expected_group_count"] = expected_group_count
+    # Included only when set so the default-call factory snapshot stays stable.
+    if expect_empty_peer_groups:
+        params["expect_empty_peer_groups"] = expect_empty_peer_groups
     return PointInTimeHealthCheck(
         name=hc_types.CheckName.BGP_UPDATE_GROUP_CHECK,
         check_params=Params(json_params=json.dumps(params)),
