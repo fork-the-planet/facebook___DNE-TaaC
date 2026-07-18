@@ -39,9 +39,9 @@ def _ebgp_import_params(configs):
 
 class EbgpNextHopSelfTest(unittest.TestCase):
     """The eBGP next-hop must be the connected tester IP so the DUT can resolve
-    it. That requires BOTH the import-time modification type AND the route
-    property NextHopType (which otherwise defaults to MANUALLY and pins the
-    next-hop to the CSV value)."""
+    it. The route property NextHopType (SAME_AS_LOCAL_IP) is the authoritative
+    knob (it otherwise defaults to MANUALLY and pins the next-hop to the CSV
+    value); the import-time modification type stays PRESERVE_FROM_FILE."""
 
     def test_next_hop_self_sets_same_as_local_ip(self) -> None:
         params = _ebgp_import_params(
@@ -55,9 +55,11 @@ class EbgpNextHopSelfTest(unittest.TestCase):
                 p.set_next_hop_type,
                 ixia_types.SetNextHopType.SAME_AS_LOCAL_IP,
             )
+            # OVER_WRITE_TESTERS_ADDRESS was dropped as redundant -- NextHopType
+            # does the work, so the modification type stays PRESERVE_FROM_FILE.
             self.assertEqual(
                 p.bgp_next_hop_modification_type,
-                ixia_types.BgpNextHopModificationType.OVER_WRITE_TESTERS_ADDRESS,
+                ixia_types.BgpNextHopModificationType.PRESERVE_FROM_FILE,
             )
 
     def test_default_leaves_next_hop_type_unset(self) -> None:

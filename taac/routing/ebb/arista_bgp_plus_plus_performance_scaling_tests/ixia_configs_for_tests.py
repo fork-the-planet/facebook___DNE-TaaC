@@ -109,20 +109,17 @@ def create_ebb_performance_scale_basic_port_configs(
         List of BasicPortConfig objects for Ixia configuration
     """
     basic_configs: list[BasicPortConfig] = []
-    _ebgp_next_hop_mod = (
-        ixia_types.BgpNextHopModificationType.OVER_WRITE_TESTERS_ADDRESS
-        if ebgp_next_hop_self
-        else ixia_types.BgpNextHopModificationType.PRESERVE_FROM_FILE
-    )
-    # The import-time modification type alone does NOT change what IXIA
-    # advertises: the route property's NextHopType defaults to MANUALLY, which
-    # pins the next-hop to the CSV/manual value (the routes stayed on the
-    # unresolvable CSV next-hop 195.0.0.1). SAME_AS_LOCAL_IP makes IXIA
-    # advertise each route with next-hop = the peer's own local stack IP (the
-    # connected .11), which the DUT resolves via the connected interface route.
-    # Both knobs are driven by the single ebgp_next_hop_self source of truth.
-    # Leave the field unset (None) when disabled so existing PRESERVE_FROM_FILE
-    # callers (e.g. separable-policy) stay byte-identical -- runtime already
+    # NextHopType=SAME_AS_LOCAL_IP (below) is the authoritative control for the
+    # advertised eBGP next-hop, so the import-time modification type stays at
+    # PRESERVE_FROM_FILE for all callers. OVER_WRITE_TESTERS_ADDRESS was
+    # redundant -- on its own it never flipped the next-hop off the CSV value
+    # (the route property's NextHopType defaulted to MANUALLY, pinning it to the
+    # CSV next-hop 195.0.0.1); only NextHopType does the work.
+    _ebgp_next_hop_mod = ixia_types.BgpNextHopModificationType.PRESERVE_FROM_FILE
+    # SAME_AS_LOCAL_IP makes IXIA advertise each eBGP route with next-hop = the
+    # peer's own local stack IP (the connected .11), which the DUT resolves via
+    # the connected interface route. Leave the field unset (None) when disabled
+    # so existing callers (e.g. separable-policy) stay byte-identical -- runtime
     # defaults an unset value to MANUALLY.
     _ebgp_set_next_hop = (
         ixia_types.SetNextHopType.SAME_AS_LOCAL_IP if ebgp_next_hop_self else None
