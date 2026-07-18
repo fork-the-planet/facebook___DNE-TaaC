@@ -64,6 +64,19 @@ IBGP_PEER_SCALE_PER_PLANE = 62
 
 
 # =============================================================================
+# EBB Full-Scale Routing Device and Prefix-Pool Defaults
+# =============================================================================
+EBB_BGP_HOLD_TIMER_S = 180
+EBB_BGP_KEEPALIVE_TIMER_S = 60
+EBB_DEVICE_PREFIX_LIMIT = 2_000_000
+EBB_DEVICE_PER_PEER_MAX_ROUTE_LIMIT = 1_500_000
+EBB_DEVICE_ROUTE_LIMIT = 5_000_000
+EBB_EBGP_ROUTE_COUNT = 1_000_000
+EBB_EBGP_V6_ROUTE_FILE = "ipv6_1M_routes.txt"
+EBB_EBGP_V4_ROUTE_FILE = "ipv4_1M_routes.txt"
+
+
+# =============================================================================
 # Drain Counts for Testing
 # =============================================================================
 EBGP_PEER_TO_DRAIN = 4
