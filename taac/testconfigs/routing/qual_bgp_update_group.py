@@ -32,7 +32,11 @@ from taac.testconfigs.routing.factories.qual_bgp_update_group.tc6_bit_alloc_grou
 from taac.testconfigs.routing.factories.qual_bgp_update_group.tc7_disruption_recovery import (
     create_bgp_ug_disruption_recovery_test_config,
 )
+from taac.testconfigs.routing.factories.qual_bgp_update_group.tc9_edge_cases import (
+    create_bgp_ug_edge_cases_test_config,
+)
 from taac.testconfigs.routing.testbed import (
+    BAG011_ASH6,
     BAG012_ASH6,
     BAG013_ASH6,
     EB03_LAB_ASH6,
@@ -79,8 +83,17 @@ BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG = (
     create_bgp_ug_disruption_recovery_test_config(BAG013_ASH6)
 )
 
+# ─── Spec 2.9 Edge Cases and Adversarial Scenarios ──────────────────────
+# Bundles the section-2.9 edge-case playbooks (2.9.7 empty group live today;
+# 2.9.1/2.9.2/2.9.3/2.9.4/2.9.6 land incrementally). Select an individual
+# scenario at run time with ``--regex 'bgp_ug_<usecase>'``.
+BAG011_ASH6_BGP_UG_EDGE_CASES_TEST_CONFIG = create_bgp_ug_edge_cases_test_config(
+    BAG011_ASH6
+)
+
 
 __all__ = [
+    "BAG011_ASH6_BGP_UG_EDGE_CASES_TEST_CONFIG",
     "BAG013_ASH6_BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG",
     "BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG",
     "BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG",

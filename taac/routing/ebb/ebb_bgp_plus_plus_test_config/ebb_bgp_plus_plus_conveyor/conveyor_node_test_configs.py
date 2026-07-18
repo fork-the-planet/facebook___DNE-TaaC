@@ -50,6 +50,7 @@ from taac.testconfigs.routing.cicd_ebb_int_tc import (
 # manifest is byte-wise identical) now live in
 # testconfigs/routing/qual_bgp_update_group.py; import via that path.
 from taac.testconfigs.routing.qual_bgp_update_group import (
+    BAG011_ASH6_BGP_UG_EDGE_CASES_TEST_CONFIG,
     BAG013_ASH6_BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG,
     BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG,
     BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG,
@@ -115,4 +116,11 @@ EBB_BGP_PLUS_PLUS_CONVEYOR_NODE_TEST_CONFIGS = [
     # --test-config, not wired into a conveyor node.
     BAG010_ASH6_SC1_EGRESS_PEER_SCALE_TEST_CONFIG,
     BAG010_ASH6_SC1_EGRESS_PEER_SCALE_TEST_UPDATE_GROUP_CONFIG,
+    # BGP++ UG "edge cases" qualification (spec 2.9) on bag011.ash6. Bundles
+    # the section-2.9 adversarial scenarios on the shared EBB full-scale
+    # topology (2.9.7 empty-group live today; 2.9.1/2.9.2/2.9.3/2.9.4/2.9.6
+    # land incrementally). Ad-hoc; not wired into a conveyor stage (do NOT
+    # schedule until manually verified on the device). Select a scenario with
+    # ``--regex 'bgp_ug_<usecase>'``.
+    BAG011_ASH6_BGP_UG_EDGE_CASES_TEST_CONFIG,
 ]
