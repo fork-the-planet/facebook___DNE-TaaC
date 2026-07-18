@@ -4,7 +4,7 @@
 
 **Applies to**: every playbook factory function that produces a `Playbook` used by a routing testconfig factory. Existing playbook factories in `playbooks/playbook_definitions.py` are legacy — they migrate gradually. New playbook work follows this guide from day one.
 
-**Companion doc**: this guide pairs with the testconfig guide (`routing_coding_guide_testconfig.md`). Testconfig factories consume playbook factories; the two layers live in mirrored `routing/` subdirectories.
+**Companion doc**: this guide pairs with the testconfig guide (`../../testconfigs/routing/README.md`). Testconfig factories consume playbook factories; the two layers live in mirrored `routing/` subdirectories.
 
 **Purpose**: establish a durable pattern so every playbook = one test case, every factory has a predictable name, and adding a new playbook requires one function in one domain file.
 
@@ -312,6 +312,23 @@ Migration plan:
 - **Playbooks under `testconfigs/npi/`, `testconfigs/hyperport/`, `testconfigs/fpf/`, etc.** — this guide governs `playbooks/routing/` only.
 - **Playbook / step / task / healthcheck primitive definitions** (`playbooks/playbook_definitions.py` legacy home, `steps/step_definitions.py`, `tasks/`, `health_checks/healthcheck_definitions.py`). Playbook factories in `playbooks/routing/` IMPORT from these; they retain their own conventions.
 - **The helper library at `routing/ebb/ebb_bgp_plus_plus_test_config/`** (common_health_checks, common_periodic_tasks, ixia_config_for_ebb_scale, conveyor_common_tasks, conveyor_constants). Playbook factories import from these; helper-tree migration is deferred.
+- **TAAC Abstractions topology compile output** (`abstractions/`). Phase 1 keeps
+  playbooks factory-owned. A topology helper may later build playbook steps only
+  after byte-identical output is proven.
+
+---
+
+## 12. Relationship to TAAC Abstractions
+
+TAAC Abstractions can provide routing topology metadata to factories, but they
+do not own playbook selection in Phase 1. The factory still decides which
+playbooks and stages belong in a `TestConfig`.
+
+Future topology-backed helper methods may generate low-level step arguments
+from device-group and prefix-pool metadata. Those helpers must be validated
+against existing playbook output before replacing factory-owned step assembly.
+Until then, playbook factories should continue to accept explicit arguments and
+return ordinary flat TAAC `Playbook` objects.
 
 ---
 

@@ -765,6 +765,42 @@ This guide governs `testconfigs/routing/` only. Not covered here:
 
 ---
 
+## 15. Optional TAAC Abstractions
+
+Routing factories may use TAAC Abstractions when a typed topology model makes a
+factory easier to validate and migrate without changing bytes. The abstraction
+path is optional; flat factory authoring remains valid.
+
+The intended factory shape is:
+
+```python
+topology = EBB_FULL_SCALE_WITH_BGPMON
+bound = topology.bind_to_testbed(
+    testbed=testbed,
+    port_map={"uplink": 0, "ibgp": 1, "bgpmon": 2},
+    parent_networks=parent_networks,
+    peer_groups=peer_groups,
+    as_numbers=as_numbers,
+)
+compiled = bound.compile()
+```
+
+Routing `Testbed` remains physical inventory: DUT name, ordered IXIA ports,
+IXIA chassis, `dut_bgp_as`, configerator paths, and lab defaults. Topology
+intent belongs in topology objects and factory-level dictionaries.
+
+Factories should import topology instances from
+`neteng.test_infra.dne.taac.abstractions.topologies.*`. They should not
+instantiate concrete compiler classes or choose EOS/FBOSS by selecting a
+different topology object.
+
+Phase 1 keeps playbooks factory-owned and does not migrate production factories
+or replace setup/teardown helpers. Any future factory migration must prove
+old/new JSON parity and keep the golden manifest unchanged unless a rebaseline
+is explicitly approved.
+
+---
+
 ## Appendix: quick reference
 
 ### Adding a testconfig — checklist
