@@ -394,6 +394,13 @@ def create_ebb_scale_basic_port_configs(
     ixia_interface_mimic_ibgp_plane2: str | None = None,
     ixia_interface_mimic_ibgp_plane3: str | None = None,
     ixia_interface_mimic_ibgp_plane4: str | None = None,
+    # When False, build the eBGP peers with graceful restart DISABLED. The eBGP
+    # BgpConfig thrift default is ``enable_graceful_restart=True`` (iBGP/BGP-MON
+    # are already built GR-off); the 2.9.2 simultaneous-disruptions test sets this
+    # False so eBGP sessions flap "without graceful restart" per spec. Passing the
+    # default True is byte-identical to the previous (omitted) behavior -- the
+    # field is non-optional with default True -- so existing goldens are unchanged.
+    ebgp_graceful_restart: bool = True,
     drain: bool = False,
     # Per-plane optional override for the IPv6 drain DG's BGP attribute pool
     # configs. Map: plane_num (1..4) -> list of BgpAttributeConfig. Used by the
@@ -559,6 +566,7 @@ def create_ebb_scale_basic_port_configs(
                 bgp_peer_name="BGP_PEER_IPV6_EBGP",
                 local_as_4_bytes=ebgp_remote_as,
                 enable_4_byte_local_as=True,
+                enable_graceful_restart=ebgp_graceful_restart,
                 bgp_capabilities=[ixia_types.BgpCapability.IpV6Unicast],
                 bgp_peer_type=ixia_types.BgpPeerType.EBGP,
                 import_bgp_routes_params_list=[
@@ -607,6 +615,7 @@ def create_ebb_scale_basic_port_configs(
                     bgp_peer_name="BGP_PEER_IPV6_EBGP_DRAIN",
                     local_as_4_bytes=ebgp_remote_as,
                     enable_4_byte_local_as=True,
+                    enable_graceful_restart=ebgp_graceful_restart,
                     bgp_capabilities=[ixia_types.BgpCapability.IpV6Unicast],
                     bgp_peer_type=ixia_types.BgpPeerType.EBGP,
                     import_bgp_routes_params_list=[
@@ -659,6 +668,7 @@ def create_ebb_scale_basic_port_configs(
                 bgp_peer_name="BGP_PEER_IPV4_EBGP",
                 local_as_4_bytes=ebgp_remote_as,
                 enable_4_byte_local_as=True,
+                enable_graceful_restart=ebgp_graceful_restart,
                 bgp_capabilities=[ixia_types.BgpCapability.IpV4Unicast],
                 bgp_peer_type=ixia_types.BgpPeerType.EBGP,
                 import_bgp_routes_params_list=[
@@ -706,6 +716,7 @@ def create_ebb_scale_basic_port_configs(
                     bgp_peer_name="BGP_PEER_IPV4_EBGP_DRAIN",
                     local_as_4_bytes=ebgp_remote_as,
                     enable_4_byte_local_as=True,
+                    enable_graceful_restart=ebgp_graceful_restart,
                     bgp_capabilities=[ixia_types.BgpCapability.IpV4Unicast],
                     bgp_peer_type=ixia_types.BgpPeerType.EBGP,
                     import_bgp_routes_params_list=[

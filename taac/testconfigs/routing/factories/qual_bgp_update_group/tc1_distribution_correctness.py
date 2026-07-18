@@ -110,6 +110,12 @@ def build_bag_conveyor_test_config(
     playbooks: t.List[taac_types.Playbook],
     profile: BgpPlusPlusProfile = BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
     enable_update_group: bool = True,
+    # Forwarded to create_ebb_scale_basic_port_configs; when False the eBGP peers
+    # are built with graceful restart disabled (the 2.9.2 simultaneous-disruptions
+    # test flaps eBGP sessions "without graceful restart" per spec). Default True
+    # is byte-identical to the previous behavior (non-optional thrift field
+    # defaulting True), so existing bag goldens are unchanged.
+    ebgp_graceful_restart: bool = True,
 ) -> taac_types.TestConfig:
     """Shared bag conveyor topology TestConfig builder.
 
@@ -144,6 +150,27 @@ def build_bag_conveyor_test_config(
     ixia_interface_mimic_ebgp, ixia_port_ebgp = testbed.ixia_ports[0]
     ixia_interface_mimic_ibgp, ixia_port_ibgp = testbed.ixia_ports[1]
 
+    # Open/R setup is wired ONLY for the WITH_OPEN_R profile. get_common_setup_tasks
+    # deploys the openr_config + injects baseline Open/R routes whenever an
+    # openr_configerator_path is passed, so forwarding these unconditionally would
+    # add Open/R tasks to the WITHOUT_OPEN_R configs and change their goldens. Under
+    # WITHOUT_OPEN_R ``openr_kwargs`` stays empty -> byte-identical to before.
+    # bag011's testbed carries every openr_* field (testbed.py); this mirrors the
+    # full-scale builder's wiring so a WITH_OPEN_R bag config (e.g. the 2.9.2
+    # simultaneous-disruptions test, which needs Open/R for its IGP-instability
+    # track) gets a functional Open/R daemon + port-channel + injected routes.
+    openr_kwargs: t.Dict[str, t.Any] = {}
+    if profile == BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R:
+        extras = testbed.extras
+        openr_kwargs = {
+            "openr_configerator_path": testbed.openr_configerator_path,
+            "openr_port_channel_member": extras["openr_port_channel_member"],
+            "openr_port_channel_ipv4": extras["openr_port_channel_ipv4"],
+            "openr_port_channel_link_local": extras["openr_port_channel_link_local"],
+            "openr_local_link": extras["openr_local_link"],
+            "openr_other_link": extras["openr_other_link"],
+        }
+
     setup_tasks = get_common_setup_tasks(
         device_name=device_name,
         bgp_asn=testbed.dut_bgp_as,
@@ -153,6 +180,7 @@ def build_bag_conveyor_test_config(
         profile=profile,
         include_bgp_mon=False,
         enable_update_group=enable_update_group,
+        **openr_kwargs,
     )
 
     # Pass device_name so the interface-cleanup teardown tasks target the DUT.
@@ -229,6 +257,7 @@ def build_bag_conveyor_test_config(
             ixia_ibgp_ic_parent_network_v4_mp_plane4=IXIA_IBGP_IC_PARENT_NETWORK_V4_MP_PLANE4,
             include_bgp_mon=False,
             profile=profile,
+            ebgp_graceful_restart=ebgp_graceful_restart,
         ),
         playbooks=playbooks,
     )
