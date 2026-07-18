@@ -21,4 +21,5 @@ from taac.playbooks.routing.factories.qual_bgp_update_group import (  # noqa: F4
     tc5_multigroup_formation,
     tc6_bit_alloc_group_stab_under_flap,
     tc7_disruption_recovery,
+    tc9_edge_cases,
 )
