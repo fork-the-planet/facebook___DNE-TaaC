@@ -13,10 +13,12 @@ Spec 2.9.5 is struck-through / excluded in the qualification plan.
 
 import typing as t
 
+from taac.constants import OpenRRouteAction
 from taac.health_checks.healthcheck_definitions import (
     create_bgp_session_establish_check,
     create_bgp_update_group_check,
     create_device_core_dumps_check,
+    create_log_parsing_check,
     create_memory_utilization_check,
     create_service_restart_check,
     create_system_cpu_load_average_check,
@@ -27,6 +29,9 @@ from taac.steps.step_definitions import (
     create_custom_step,
     create_ixia_api_step,
     create_longevity_step,
+    create_openr_route_action_step,
+    create_run_task_step,
+    create_set_bgp_prefixes_local_preference_step,
     create_validation_step,
 )
 from taac.testconfigs.routing.util.bgp_ebb_health_checks import (
@@ -34,9 +39,11 @@ from taac.testconfigs.routing.util.bgp_ebb_health_checks import (
     BGP_STANDARD_SNAPSHOT_CHECKS,
 )
 from taac.test_as_a_config.types import (
+    ConcurrentStep,
     Playbook,
     PointInTimeHealthCheck,
     SnapshotHealthCheck,
+    Step,
 )
 
 
@@ -563,6 +570,486 @@ def create_bgp_ug_empty_group_playbook(
         # Generic, DUT-agnostic name -- device scope lives in the surrounding
         # TestConfig (e.g. ``BAG011_ASH6_BGP_UG_EDGE_CASES_TEST``).
         name="bgp_ug_empty_group",
+        stages=stages,
+        prechecks=prechecks,
+        postchecks=postchecks,
+        snapshot_checks=snapshot_checks,
+    )
+
+
+# =============================================================================
+# 2.9.2 Simultaneous Disruptions Across All Groups
+# =============================================================================
+#
+# The spec runs FOUR disruption types concurrently for 30 minutes -- eBGP route
+# churn (with varying communities), random eBGP session flaps (without graceful
+# restart), IGP-metric instability via Open/R, and iBGP LOCAL_PREF churn -- while
+# monitoring that the iBGP update group stays stable (sessions Established, no
+# crash, CPU/load bounded), then stops everything, waits for convergence, and
+# verifies recovery + a bounded VmHWM growth. Modeled as ONE concurrent
+# ``create_steps_stage`` with one ``ConcurrentStep`` per disruption track plus a
+# monitor track and a spanning VmHWM-growth track (each ConcurrentStep is an
+# independent asyncio task; the stage ends when the longest finishes), followed by
+# a sequential convergence-verify stage. Each track's total sleep sums to
+# ~``disruption_duration_s`` so the whole stage runs for the intended window.
+#
+# Distribution/route-count verification (spec pass-criterion 3) is intentionally
+# NOT asserted: adj-RIB-out is vacuous under UG (T271301144) and the DUT
+# advertises 0 on this topology pending a DNE egress-policy answer, so the
+# landable substance here is stability (no crash, iBGP stays up, CPU/mem/load
+# bounded) -- which is exactly what 2.9.2 stresses, and it directly exercises the
+# known cross-group bugs T275928998 / T264949859.
+
+
+def _route_churn_track_steps(
+    *,
+    device_name: str,
+    prefix_pool_regex: str,
+    route_count: int,
+    community_values: t.List[str],
+    interval_s: int,
+    duration_s: int,
+) -> t.List[Step]:
+    """Track: every ``interval_s`` withdraw + re-advertise ``route_count`` eBGP
+    routes, rotating the community each cycle (spec 2.9.2 route churn)."""
+    steps: t.List[Step] = []
+    iterations = max(1, duration_s // interval_s)
+    half = max(1, interval_s // 2)
+    for i in range(iterations):
+        community = community_values[i % len(community_values)]
+        steps.extend(
+            [
+                # Rotate the community on the eBGP pool -- peer-scoped modify (only
+                # the owning peer restarts, no chassis-wide cascade); the tc3
+                # backpressure pattern (count=0 + broadcast_to_all_slots).
+                create_run_task_step(
+                    task_name="ixia_modify_communities",
+                    params_dict={
+                        "prefix_pool_regex": prefix_pool_regex,
+                        "count": 0,
+                        "to_add": True,
+                        "community_values": [community],
+                        "broadcast_to_all_slots": True,
+                    },
+                    description=(
+                        f"2.9.2 route churn -- set community {community} on "
+                        f"{prefix_pool_regex} (cycle {i + 1}/{iterations})"
+                    ),
+                    ixia_needed=True,
+                ),
+                create_advertise_withdraw_prefixes_step(
+                    device_name=device_name,
+                    advertise=False,
+                    prefix_pool_regex=prefix_pool_regex,
+                    prefix_start_index=0,
+                    prefix_end_index=route_count,
+                    description=(
+                        f"2.9.2 route churn -- withdraw {route_count} eBGP routes "
+                        f"(cycle {i + 1}/{iterations})"
+                    ),
+                ),
+                create_longevity_step(duration=half),
+                create_advertise_withdraw_prefixes_step(
+                    device_name=device_name,
+                    advertise=True,
+                    prefix_pool_regex=prefix_pool_regex,
+                    prefix_start_index=0,
+                    prefix_end_index=route_count,
+                    description=(
+                        f"2.9.2 route churn -- re-advertise {route_count} eBGP "
+                        f"routes (cycle {i + 1}/{iterations})"
+                    ),
+                ),
+                create_longevity_step(duration=interval_s - half),
+            ]
+        )
+    return steps
+
+
+def _session_flap_track_steps(
+    *,
+    ebgp_flap_peer_regex: str,
+    random_session_num: int,
+    interval_s: int,
+    duration_s: int,
+) -> t.List[Step]:
+    """Track: every ``interval_s`` flap ``random_session_num`` RANDOM eBGP
+    sessions (Stop/Start; the eBGP peers are built GR-off so this is a flap
+    "without graceful restart" per spec). ``ixia_restart_bgp_sessions`` is the
+    only random-subset flap primitive (random.sample of the matched sessions)."""
+    steps: t.List[Step] = []
+    iterations = max(1, duration_s // interval_s)
+    for i in range(iterations):
+        steps.extend(
+            [
+                create_run_task_step(
+                    task_name="ixia_restart_bgp_sessions",
+                    params_dict={
+                        "bgp_peer_regex": ebgp_flap_peer_regex,
+                        "random_session_num": random_session_num,
+                    },
+                    description=(
+                        f"2.9.2 session flap -- restart {random_session_num} "
+                        f"random eBGP sessions (cycle {i + 1}/{iterations})"
+                    ),
+                    ixia_needed=True,
+                ),
+                create_longevity_step(duration=interval_s),
+            ]
+        )
+    return steps
+
+
+def _attribute_churn_track_steps(
+    *,
+    ibgp_prefix_pool_regex: str,
+    route_count: int,
+    local_pref_low: int,
+    local_pref_high: int,
+    interval_s: int,
+    duration_s: int,
+) -> t.List[Step]:
+    """Track: every ``interval_s`` toggle LOCAL_PREF on ``route_count`` iBGP
+    routes between two values (spec 2.9.2 attribute churn -- best-path flips)."""
+    steps: t.List[Step] = []
+    iterations = max(1, duration_s // interval_s)
+    for i in range(iterations):
+        lp = local_pref_high if i % 2 == 0 else local_pref_low
+        steps.extend(
+            [
+                create_set_bgp_prefixes_local_preference_step(
+                    prefix_pool_regex=ibgp_prefix_pool_regex,
+                    local_pref_value=lp,
+                    prefix_start_index=0,
+                    prefix_end_index=route_count,
+                    description=(
+                        f"2.9.2 attribute churn -- set LOCAL_PREF={lp} on "
+                        f"{route_count} iBGP routes (cycle {i + 1}/{iterations})"
+                    ),
+                ),
+                create_longevity_step(duration=interval_s),
+            ]
+        )
+    return steps
+
+
+def _monitor_track_steps(
+    *,
+    non_ibgp_parent_prefixes: t.List[str],
+    load_avg_baseline: float,
+    interval_s: int,
+    duration_s: int,
+    retry_count: int,
+    retry_delay_s: float,
+) -> t.List[Step]:
+    """Track: every ``interval_s`` assert -- throughout the disruption -- that no
+    BGP daemon crashed, the iBGP sessions stay Established (eBGP is intentionally
+    flapping, so scope to iBGP by ignoring eBGP + BGP-MON parents), and the system
+    load-average stays under baseline (spec 2.9.2 monitoring + pass-criteria 1/2/6).
+
+    Device-CPU health is asserted via the system load-average (the correct EOS
+    device signal). A per-process bgpcpp CPU% gate was intentionally NOT used: the
+    ``bgpd.process.cpu.percent`` counter is per-process and routinely reads >100%
+    (~1 core) under this churn, so it is not the spec's device-level "CPU < 40%"
+    and mis-fires; load-average is the meaningful EOS device-CPU signal."""
+    steps: t.List[Step] = []
+    iterations = max(1, duration_s // interval_s)
+    for i in range(iterations):
+        steps.extend(
+            [
+                create_validation_step(
+                    point_in_time_checks=[
+                        *_no_crash_checks(),
+                        # iBGP must stay Established despite eBGP churn / IGP
+                        # instability -- the core 2.9.2 invariant and the known
+                        # cross-group bugs T275928998 / T264949859. Retries absorb
+                        # the "CLI empty under heavy load" transient (T271300586)
+                        # without masking a real sustained iBGP flap.
+                        create_bgp_session_establish_check(
+                            parent_prefixes_to_ignore=non_ibgp_parent_prefixes,
+                            retry_count=retry_count,
+                            retry_delay_seconds=retry_delay_s,
+                            check_id="simul_disrupt_ibgp_established",
+                        ),
+                        create_system_cpu_load_average_check(
+                            baseline=load_avg_baseline
+                        ),
+                    ],
+                    description=(
+                        f"2.9.2 monitor -- no crash; iBGP Established; "
+                        f"load-avg<={load_avg_baseline} (sample {i + 1}/{iterations})"
+                    ),
+                ),
+                create_longevity_step(duration=interval_s),
+            ]
+        )
+    return steps
+
+
+def create_bgp_ug_simultaneous_disruptions_playbook(
+    *,
+    device_name: str,
+    # --- Route churn track (eBGP) ---
+    ebgp_route_pool_regex: str,
+    ibgp_attr_pool_regex: str,
+    ebgp_flap_peer_regex: str,
+    # --- IGP-instability track (Open/R metric oscillation; requires WITH_OPEN_R)
+    openr_start_ipv4s: t.List[str],
+    openr_start_ipv6s: t.List[str],
+    openr_local_link: t.Dict[str, t.Any],
+    openr_other_link: t.Dict[str, t.Any],
+    # --- Monitor track scoping + gates ---
+    non_ibgp_parent_prefixes: t.List[str],
+    # --- Resource gates ---
+    vmhwm_growth_threshold_bytes: int,
+    # --- Checks ---
+    prechecks: t.List[PointInTimeHealthCheck],
+    postchecks: t.Optional[t.List[PointInTimeHealthCheck]] = None,
+    snapshot_checks: t.Optional[t.List[SnapshotHealthCheck]] = None,
+    bgp_mon_ignore_prefixes: t.Optional[t.List[str]] = None,
+    # --- Tunables (spec defaults) ---
+    route_churn_count: int = 200,
+    route_churn_community_values: t.Optional[t.List[str]] = None,
+    route_churn_interval_s: int = 60,
+    flap_random_session_num: int = 16,
+    session_flap_interval_s: int = 120,
+    attr_churn_count: int = 100,
+    local_pref_low: int = 90,
+    local_pref_high: int = 110,
+    attr_churn_interval_s: int = 60,
+    igp_metric_count: int = 63,
+    igp_metric_step: int = 2,
+    igp_frequency_s: int = 60,
+    load_avg_baseline: float = 12.0,
+    monitor_interval_s: int = 120,
+    monitor_retry_count: int = 3,
+    monitor_retry_delay_s: float = 10.0,
+    vmhwm_absolute_threshold_bytes: t.Optional[int] = None,
+    disruption_duration_s: int = 1800,
+    convergence_quiesce_s: int = 300,
+    recovery_session_retry_count: int = 10,
+    recovery_session_retry_delay_s: float = 30.0,
+) -> Playbook:
+    """Build the BGP++ Update Group qualification 2.9.2 playbook (Simultaneous
+    Disruptions Across All Groups).
+
+    Intent (spec 2.9.2): under FOUR concurrent disruption types the BGP++ agent
+    must not crash and the iBGP update group must stay stable (all iBGP sessions
+    Established throughout), and after the disruption stops it must reconverge
+    cleanly with bounded memory growth. This is the "kitchen-sink" UG stress test.
+
+    Structure -- one concurrent stage of six tracks running ``disruption_duration_s``
+    (default 30 min):
+      1. Route churn (``_route_churn_track_steps``): every ``route_churn_interval_s``
+         withdraw + re-advertise ``route_churn_count`` eBGP routes, rotating the
+         community.
+      2. Session flaps (``_session_flap_track_steps``): every
+         ``session_flap_interval_s`` flap ``flap_random_session_num`` RANDOM eBGP
+         sessions (GR-off, so a real "no graceful restart" flap per spec).
+      3. Attribute churn (``_attribute_churn_track_steps``): every
+         ``attr_churn_interval_s`` toggle LOCAL_PREF on ``attr_churn_count`` iBGP
+         routes between ``local_pref_low`` and ``local_pref_high``.
+      4. IGP instability: one self-running ``create_openr_route_action_step``
+         (``METRIC_OSCILLATION``) oscillating Open/R metrics toward the injected
+         PNHs for the whole window (needs the WITH_OPEN_R profile).
+      5. VmHWM growth gate: one spanning ``bgp_vmhwm_growth_monitor`` custom step
+         that captures VmHWM, waits the window, re-reads, and FAILs if growth
+         exceeds ``vmhwm_growth_threshold_bytes`` (spec pass-criterion 4).
+      6. Monitor (``_monitor_track_steps``): every ``monitor_interval_s`` assert
+         no crash + iBGP Established + system load-average bound (the EOS
+         device-CPU signal; a per-process bgpcpp CPU% gate is intentionally not
+         used -- it reads >100% under churn and isn't the spec's device "40%").
+
+    Then a sequential convergence stage: re-inject the Open/R routes to restore
+    baseline IGP metrics, quiesce ``convergence_quiesce_s`` (default 5 min), and
+    verify no crash + ALL sessions re-Established (excl BGP-MON) + UG still formed.
+
+    ``non_ibgp_parent_prefixes`` (eBGP v6/v4 + BGP-MON parents) scopes the
+    "iBGP Established throughout" check to iBGP only, since eBGP is intentionally
+    being flapped. ``bgp_mon_ignore_prefixes`` scopes the recovery all-sessions
+    check to exclude the never-emulated BGP-MON peers.
+
+    Route-count / distribution verification (spec pass-criterion 3) is not
+    asserted -- adj-RIB-out is vacuous under UG (T271301144) and the DUT advertises
+    0 on this topology pending a DNE egress answer -- so the substance here is the
+    stability/no-crash/no-flap/bounded-resource invariants (the rest of 2.9.2's
+    pass criteria), which directly exercise the known cross-group bugs
+    T275928998 / T264949859.
+    """
+    if route_churn_community_values is None:
+        # Arbitrary distinct standard communities to vary per cycle. Only used to
+        # add attribute variation to the churn -- not verified end-to-end (this is
+        # an ingress-side stress, and distribution is not asserted; see above).
+        route_churn_community_values = ["65529:1001", "65529:1002", "65529:1003"]
+
+    concurrent_steps = [
+        ConcurrentStep(
+            steps=_route_churn_track_steps(
+                device_name=device_name,
+                prefix_pool_regex=ebgp_route_pool_regex,
+                route_count=route_churn_count,
+                community_values=route_churn_community_values,
+                interval_s=route_churn_interval_s,
+                duration_s=disruption_duration_s,
+            )
+        ),
+        ConcurrentStep(
+            steps=_session_flap_track_steps(
+                ebgp_flap_peer_regex=ebgp_flap_peer_regex,
+                random_session_num=flap_random_session_num,
+                interval_s=session_flap_interval_s,
+                duration_s=disruption_duration_s,
+            )
+        ),
+        ConcurrentStep(
+            steps=_attribute_churn_track_steps(
+                ibgp_prefix_pool_regex=ibgp_attr_pool_regex,
+                route_count=attr_churn_count,
+                local_pref_low=local_pref_low,
+                local_pref_high=local_pref_high,
+                interval_s=attr_churn_interval_s,
+                duration_s=disruption_duration_s,
+            )
+        ),
+        # IGP metric oscillation -- one self-running step spanning the window.
+        ConcurrentStep(
+            steps=[
+                create_openr_route_action_step(
+                    device_name=device_name,
+                    start_ipv4s=openr_start_ipv4s,
+                    start_ipv6s=openr_start_ipv6s,
+                    local_link=openr_local_link,
+                    other_link=openr_other_link,
+                    action=OpenRRouteAction.METRIC_OSCILLATION.value,
+                    count=igp_metric_count,
+                    step=igp_metric_step,
+                    duration=disruption_duration_s,
+                    frequency=igp_frequency_s,
+                    description=(
+                        "2.9.2 IGP instability -- oscillate Open/R metrics toward "
+                        "the injected PNHs for the disruption window"
+                    ),
+                ),
+            ]
+        ),
+        # VmHWM growth gate -- one spanning custom step (capture, wait, capture,
+        # FAIL if growth > threshold). Spec pass-criterion 4.
+        ConcurrentStep(
+            steps=[
+                create_custom_step(
+                    params_dict={
+                        "custom_step_name": "bgp_vmhwm_growth_monitor",
+                        "hostname": device_name,
+                        "duration_seconds": disruption_duration_s,
+                        "growth_threshold_bytes": vmhwm_growth_threshold_bytes,
+                    },
+                    description=(
+                        "2.9.2 -- assert bgpcpp VmHWM growth over the disruption "
+                        "window stays below the threshold (< 500 MB)"
+                    ),
+                ),
+            ]
+        ),
+        ConcurrentStep(
+            steps=_monitor_track_steps(
+                non_ibgp_parent_prefixes=non_ibgp_parent_prefixes,
+                load_avg_baseline=load_avg_baseline,
+                interval_s=monitor_interval_s,
+                duration_s=disruption_duration_s,
+                retry_count=monitor_retry_count,
+                retry_delay_s=monitor_retry_delay_s,
+            )
+        ),
+    ]
+
+    disruption_stage = create_steps_stage(
+        concurrent=True,
+        concurrent_steps=concurrent_steps,
+        description=(
+            "2.9.2 -- four concurrent disruption tracks (route churn, random "
+            "eBGP flaps, IGP-metric oscillation, iBGP attribute churn) + monitor "
+            "+ VmHWM-growth gate, for the disruption window"
+        ),
+    )
+
+    convergence_stage = create_steps_stage(
+        steps=[
+            # Restore baseline IGP metrics (METRIC_OSCILLATION left them random).
+            create_openr_route_action_step(
+                device_name=device_name,
+                start_ipv4s=openr_start_ipv4s,
+                start_ipv6s=openr_start_ipv6s,
+                local_link=openr_local_link,
+                other_link=openr_other_link,
+                action=OpenRRouteAction.INJECT.value,
+                count=igp_metric_count,
+                step=igp_metric_step,
+                description=(
+                    "2.9.2 recovery -- re-inject Open/R routes to restore the "
+                    "baseline IGP metrics"
+                ),
+            ),
+            create_longevity_step(
+                duration=convergence_quiesce_s,
+                description=(
+                    "2.9.2 -- quiesce (default 5 min) for full convergence after "
+                    "all disruptions stop"
+                ),
+            ),
+            create_validation_step(
+                point_in_time_checks=[
+                    *_no_crash_checks(),
+                    # All sessions must be re-Established after convergence (excl
+                    # the never-emulated BGP-MON). Retries absorb full-scale
+                    # re-convergence timing.
+                    create_bgp_session_establish_check(
+                        parent_prefixes_to_ignore=bgp_mon_ignore_prefixes,
+                        retry_count=recovery_session_retry_count,
+                        retry_delay_seconds=recovery_session_retry_delay_s,
+                        check_id="simul_disrupt_recovery_sessions",
+                    ),
+                    create_bgp_update_group_check(
+                        expect_enabled=True,
+                        check_id="simul_disrupt_recovery_ug",
+                    ),
+                ],
+                description=(
+                    "2.9.2 -- post-disruption convergence: no crash; all sessions "
+                    "re-Established (excl BGP-MON); update group still formed"
+                ),
+            ),
+        ],
+    )
+
+    stages = [disruption_stage, convergence_stage]
+
+    # Always-appended bounds (spec pass-criteria 5/6), whether the caller takes
+    # the default ``BGP_STANDARD_POSTCHECKS`` bundle or supplies its own list, so
+    # a caller-provided ``postchecks`` can never silently drop them.
+    base_postchecks = (
+        list(postchecks) if postchecks is not None else list(BGP_STANDARD_POSTCHECKS)
+    )
+    postchecks = base_postchecks + [
+        create_system_cpu_load_average_check(baseline=load_avg_baseline),
+        create_bgp_update_group_check(expect_enabled=True),
+        # Spec pass-criterion 5: no EOS logs at severity Error or higher over the
+        # test window. On EOS an empty-json/agent-less LOG_PARSING_CHECK routes to
+        # the system-log severity path (show logging emergencies/critical/errors).
+        create_log_parsing_check(start_time_jq_var="test_case_start_time"),
+    ]
+    # Optional absolute VmHWM ceiling (extra safety; not a 2.9.2 criterion, but
+    # cheap and consistent with the other UG tests). None -> skip.
+    if vmhwm_absolute_threshold_bytes is not None:
+        postchecks.append(
+            create_memory_utilization_check(
+                vmhwm_threshold=vmhwm_absolute_threshold_bytes
+            )
+        )
+    if snapshot_checks is None:
+        snapshot_checks = list(BGP_STANDARD_SNAPSHOT_CHECKS)
+
+    return Playbook(
+        name="bgp_ug_simultaneous_disruptions",
         stages=stages,
         prechecks=prechecks,
         postchecks=postchecks,
