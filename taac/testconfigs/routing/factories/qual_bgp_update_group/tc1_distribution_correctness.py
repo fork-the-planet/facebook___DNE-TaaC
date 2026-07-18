@@ -12,8 +12,9 @@ is EXPECTED and legitimate: the former empty-playbook TestConfig is
 replaced by a TestConfig that actually wires the 2.1.1 playbook. The
 eb03 catalog constant remains byte-wise identical.
 
-The bag013 conveyor topology builder is re-used by tc7 (sustained link
-flap), so ``build_bag013_conveyor_test_config`` is a public helper.
+The bag conveyor topology builder is re-used by tc7 (sustained link flap)
+and tc9 (edge cases), so ``build_bag_conveyor_test_config`` is a public
+helper.
 """
 
 import json
@@ -87,7 +88,7 @@ from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConf
 
 
 # =============================================================================
-# BAG013 conveyor topology — shared bag013 builder re-used by tc7 as well.
+# BAG conveyor topology — shared builder re-used by tc7 / tc9 as well.
 # =============================================================================
 #
 # Wave 6 factoring: the previous ``_create_bag013_ash6_conveyor_test_config_impl``
@@ -95,10 +96,14 @@ from taac.test_as_a_config.types import DirectIxiaConnection, Endpoint, TestConf
 # (``enable_update_group=True``). Wave 6 splits that mono-TC into per-spec-section
 # TestConfigs (tc1 = 2.1.1 only, tc7 = 2.7.2 only); this helper accepts the
 # playbook list + TestConfig ``name`` field as parameters so each spec-section
-# factory can build its own TestConfig on the same underlying bag013 topology.
+# factory can build its own TestConfig on the same underlying bag conveyor
+# topology. Every value is read from the passed ``testbed`` (device_name,
+# dut_bgp_as, ixia_ports, bgpcpp path), so the builder is DUT-agnostic across
+# the bag010/011/012/013 EBB conveyor nodes; the tc9 edge-cases factory reuses
+# it for bag011.
 
 
-def build_bag013_conveyor_test_config(
+def build_bag_conveyor_test_config(
     testbed: Testbed,
     *,
     name: str,
@@ -106,7 +111,7 @@ def build_bag013_conveyor_test_config(
     profile: BgpPlusPlusProfile = BgpPlusPlusProfile.BGP_PLUS_PLUS_WITHOUT_OPEN_R,
     enable_update_group: bool = True,
 ) -> taac_types.TestConfig:
-    """Shared bag013 conveyor topology TestConfig builder.
+    """Shared bag conveyor topology TestConfig builder.
 
     Wave 6 factoring of the legacy
     ``bag013_ash6_test_config.create_bag013_ash6_conveyor_test_config()``
@@ -114,9 +119,16 @@ def build_bag013_conveyor_test_config(
     need. UG qualification never exercises BGP-MON or OpenR, so this
     builder wires only the eBGP + iBGP topology (``include_bgp_mon=False``)
     and defaults ``profile`` to ``WITHOUT_OPEN_R``.
+
+    DUT-agnostic across the bag010/011/012/013 EBB conveyor nodes: every
+    value is read from ``testbed`` (device_name, dut_bgp_as, ixia_ports,
+    bgpcpp_configerator_path), so cloning to a new bag node is a one-line
+    catalog change. Renamed from ``build_bag013_conveyor_test_config``
+    (formerly bag013-hardcoded) during the tc9 edge-cases work;
+    behavior-preserving, so existing bag013 goldens stay byte-identical.
     """
-    assert testbed.device_name == "bag013.ash6", (
-        f"bag013 conveyor topology builder is hardcoded to bag013.ash6; "
+    assert testbed.device_name.startswith("bag"), (
+        f"bag conveyor topology builder targets bag* EBB conveyor nodes; "
         f"got testbed.device_name={testbed.device_name!r}."
     )
     assert testbed.dut_bgp_as is not None, "Testbed must have dut_bgp_as set"
@@ -143,9 +155,16 @@ def build_bag013_conveyor_test_config(
         enable_update_group=enable_update_group,
     )
 
+    # Pass device_name so the interface-cleanup teardown tasks target the DUT.
+    # Without it the tasks get hostname=None and teardown fails resolving the
+    # device OS type ("Cannot determine device OS type for None") -- the reserved-
+    # device context isn't available under --skip-basset-reservation, so teardown
+    # relies on the task hostname to look up host_os_type_map (populated at setup).
+    # Matches the full-scale builder (bgp_ebb_full_scale.py) which already does this.
     teardown_tasks = get_teardown_tasks(
         ixia_interface_mimic_ebgp=ixia_interface_mimic_ebgp,
         ixia_interface_mimic_ibgp=ixia_interface_mimic_ibgp,
+        device_name=device_name,
     )
 
     return taac_types.TestConfig(
@@ -380,9 +399,13 @@ def _create_eb03_distribution_correctness_test_config(
         enable_update_group=True,
     )
 
+    # Pass device_name so teardown tasks target the DUT (else hostname=None ->
+    # "Cannot determine device OS type for None" at teardown). See the shared
+    # builder above for the full rationale.
     teardown_tasks = get_teardown_tasks(
         ixia_interface_mimic_ebgp=ebgp_dut_iface,
         ixia_interface_mimic_ibgp=ibgp_dut_iface,
+        device_name=testbed.device_name,
     )
 
     return TestConfig(
@@ -489,7 +512,7 @@ def _create_bag013_distribution_correctness_test_config(
     compare step. The interface is left addressed on the DUT (see the
     testbed's third ixia port); only the BGP-MON IXIA session + IP config
     are removed via ``include_bgp_mon=False`` inside
-    ``build_bag013_conveyor_test_config``. ``profile`` is accepted for
+    ``build_bag_conveyor_test_config``. ``profile`` is accepted for
     signature parity with the outer factory but forced to ``WITHOUT_OPEN_R``.
     """
     assert len(testbed.ixia_ports) >= 3, (
@@ -510,7 +533,7 @@ def _create_bag013_distribution_correctness_test_config(
         ibgp_v4_peer_group=PEERGROUP_IBGP_V4,
         bgp_mon_peer_group=PEERGROUP_BGP_MON,
     )
-    return build_bag013_conveyor_test_config(
+    return build_bag_conveyor_test_config(
         testbed,
         name="BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST",
         playbooks=[playbook],

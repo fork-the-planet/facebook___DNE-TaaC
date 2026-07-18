@@ -11,7 +11,7 @@ Golden regen for ``BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG`` is
 EXPECTED and legitimate: the pre-Wave-6 TestConfig wired [2.1.1, 2.7.2];
 Wave 6 keeps only [2.7.2] in this factory.
 
-Shares the ``build_bag013_conveyor_test_config`` helper from tc1 for the
+Shares the ``build_bag_conveyor_test_config`` helper from tc1 for the
 bag013 conveyor topology (setup / teardown / port config).
 """
 
@@ -27,7 +27,7 @@ from taac.playbooks.routing.factories.qual_bgp_update_group.tc7_disruption_recov
     create_bgp_ug_sustained_link_flap_playbook,
 )
 from taac.testconfigs.routing.factories.qual_bgp_update_group.tc1_distribution_correctness import (
-    build_bag013_conveyor_test_config,
+    build_bag_conveyor_test_config,
 )
 from taac.testconfigs.routing.testbed import Testbed
 from taac.testconfigs.routing.util.bgp_ebb_constants import (
@@ -203,7 +203,7 @@ def create_bgp_ug_disruption_recovery_test_config(
         total_duration_s=_BAG013_2_7_2_TOTAL_DURATION_S,
         prechecks=_bag013_2_7_2_prechecks(),
     )
-    return build_bag013_conveyor_test_config(
+    return build_bag_conveyor_test_config(
         testbed,
         name="BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST",
         playbooks=[playbook],
