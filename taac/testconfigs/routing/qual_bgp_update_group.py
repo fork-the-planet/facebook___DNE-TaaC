@@ -34,6 +34,7 @@ from taac.testconfigs.routing.factories.qual_bgp_update_group.tc7_disruption_rec
 )
 from taac.testconfigs.routing.factories.qual_bgp_update_group.tc9_edge_cases import (
     create_bgp_ug_edge_cases_test_config,
+    create_bgp_ug_simultaneous_disruptions_test_config,
 )
 from taac.testconfigs.routing.testbed import (
     BAG011_ASH6,
@@ -91,9 +92,20 @@ BAG011_ASH6_BGP_UG_EDGE_CASES_TEST_CONFIG = create_bgp_ug_edge_cases_test_config
     BAG011_ASH6
 )
 
+# Spec 2.9.2 Simultaneous Disruptions -- its OWN WITH_OPEN_R TestConfig (the
+# IGP-instability track needs a running Open/R daemon + injected baseline routes),
+# separate from the WITHOUT_OPEN_R edge-cases bundle. Select via
+# ``--test-config BAG011_ASH6_BGP_UG_SIMULTANEOUS_DISRUPTIONS_TEST``. (The factory
+# also accepts ``smoke=True`` for a short, ad-hoc machinery-validation variant --
+# not committed as a catalog constant to keep the golden/registry surface minimal.)
+BAG011_ASH6_BGP_UG_SIMULTANEOUS_DISRUPTIONS_TEST_CONFIG = (
+    create_bgp_ug_simultaneous_disruptions_test_config(BAG011_ASH6)
+)
+
 
 __all__ = [
     "BAG011_ASH6_BGP_UG_EDGE_CASES_TEST_CONFIG",
+    "BAG011_ASH6_BGP_UG_SIMULTANEOUS_DISRUPTIONS_TEST_CONFIG",
     "BAG013_ASH6_BGP_UG_BACKPRESSURE_TOPOLOGY_SMOKE_CONFIG",
     "BAG013_ASH6_BGP_UG_INITIAL_DUMP_IDENTICAL_ROUTES_TEST_CONFIG",
     "BAG013_ASH6_BGP_UG_SUSTAINED_LINK_FLAP_TEST_CONFIG",

@@ -17,7 +17,12 @@ topology (140 eBGP + ~500 iBGP, ``WITHOUT_OPEN_R``, ``include_bgp_mon=False``
 — UG qualification never exercises BGP-MON or OpenR).
 """
 
-from neteng.test_infra.dne.taac.constants import BgpPlusPlusProfile, Gigabyte
+from taac.constants import (
+    BgpPlusPlusProfile,
+    DEFAULT_OPENR_START_IPV4S,
+    DEFAULT_OPENR_START_IPV6S,
+    Gigabyte,
+)
 from taac.health_checks.healthcheck_definitions import (
     create_bgp_session_establish_check,
     create_bgp_update_group_check,
@@ -27,6 +32,7 @@ from taac.health_checks.healthcheck_definitions import (
 )
 from taac.playbooks.routing.factories.qual_bgp_update_group.tc9_edge_cases import (
     create_bgp_ug_empty_group_playbook,
+    create_bgp_ug_simultaneous_disruptions_playbook,
 )
 from taac.testconfigs.routing.factories.qual_bgp_update_group.tc1_distribution_correctness import (
     build_bag_conveyor_test_config,
@@ -34,6 +40,8 @@ from taac.testconfigs.routing.factories.qual_bgp_update_group.tc1_distribution_c
 from taac.testconfigs.routing.testbed import Testbed
 from taac.testconfigs.routing.util.bgp_ebb_constants import (
     IXIA_BGP_MON_IC_PARENT_NETWORK,
+    IXIA_EBGP_IC_PARENT_NETWORK_V4,
+    IXIA_EBGP_IC_PARENT_NETWORK_V6,
     IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE1,
     IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE2,
     IXIA_IBGP_IC_PARENT_NETWORK_V4_DC_PLANE3,
@@ -133,6 +141,17 @@ _EBGP_PREFIX_POOL_REGEX = r"PREFIX_POOL_IPV[46]_EBGP$"
 _EXPECTED_UPDATE_GROUP_COUNT = 4
 
 
+# --- 2.9.2 Simultaneous Disruptions ---
+# Route churn targets the v6 eBGP prefix pool; attribute churn targets the plane-1
+# v6 iBGP prefix pool; random flaps span both eBGP AFI peers. ``$`` excludes the
+# unused ``_DRAIN`` pools/peers (the bag conveyor topology is built drain=False).
+_SIMUL_EBGP_ROUTE_POOL_REGEX = r"PREFIX_POOL_IPV6_EBGP$"
+_SIMUL_IBGP_ATTR_POOL_REGEX = "PREFIX_POOL_IBGP_IPV6_PLANE_1_REMOTE_EB"
+_SIMUL_EBGP_FLAP_PEER_REGEX = r"BGP_PEER_IPV[46]_EBGP$"
+# Spec 2.9.2 pass-criterion 4: VmHWM growth (M_after - M_before) < 500 MB.
+_SIMUL_VMHWM_GROWTH_THRESHOLD_BYTES = 500 * 1024 * 1024
+
+
 def _edge_cases_prechecks(bgp_mon_ignore_prefixes):
     """Prechecks for the 2.9 edge-cases TestConfig.
 
@@ -221,6 +240,103 @@ def create_bgp_ug_edge_cases_test_config(
     )
 
 
+def create_bgp_ug_simultaneous_disruptions_test_config(
+    testbed: Testbed,
+    *,
+    smoke: bool = False,
+) -> taac_types.TestConfig:
+    """BGP++ Update Group qualification spec 2.9.2 (Simultaneous Disruptions
+    Across All Groups) TestConfig on the bag conveyor topology.
+
+    Runs the four concurrent disruption tracks (eBGP route churn with varying
+    communities, random eBGP session flaps without graceful restart, IGP-metric
+    oscillation via Open/R, iBGP LOCAL_PREF churn) + a monitor track + a VmHWM
+    growth gate, then a convergence-verify stage. See
+    ``create_bgp_ug_simultaneous_disruptions_playbook``.
+
+    Unlike the WITHOUT_OPEN_R edge-cases bundle, 2.9.2 is its OWN TestConfig on
+    the ``WITH_OPEN_R`` profile: the IGP-instability track oscillates Open/R
+    adjacency metrics, which needs a running Open/R daemon + the baseline Open/R
+    route injection that ``get_common_setup_tasks`` only wires under that profile.
+    The eBGP peers are built graceful-restart-off so their flaps are real "without
+    graceful restart" events (spec). WITH_OPEN_R does not change the 4-update-group
+    or the eBGP+iBGP session baseline -- it only adds the Open/R daemon,
+    Port-Channel, injected routes, and the OpenR-variant IXIA route CSVs.
+
+    ``smoke=True`` builds a short (3-min disruption) variant with the same shape
+    for validating the machinery on hardware before the full 30-min run.
+    """
+    bgp_mon_ignore_prefixes = [f"{IXIA_BGP_MON_IC_PARENT_NETWORK}::/80"]
+    # Everything that is NOT an iBGP peer (both eBGP AFIs + BGP-MON): lets the
+    # monitor scope its "iBGP stays Established" check to iBGP only, since eBGP is
+    # intentionally being flapped. eBGP v6 uses a /80; eBGP v4 uses a /16 because
+    # the 140 /31 peers spill past the /24 (same reasoning as the iBGP v4 parents).
+    non_ibgp_parent_prefixes = [
+        f"{IXIA_EBGP_IC_PARENT_NETWORK_V6}::/80",
+        f"{'.'.join(IXIA_EBGP_IC_PARENT_NETWORK_V4.split('.')[:2])}.0.0/16",
+    ] + bgp_mon_ignore_prefixes
+
+    if smoke:
+        name = "BAG011_ASH6_BGP_UG_SIMULTANEOUS_DISRUPTIONS_SMOKE"
+        disruption_duration_s = 180
+        convergence_quiesce_s = 60
+        route_churn_interval_s = 30
+        session_flap_interval_s = 60
+        attr_churn_interval_s = 30
+        monitor_interval_s = 60
+        igp_frequency_s = 30
+    else:
+        name = "BAG011_ASH6_BGP_UG_SIMULTANEOUS_DISRUPTIONS_TEST"
+        disruption_duration_s = 1800
+        convergence_quiesce_s = 300
+        route_churn_interval_s = 60
+        session_flap_interval_s = 120
+        attr_churn_interval_s = 60
+        monitor_interval_s = 120
+        igp_frequency_s = 60
+
+    playbook = create_bgp_ug_simultaneous_disruptions_playbook(
+        device_name=testbed.device_name,
+        ebgp_route_pool_regex=_SIMUL_EBGP_ROUTE_POOL_REGEX,
+        ibgp_attr_pool_regex=_SIMUL_IBGP_ATTR_POOL_REGEX,
+        ebgp_flap_peer_regex=_SIMUL_EBGP_FLAP_PEER_REGEX,
+        # METRIC_OSCILLATION must act on the SAME routes the WITH_OPEN_R setup
+        # injects, which uses the DEFAULT start-IP lists + count=63/step=2 (the
+        # playbook's igp defaults), so pass the DEFAULT lists here too.
+        openr_start_ipv4s=DEFAULT_OPENR_START_IPV4S,
+        openr_start_ipv6s=DEFAULT_OPENR_START_IPV6S,
+        openr_local_link=testbed.extras["openr_local_link"],
+        openr_other_link=testbed.extras["openr_other_link"],
+        non_ibgp_parent_prefixes=non_ibgp_parent_prefixes,
+        vmhwm_growth_threshold_bytes=_SIMUL_VMHWM_GROWTH_THRESHOLD_BYTES,
+        prechecks=_edge_cases_prechecks(bgp_mon_ignore_prefixes),
+        bgp_mon_ignore_prefixes=bgp_mon_ignore_prefixes,
+        # Extra-safety absolute ceiling (consistent with 2.9.7); the growth gate
+        # is the actual 2.9.2 pass-criterion.
+        vmhwm_absolute_threshold_bytes=Gigabyte.GIG_10.value,
+        disruption_duration_s=disruption_duration_s,
+        convergence_quiesce_s=convergence_quiesce_s,
+        route_churn_interval_s=route_churn_interval_s,
+        session_flap_interval_s=session_flap_interval_s,
+        attr_churn_interval_s=attr_churn_interval_s,
+        monitor_interval_s=monitor_interval_s,
+        igp_frequency_s=igp_frequency_s,
+    )
+
+    return build_bag_conveyor_test_config(
+        testbed,
+        name=name,
+        playbooks=[playbook],
+        # WITH_OPEN_R so the IGP-instability track has a running Open/R daemon +
+        # injected baseline routes to oscillate.
+        profile=BgpPlusPlusProfile.BGP_PLUS_PLUS_WITH_OPEN_R,
+        enable_update_group=True,
+        # Spec: flap eBGP sessions "without graceful restart".
+        ebgp_graceful_restart=False,
+    )
+
+
 __all__ = [
     "create_bgp_ug_edge_cases_test_config",
+    "create_bgp_ug_simultaneous_disruptions_test_config",
 ]
