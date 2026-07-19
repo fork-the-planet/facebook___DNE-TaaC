@@ -183,6 +183,18 @@ def log_phase_end(
         _logger.info(f"[DONE]  {phase}")
 
 
+def format_step_label(step_name: str, description: t.Optional[str] = None) -> str:
+    """Combine a step's type name with its description for log lines.
+
+    Repetitive loops (longevity/scaling) reuse one step type across many cycles,
+    so the description (e.g. "Cycle 3/30 : Stop IPv4 sessions 1-35") is what makes
+    a line identifiable. A colon separator is used per the codebase style.
+    """
+    if description:
+        return f"{step_name}: {description}"
+    return step_name
+
+
 def log_step_info(
     step_name: str,
     device_name: str,

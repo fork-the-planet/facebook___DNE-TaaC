@@ -123,6 +123,7 @@ from taac.utils.oss_taac_lib_utils import (
     none_throws,
 )
 from taac.utils.taac_log_formatter import (
+    format_step_label,
     log_phase_end,
     log_phase_start,
     log_playbook_header,
@@ -1588,10 +1589,16 @@ class TaacRunner:
     ) -> None:
         step_name = step.step.name.name if step.step.name else "unknown"
         device_name = step.device.name if step.device else "unknown"
+        # Surface the step description (e.g. "Cycle 3/30 : Stop IPv4 sessions
+        # 1-35") so long, repetitive loops (longevity/scaling) show cycle and
+        # batch progress at a glance instead of identical-looking step lines.
+        step_label = format_step_label(
+            step_name, getattr(step.step, "description", None)
+        )
         _step_start = time.time()
         self.logger.info("")
         self.logger.info(
-            f"\033[33m    ▶ {step_name}\033[0m on \033[36m{device_name}\033[0m"
+            f"\033[33m    ▶ {step_label}\033[0m on \033[36m{device_name}\033[0m"
         )
         stage_context = (
             f"stage.{self._current_stage.id}"
@@ -1615,7 +1622,7 @@ class TaacRunner:
             await retryable_run(step._input, step._step_params)
         _step_elapsed = time.time() - _step_start
         self.logger.info(
-            f"\033[32m    ✓ {step_name}\033[0m \033[2m({_step_elapsed:.0f}s)\033[0m"
+            f"\033[32m    ✓ {step_label}\033[0m \033[2m({_step_elapsed:.0f}s)\033[0m"
         )
         with suppress_console_logs(self.logger):
             await self.async_run_snapshot_checks(
